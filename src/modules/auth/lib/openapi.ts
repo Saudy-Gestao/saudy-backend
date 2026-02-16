@@ -1,0 +1,498 @@
+import { FastifyInstance } from 'fastify';
+
+// These are the OpenAPI components used by @fastify/swagger
+export const swaggerComponents = {
+  schemas: {
+    Company: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        cnpj: { type: 'string' },
+        legalName: { type: 'string' },
+        tradeName: { type: 'string' },
+        address: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      example: {
+        id: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc',
+        cnpj: '00.000.000/0000-00',
+        legalName: 'ACME Indústria e Comércio Ltda',
+        tradeName: 'ACME',
+        address: 'Rua Exemplo, 123',
+        phone: '+55 11 99999-9999',
+      },
+    },
+    CompanyCreate: {
+      type: 'object',
+      properties: {
+        cnpj: { type: 'string' },
+        legalName: { type: 'string' },
+        tradeName: { type: 'string' },
+        address: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      required: ['cnpj', 'legalName', 'tradeName'],
+      example: {
+        cnpj: '00.000.000/0000-00',
+        legalName: 'ACME Indústria e Comércio Ltda',
+        tradeName: 'ACME',
+        address: 'Rua Exemplo, 123',
+        phone: '+55 11 99999-9999',
+      },
+    },
+    Branch: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        companyId: { type: 'string' },
+        socialName: { type: 'string' },
+        tradeName: { type: 'string' },
+        address: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      example: {
+        id: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456',
+        companyId: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc',
+        socialName: 'ACME Matriz',
+        tradeName: 'ACME',
+        address: 'Av. Central, 1',
+        phone: '+55 11 98888-8888',
+      },
+    },
+    BranchCreate: {
+      type: 'object',
+      properties: {
+        companyId: { type: 'string' },
+        socialName: { type: 'string' },
+        tradeName: { type: 'string' },
+        address: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      required: ['companyId', 'socialName'],
+      example: {
+        companyId: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc',
+        socialName: 'ACME Matriz',
+        tradeName: 'ACME',
+        address: 'Av. Central, 1',
+        phone: '+55 11 98888-8888',
+      },
+    },
+    BranchUpdate: {
+      type: 'object',
+      properties: {
+        companyId: { type: 'string' },
+        socialName: { type: 'string' },
+        tradeName: { type: 'string' },
+        address: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      example: {
+        companyId: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc',
+        socialName: 'ACME Matriz',
+        tradeName: 'ACME',
+        address: 'Av. Central, 1',
+        phone: '+55 11 98888-8888',
+      },
+    },
+    BranchCreateForRegister: {
+      type: 'object',
+      properties: {
+        socialName: { type: 'string' },
+        tradeName: { type: 'string' },
+        address: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      required: ['socialName'],
+      example: {
+        socialName: 'ACME Matriz',
+        tradeName: 'ACME',
+        address: 'Av. Central, 1',
+        phone: '+55 11 98888-8888',
+      },
+    },
+    Sector: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        branchId: { type: 'string' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+      },
+      example: {
+        id: '1c2d3e4f-5678-90ab-cdef-1234567890ab',
+        branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456',
+        name: 'Vendas',
+        description: 'Setor de vendas',
+      },
+    },
+    SectorCreate: {
+      type: 'object',
+      properties: {
+        branchId: { type: 'string' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+      },
+      required: ['branchId', 'name'],
+      example: {
+        branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456',
+        name: 'Vendas',
+        description: 'Setor de vendas',
+      },
+    },
+    SectorCreateForRegister: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        description: { type: 'string' },
+      },
+      required: ['name'],
+      example: {
+        name: 'Vendas',
+        description: 'Setor de vendas',
+      },
+    },
+    Access: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        description: { type: 'string' },
+        modules: { type: 'array', items: { $ref: '#/components/schemas/Module' } },
+      },
+      example: { id: 'acc-123', description: 'Acesso de administrador', modules: [{ id: 'mod-1', name: 'pre-atendimento', label: 'Pré-atendimento', description: 'Recepção e cadastro de pacientes', icon: 'UserPlus', category: 'fluxo-paciente' }] },
+    },
+    AccessCreate: {
+      type: 'object',
+      properties: { description: { type: 'string' } },
+      required: ['description'],
+      example: { description: 'Acesso de administrador' },
+    },
+    Module: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string' },
+        label: { type: 'string' },
+        description: { type: 'string' },
+        icon: { type: 'string' },
+        category: { type: 'string' },
+      },
+      example: { id: 'mod-1', name: 'pre-atendimento', label: 'Pré-atendimento', description: 'Recepção e cadastro de pacientes', icon: 'UserPlus', category: 'fluxo-paciente' },
+    },
+    User: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        sectorId: { type: 'string' },
+        name: { type: 'string' },
+        birthDate: { type: 'string', format: 'date' },
+        email: { type: 'string' },
+        phone: { type: 'string' },
+        address: { type: 'string' },
+        accesses: { type: 'array', items: { $ref: '#/components/schemas/Access' } },
+        sector: { $ref: '#/components/schemas/Sector' },
+      },
+      example: {
+        id: 'user-123',
+        sectorId: '1c2d3e4f-5678-90ab-cdef-1234567890ab',
+        name: 'João Silva',
+        birthDate: '1990-01-01T00:00:00.000Z',
+        email: 'joao@example.com',
+        phone: '+55 11 97777-7777',
+        address: 'Rua Exemplo, 10',
+        accesses: [{ id: 'acc-123', description: 'Acesso de administrador' }],
+        sector: { id: '1c2d3e4f-5678-90ab-cdef-1234567890ab', branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', name: 'Vendas', description: 'Setor de vendas' },
+      },
+    },
+    UserCreate: {
+      type: 'object',
+      properties: {
+        sectorId: { type: 'string' },
+        accessIds: { type: 'array', items: { type: 'string' } },
+        name: { type: 'string' },
+        birthDate: { type: 'string', format: 'date' },
+        email: { type: 'string' },
+        password: { type: 'string' },
+        phone: { type: 'string' },
+        address: { type: 'string' },
+      },
+      required: ['sectorId', 'name', 'birthDate', 'email', 'password'],
+      example: {
+        sectorId: '1c2d3e4f-5678-90ab-cdef-1234567890ab',
+        accessIds: ['acc-123'],
+        name: 'João Silva',
+        birthDate: '1990-01-01',
+        email: 'joao@example.com',
+        password: 'supersecret',
+        phone: '+55 11 97777-7777',
+        address: 'Rua Exemplo, 10',
+      },
+    },
+    UserUpdate: {
+      type: 'object',
+      properties: {
+        sectorId: { type: 'string' },
+        accessIds: { type: 'array', items: { type: 'string' } },
+        name: { type: 'string' },
+        birthDate: { type: 'string', format: 'date' },
+        email: { type: 'string' },
+        password: { type: 'string' },
+        phone: { type: 'string' },
+        address: { type: 'string' },
+      },
+      example: {
+        sectorId: '1c2d3e4f-5678-90ab-cdef-1234567890ab',
+        accessIds: ['acc-123'],
+        name: 'João Silva',
+        birthDate: '1990-01-01',
+        email: 'joao@example.com',
+        password: 'supersecret',
+        phone: '+55 11 97777-7777',
+        address: 'Rua Exemplo, 10',
+      },
+    },
+    UserCreateForRegister: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        birthDate: { type: 'string', format: 'date' },
+        email: { type: 'string' },
+        password: { type: 'string' },
+        phone: { type: 'string' },
+        address: { type: 'string' },
+      },
+      required: ['name', 'birthDate', 'email', 'password'],
+      example: {
+        name: 'João Silva',
+        birthDate: '1990-01-01',
+        email: 'joao@example.com',
+        password: 'supersecret',
+        phone: '+55 11 97777-7777',
+        address: 'Rua Exemplo, 10',
+      },
+    },
+    RegisterRequest: {
+      type: 'object',
+      properties: {
+        company: { $ref: '#/components/schemas/CompanyCreate' },
+        branch: { $ref: '#/components/schemas/BranchCreateForRegister' },
+        sector: { $ref: '#/components/schemas/SectorCreateForRegister' },
+        user: { $ref: '#/components/schemas/UserCreateForRegister' },
+        accesses: { type: 'array', items: { $ref: '#/components/schemas/AccessCreate' } },
+      },
+      required: ['company', 'branch', 'sector', 'user'],
+      example: {
+        company: { cnpj: '00.000.000/0000-00', legalName: 'ACME Indústria e Comércio Ltda', tradeName: 'ACME', address: 'Rua Exemplo, 123', phone: '+55 11 99999-9999' },
+        branch: { socialName: 'ACME Matriz', tradeName: 'ACME', address: 'Av. Central, 1', phone: '+55 11 98888-8888' },
+        sector: { name: 'Vendas', description: 'Setor de vendas' },
+        user: { name: 'João Silva', birthDate: '1990-01-01', email: 'joao@example.com', password: 'supersecret', phone: '+55 11 97777-7777', address: 'Rua Exemplo, 10' },
+        accesses: [{ description: 'Acesso de administrador' }],
+      },
+    },
+    LoginRequest: {
+      type: 'object',
+      properties: { email: { type: 'string' }, password: { type: 'string' } },
+      required: ['email', 'password'],
+      example: { email: 'joao@example.com', password: 'supersecret' },
+    },
+    AuthResponse: {
+      type: 'object',
+      properties: { token: { type: 'string' }, user: { $ref: '#/components/schemas/User' } },
+      example: { token: 'eyJhbGci...', user: { id: 'user-123', name: 'João Silva', email: 'joao@example.com' } },
+    },
+    RegisterResponse: {
+      type: 'object',
+      properties: {
+        company: { $ref: '#/components/schemas/Company' },
+        branch: { $ref: '#/components/schemas/Branch' },
+        sector: { $ref: '#/components/schemas/Sector' },
+        accesses: { type: 'array', items: { $ref: '#/components/schemas/Access' } },
+        user: { $ref: '#/components/schemas/User' },
+      },
+      example: {
+        company: { id: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc', cnpj: '00.000.000/0000-00', legalName: 'ACME Indústria e Comércio Ltda', tradeName: 'ACME', address: 'Rua Exemplo, 123', phone: '+55 11 99999-9999' },
+        branch: { id: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', companyId: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc', socialName: 'ACME Matriz', tradeName: 'ACME', address: 'Av. Central, 1', phone: '+55 11 98888-8888' },
+        sector: { id: '1c2d3e4f-5678-90ab-cdef-1234567890ab', branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', name: 'Vendas', description: 'Setor de vendas' },
+        accesses: [{ id: 'acc-123', description: 'Acesso de administrador' }],
+        user: { id: 'user-123', sectorId: '1c2d3e4f-5678-90ab-cdef-1234567890ab', name: 'João Silva', birthDate: '1990-01-01', email: 'joao@example.com', phone: '+55 11 97777-7777', address: 'Rua Exemplo, 10', accesses: [{ id: 'acc-123', description: 'Acesso de administrador' }], sector: { id: '1c2d3e4f-5678-90ab-cdef-1234567890ab', branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', name: 'Vendas', description: 'Setor de vendas' } },
+      },
+    },
+  },
+};
+
+// These are Ajv-friendly schemas to be registered at runtime for serialization/validation
+export const ajvSchemas: Record<string, any> = {
+  Company: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      cnpj: { type: 'string' },
+      legalName: { type: 'string' },
+      tradeName: { type: 'string' },
+      address: { type: 'string' },
+      phone: { type: 'string' },
+    },
+  },
+  CompanyCreate: {
+    type: 'object',
+    properties: {
+      cnpj: { type: 'string' },
+      legalName: { type: 'string' },
+      tradeName: { type: 'string' },
+      address: { type: 'string' },
+      phone: { type: 'string' },
+    },
+    required: ['cnpj', 'legalName', 'tradeName'],
+  },
+  Branch: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      companyId: { type: 'string' },
+      socialName: { type: 'string' },
+      tradeName: { type: 'string' },
+      address: { type: 'string' },
+      phone: { type: 'string' },
+    },
+  },
+  BranchCreate: {
+    type: 'object',
+    properties: {
+      companyId: { type: 'string' },
+      socialName: { type: 'string' },
+      tradeName: { type: 'string' },
+      address: { type: 'string' },
+      phone: { type: 'string' },
+    },
+    required: ['companyId', 'socialName'],
+  },
+  BranchUpdate: {
+    type: 'object',
+    properties: {
+      companyId: { type: 'string' },
+      socialName: { type: 'string' },
+      tradeName: { type: 'string' },
+      address: { type: 'string' },
+      phone: { type: 'string' },
+    },
+  },
+  BranchCreateForRegister: {
+    type: 'object',
+    properties: {
+      socialName: { type: 'string' },
+      tradeName: { type: 'string' },
+      address: { type: 'string' },
+      phone: { type: 'string' },
+    },
+    required: ['socialName'],
+  },
+  Sector: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      branchId: { type: 'string' },
+      name: { type: 'string' },
+      description: { type: 'string' },
+    },
+  },
+  SectorCreate: {
+    type: 'object',
+    properties: {
+      branchId: { type: 'string' },
+      name: { type: 'string' },
+      description: { type: 'string' },
+    },
+    required: ['branchId', 'name'],
+  },
+  SectorCreateForRegister: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      description: { type: 'string' },
+    },
+    required: ['name'],
+  },
+  Access: { type: 'object', properties: { id: { type: 'string' }, description: { type: 'string' } } },
+  AccessCreate: { type: 'object', properties: { description: { type: 'string' } }, required: ['description'] },
+  User: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      sectorId: { type: 'string' },
+      name: { type: 'string' },
+      birthDate: { type: 'string', format: 'date' },
+      email: { type: 'string' },
+      phone: { type: 'string' },
+      address: { type: 'string' },
+      accesses: { type: 'array', items: { $ref: 'Access#' } },
+      sector: { $ref: 'Sector#' },
+    },
+  },
+  UserCreate: {
+    type: 'object',
+    properties: {
+      sectorId: { type: 'string' },
+      accessIds: { type: 'array', items: { type: 'string' } },
+      name: { type: 'string' },
+      birthDate: { type: 'string', format: 'date' },
+      email: { type: 'string' },
+      password: { type: 'string' },
+      phone: { type: 'string' },
+      address: { type: 'string' },
+    },
+    required: ['sectorId', 'name', 'birthDate', 'email', 'password'],
+  },
+  UserUpdate: {
+    type: 'object',
+    properties: {
+      sectorId: { type: 'string' },
+      accessIds: { type: 'array', items: { type: 'string' } },
+      name: { type: 'string' },
+      birthDate: { type: 'string', format: 'date' },
+      email: { type: 'string' },
+      password: { type: 'string' },
+      phone: { type: 'string' },
+      address: { type: 'string' },
+    },
+  },
+  UserCreateForRegister: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      birthDate: { type: 'string', format: 'date' },
+      email: { type: 'string' },
+      password: { type: 'string' },
+      phone: { type: 'string' },
+      address: { type: 'string' },
+    },
+    required: ['name', 'birthDate', 'email', 'password'],
+  },
+  RegisterRequest: {
+    type: 'object',
+    properties: {
+      company: { $ref: 'CompanyCreate#' },
+      branch: { $ref: 'BranchCreateForRegister#' },
+      sector: { $ref: 'SectorCreateForRegister#' },
+      user: { $ref: 'UserCreateForRegister#' },
+      accesses: { type: 'array', items: { $ref: 'AccessCreate#' } },
+    },
+    required: ['company', 'branch', 'sector', 'user'],
+  },
+  LoginRequest: { type: 'object', properties: { email: { type: 'string' }, password: { type: 'string' } }, required: ['email', 'password'] },
+  AuthResponse: { type: 'object', properties: { token: { type: 'string' }, user: { $ref: 'User#' } } },
+  RegisterResponse: {
+    type: 'object',
+    properties: {
+      company: { $ref: 'Company#' },
+      branch: { $ref: 'Branch#' },
+      sector: { $ref: 'Sector#' },
+      accesses: { type: 'array', items: { $ref: 'Access#' } },
+      user: { $ref: 'User#' },
+    },
+  },
+};
+
+export function registerSchemas(app: FastifyInstance) {
+  for (const [id, schema] of Object.entries(ajvSchemas)) {
+    app.addSchema({ $id: id, ...schema });
+  }
+}

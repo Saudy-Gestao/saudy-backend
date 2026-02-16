@@ -1,0 +1,508 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+enum Gender {
+    MALE
+    FEMALE
+    OTHER
+}
+
+enum MaritalStatus {
+    SINGLE
+    MARRIED
+    DIVORCED
+    WIDOWED
+    OTHER
+}
+
+enum BloodType {
+    A_POSITIVE
+    A_NEGATIVE
+    B_POSITIVE
+    B_NEGATIVE
+    AB_POSITIVE
+    AB_NEGATIVE
+    O_POSITIVE
+    O_NEGATIVE
+}
+
+model Company {
+    id        String   @id @default(uuid())
+    cnpj      String   @unique
+    legalName String
+    tradeName String
+    address   String
+    phone     String
+    branches  Branch[]
+
+    @@map("companies")
+}
+
+model Branch {
+    id         String   @id @default(uuid())
+    companyId  String
+    company    Company  @relation(fields: [companyId], references: [id])
+    socialName String
+    tradeName  String
+    address    String
+    phone      String
+    sectors    Sector[]
+
+    @@map("branches")
+}
+
+model Sector {
+    id          String @id @default(uuid())
+    branchId    String
+    branch      Branch @relation(fields: [branchId], references: [id])
+    name        String
+    description String
+    users       User[]
+
+    @@map("sectors")
+}
+
+model Access {
+    id          String   @id @default(uuid())
+    description String
+    modules     Module[]
+    users       User[]
+
+    @@map("accesses")
+}
+
+model Module {
+    id          String   @id @default(uuid())
+    name        String   @unique
+    label       String
+    description String
+    icon        String?
+    category    String
+    accesses    Access[]
+
+    @@map("modules")
+}
+
+model User {
+    id                 String              @id @default(uuid())
+    sectorId           String
+    sector             Sector              @relation(fields: [sectorId], references: [id])
+    accesses           Access[]
+    name               String
+    birthDate          DateTime
+    email              String              @unique
+    cpf                String?             @unique
+    password           String              @default("")
+    phone              String
+    address            String
+    passwordResetCodes PasswordResetCode[]
+
+    @@map("users")
+}
+
+model PasswordResetCode {
+    id                String    @id @default(uuid())
+    userId            String
+    user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    codeHash          String
+    requestIdentifier String
+    attempts          Int       @default(0)
+    expiresAt         DateTime
+    usedAt            DateTime?
+    createdAt         DateTime  @default(now())
+
+    @@index([userId, createdAt])
+    @@map("password_reset_codes")
+}
+
+model Doctor {
+    id                String   @id @default(uuid())
+    crm               String
+    crmState          String   @db.VarChar(2)
+    name              String
+    email             String   @unique
+    phone             String
+    cellphone         String?
+    birthDate         DateTime
+    gender            Gender
+    cpf               String   @unique @db.VarChar(11)
+    rg                String?
+    specialty         String
+    specialties       String[] @default([])
+    consultationFee   Decimal? @db.Decimal(10, 2)
+    biography         String?  @db.Text
+    address           String?
+    addressNumber     String?
+    addressComplement String?
+    neighborhood      String?
+    city              String?
+    state             String?  @db.VarChar(2)
+    zipCode           String?  @db.VarChar(8)
+    isActive          Boolean  @default(true)
+    workingDays       String[] @default([])
+    workingHoursStart String?
+    workingHoursEnd   String?
+    createdAt         DateTime @default(now())
+    updatedAt         DateTime @updatedAt
+
+    medicalRecords MedicalRecord[]
+
+    @@unique([crm, crmState])
+    @@map("doctors")
+}
+
+model Patient {
+    id                           String         @id @default(uuid())
+    name                         String
+    email                        String?
+    phone                        String?
+    cellphone                    String
+    birthDate                    DateTime
+    gender                       Gender
+    cpf                          String         @unique @db.VarChar(11)
+    rg                           String?
+    maritalStatus                MaritalStatus?
+    occupation                   String?
+    address                      String?
+    addressNumber                String?
+    addressComplement            String?
+    neighborhood                 String?
+    city                         String?
+    state                        String?        @db.VarChar(2)
+    zipCode                      String?        @db.VarChar(8)
+    emergencyContactName         String?
+    emergencyContactPhone        String?
+    emergencyContactRelationship String?
+    hasGuardian                  Boolean        @default(false)
+    guardianName                 String?
+    guardianCpf                  String?        @db.VarChar(11)
+    guardianPhone                String?
+    guardianRelationship         String?
+    hasHealthInsurance           Boolean        @default(false)
+    healthInsuranceName          String?
+    healthInsuranceNumber        String?
+    healthInsuranceExpiry        DateTime?
+    bloodType                    BloodType?
+    allergies                    String[]       @default([])
+    chronicConditions            String[]       @default([])
+    currentMedications           String[]       @default([])
+    observations                 String?        @db.Text
+    isActive                     Boolean        @default(true)
+    createdAt                    DateTime       @default(now())
+    updatedAt                    DateTime       @updatedAt
+
+    medicalRecords MedicalRecord[]
+
+    @@map("patients")
+}
+
+model MedicalRecord {
+    id                      String   @id @default(uuid())
+    patientId               String
+    patient                 Patient  @relation(fields: [patientId], references: [id])
+    doctorId                String?
+    doctor                  Doctor?  @relation(fields: [doctorId], references: [id])
+    chiefComplaint          String?  @db.Text
+    historyOfPresentIllness String?  @db.Text
+    physicalExamination     String?  @db.Text
+    diagnosis               String?  @db.Text
+    treatment               String?  @db.Text
+    prescriptions           String?  @db.Text
+    examRequests            String?  @db.Text
+    notes                   String?  @db.Text
+    bloodPressureSystolic   Int?
+    bloodPressureDiastolic  Int?
+    heartRate               Int?
+    respiratoryRate         Int?
+    temperature             Decimal? @db.Decimal(4, 1)
+    oxygenSaturation        Int?
+    weight                  Decimal? @db.Decimal(5, 2)
+    height                  Decimal? @db.Decimal(3, 2)
+    bmi                     Decimal? @db.Decimal(4, 1)
+    recordDate              DateTime @default(now())
+    createdAt               DateTime @default(now())
+    updatedAt               DateTime @updatedAt
+
+    @@map("medical_records")
+}
+
+model AdminEntity {
+    id   String @id @default(uuid())
+    name String
+
+    @@map("admin_entities")
+}
+
+model InventoryItem {
+    id          String    @id @default(uuid())
+    code        String    @unique
+    name        String
+    category    String?
+    unit        String?
+    quantity    Int       @default(0)
+    minQuantity Int?
+    maxQuantity Int?
+    unitPrice   Decimal?  @db.Decimal(12, 2)
+    expiryDate  DateTime?
+    status      String    @default("AVAILABLE")
+    notes       String?   @db.Text
+    isActive    Boolean   @default(true)
+    createdAt   DateTime  @default(now())
+    updatedAt   DateTime  @updatedAt
+
+    @@map("inventory_items")
+}
+
+model FinanceEntry {
+    id            String    @id @default(uuid())
+    type          String
+    category      String?
+    description   String?   @db.Text
+    value         Decimal   @db.Decimal(12, 2)
+    discount      Decimal?  @db.Decimal(12, 2)
+    total         Decimal   @db.Decimal(12, 2)
+    dueDate       DateTime?
+    status        String    @default("PENDING")
+    paymentMethod String?
+    relatedName   String?
+    createdAt     DateTime  @default(now())
+    updatedAt     DateTime  @updatedAt
+    isActive      Boolean   @default(true)
+
+    @@map("finance_entries")
+}
+
+model Invoice {
+    id            String    @id @default(uuid())
+    number        String    @unique
+    patientName   String?
+    issuedAt      DateTime  @default(now())
+    dueDate       DateTime?
+    status        String    @default("EMITIDA")
+    convention    String?
+    value         Decimal   @db.Decimal(12, 2)
+    discount      Decimal?  @db.Decimal(12, 2)
+    total         Decimal   @db.Decimal(12, 2)
+    paymentMethod String?
+    createdAt     DateTime  @default(now())
+    updatedAt     DateTime  @updatedAt
+    isActive      Boolean   @default(true)
+
+    @@map("invoices")
+}
+
+model Delivery {
+    id           String    @id @default(uuid())
+    patientName  String
+    documentType String
+    availableAt  DateTime  @default(now())
+    description  String?   @db.Text
+    responsible  String?
+    status       String    @default("DISPONIVEL")
+    deliveredTo  String?
+    deliveredAt  DateTime?
+    createdAt    DateTime  @default(now())
+    updatedAt    DateTime  @updatedAt
+    isActive     Boolean   @default(true)
+
+    @@map("deliveries")
+}
+
+model PreAttendance {
+    id                 String   @id @default(uuid())
+    fullName           String
+    cpf                String
+    patientId          String?
+    birthDate          String?
+    gender             String?
+    phone              String?
+    email              String?
+    address            String?
+    convenio           String?
+    convenioType       String?
+    convenioValidUntil String?
+    convenioNumber     String?
+    convenioStatus     String?
+    convenioNotes      String?
+    bloodPressure      String?
+    heartRate          String?
+    temperature        String?
+    oxygenSaturation   String?
+    weight             String?
+    height             String?
+    glucose            String?
+    bmi                String?
+    mainComplaint      String?
+    diseaseHistory     String?
+    allergies          String?
+    medications        String?
+    antecedentes       String?
+    triageNotes        String?
+    notes              String?
+    totem              Int?
+    status             String?
+    queue              String?
+    queueType          String?
+    agenda             String?
+    createdAt          DateTime @default(now())
+    updatedAt          DateTime @updatedAt
+    isActive           Boolean  @default(true)
+
+    @@map("pre_attendances")
+}
+
+model Appointment {
+    id           String   @id @default(uuid())
+    patientName  String?
+    patientCpf   String?
+    patientId    String?
+    doctorName   String?
+    specialty    String?
+    convenio     String?
+    date         String?
+    time         String?
+    type         String?
+    status       String?
+    observations String?
+    totem        Int?
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
+    isActive     Boolean  @default(true)
+
+    @@map("appointments")
+}
+
+model Consultation {
+    id               String   @id @default(uuid())
+    patientName      String?
+    convenio         String?
+    convenioStatus   String?
+    scheduledFor     String?
+    queueType        String?
+    agenda           String?
+    totem            String?
+    queue            String?
+    bloodPressure    String?
+    heartRate        String?
+    temperature      String?
+    oxygenSaturation String?
+    weight           String?
+    height           String?
+    glucose          String?
+    bmi              String?
+    anamnese         String?
+    mainComplaint    String?
+    diseaseHistory   String?
+    allergies        String?
+    medications      String?
+    antecedentes     String?
+    pregnant         String?
+    triageNotes      String?
+    createdAt        DateTime @default(now())
+    updatedAt        DateTime @updatedAt
+    isActive         Boolean  @default(true)
+
+    @@map("consultations")
+}
+
+model Report {
+    id                String   @id @default(uuid())
+    patientName       String?
+    cpf               String?
+    birthDate         String?
+    requestingDoctor  String?
+    reportingDoctor   String?
+    reviewingDoctor   String?
+    description       String?
+    conclusion        String?
+    notes             String?
+    status            String?
+    exam              String?
+    scheduledFor      String?
+    responsibleDoctor String?
+    observation       String?
+    createdAt         DateTime @default(now())
+    updatedAt         DateTime @updatedAt
+    isActive          Boolean  @default(true)
+
+    @@map("reports")
+}
+
+model Envelopment {
+    id           String   @id @default(uuid())
+    patientName  String?
+    dateTime     String?
+    responsible  String?
+    status       String?
+    pages        Int?
+    documentType String?
+    description  String?
+    fileName     String?
+    fileUrl      String?
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
+    isActive     Boolean  @default(true)
+
+    @@map("envelopments")
+}
+
+model Document {
+    id           String   @id @default(uuid())
+    patientName  String?
+    documentType String?
+    description  String?
+    status       String?
+    fileName     String?
+    fileUrl      String?
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
+    isActive     Boolean  @default(true)
+
+    @@map("documents")
+}
+
+model Procedure {
+    id                 String            @id @default(uuid())
+    name               String
+    description        String?
+    price              Decimal?          @db.Decimal(10, 2)
+    acceptsInsurance   Boolean           @default(false)
+    acceptedInsurances String[]          @default([])
+    modalities         String[]          @default([])
+    isActive           Boolean           @default(true)
+    createdAt          DateTime          @default(now())
+    updatedAt          DateTime          @updatedAt
+    doctors            ProcedureDoctor[]
+
+    @@map("procedures")
+}
+
+model ProcedureDoctor {
+    id          String   @id @default(uuid())
+    procedureId String
+    doctorId    String
+    doctorName  String?
+    createdAt   DateTime @default(now())
+
+    procedure Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+
+    @@unique([procedureId, doctorId])
+    @@map("procedure_doctors")
+}
+
+model Insurance {
+    id          String   @id @default(uuid())
+    name        String
+    code        String?
+    description String?
+    isActive    Boolean  @default(true)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    @@map("insurances")
+}

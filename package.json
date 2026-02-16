@@ -1,0 +1,34 @@
+{
+  "name": "saudy-api-monolith",
+  "version": "1.0.0",
+  "description": "Saudy monolithic API built from auth, accounts, admin, care and procedures services",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "pnpm prisma:generate && pnpm tsx watch src/server.ts",
+    "build": "pnpm prisma:generate && tsc",
+    "start": "node dist/server.js",
+    "prisma:generate": "pnpm prisma generate --schema prisma/schema.prisma"
+  },
+  "packageManager": "pnpm@10.24.0",
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/jwt": "^10.0.0",
+    "@fastify/swagger": "^9.0.0",
+    "@fastify/swagger-ui": "^5.2.4",
+    "@prisma/adapter-pg": "^7.4.0",
+    "@prisma/client": "^7.1.0",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.6.2",
+    "nodemailer": "^8.0.1",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/nodemailer": "^7.0.9",
+    "@types/pg": "^8.15.6",
+    "prisma": "^7.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
