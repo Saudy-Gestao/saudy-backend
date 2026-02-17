@@ -7,7 +7,8 @@
     "dev": "pnpm prisma:generate && pnpm tsx watch src/server.ts",
     "build": "pnpm prisma:generate && tsc",
     "start": "node dist/server.js",
-    "prisma:generate": "pnpm prisma generate --schema prisma/schema.prisma"
+    "prisma:generate": "pnpm prisma generate --schema prisma/schema.prisma",
+    "start:with-seed": "pnpm prisma generate && pnpm prisma migrate deploy && node src/lib/seed.js && pnpm run dev"
   },
   "packageManager": "pnpm@10.24.0",
   "dependencies": {
