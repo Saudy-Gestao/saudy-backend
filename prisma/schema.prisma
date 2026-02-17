@@ -412,7 +412,7 @@ model Consultation {
 
 model Report {
     id                String   @id @default(uuid())
-    patientName       String?
+    patientName       String
     cpf               String?
     birthDate         String?
     requestingDoctor  String?

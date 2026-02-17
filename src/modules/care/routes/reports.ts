@@ -60,9 +60,9 @@ export default async function reportRoutes(app: FastifyInstance) {
         type: 'object',
         required: ['patientName'],
         properties: {
-          patientName: { type: 'string' },
-          cpf: { type: 'string' },
-          birthDate: { type: 'string' },
+          patientName: { type: 'string', minLength: 1 },
+          cpf: { type: 'string', pattern: '^\\d{11}$' },
+          birthDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
           requestingDoctor: { type: 'string' },
           reportingDoctor: { type: 'string' },
           reviewingDoctor: { type: 'string' },
@@ -83,6 +83,24 @@ export default async function reportRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const data = request.body as any;
+
+    // runtime validations (complement AJV schema): trim checks and clearer error messages
+    if (!data.patientName || !String(data.patientName).trim()) {
+      return reply.code(400).send({ error: 'patientName is required' });
+    }
+
+    if (data.cpf) {
+      const digits = String(data.cpf).replace(/\D/g, '');
+      if (digits.length !== 11) {
+        return reply.code(400).send({ error: 'cpf must contain 11 digits' });
+      }
+      data.cpf = digits; // normalize
+    }
+
+    if (data.birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(String(data.birthDate))) {
+      return reply.code(400).send({ error: 'birthDate must be YYYY-MM-DD' });
+    }
+
     try {
       const item = await prisma.report.create({ data: {
         patientName: data.patientName,
@@ -113,7 +131,25 @@ export default async function reportRoutes(app: FastifyInstance) {
       summary: 'Update report',
       tags: ['Reports'],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      body: { type: 'object' },
+      body: {
+        type: 'object',
+        properties: {
+          patientName: { type: 'string', minLength: 1 },
+          cpf: { type: 'string', pattern: '^\\d{11}$' },
+          birthDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+          requestingDoctor: { type: 'string' },
+          reportingDoctor: { type: 'string' },
+          reviewingDoctor: { type: 'string' },
+          description: { type: 'string' },
+          conclusion: { type: 'string' },
+          notes: { type: 'string' },
+          status: { type: 'string' },
+          exam: { type: 'string' },
+          scheduledFor: { type: 'string' },
+          responsibleDoctor: { type: 'string' },
+          observation: { type: 'string' },
+        },
+      },
       response: {
         200: { type: 'object' },
         400: { type: 'object', additionalProperties: true },
@@ -127,6 +163,23 @@ export default async function reportRoutes(app: FastifyInstance) {
     try {
       const existing = await prisma.report.findUnique({ where: { id } });
       if (!existing) return reply.code(404).send({ error: 'Report not found' });
+
+      // runtime validations for update
+      if (data.patientName !== undefined && (!String(data.patientName).trim())) {
+        return reply.code(400).send({ error: 'patientName cannot be empty' });
+      }
+
+      if (data.cpf) {
+        const digits = String(data.cpf).replace(/\D/g, '');
+        if (digits.length !== 11) {
+          return reply.code(400).send({ error: 'cpf must contain 11 digits' });
+        }
+        data.cpf = digits;
+      }
+
+      if (data.birthDate && !/^\d{4}-\d{2}-\d{2}$/.test(String(data.birthDate))) {
+        return reply.code(400).send({ error: 'birthDate must be YYYY-MM-DD' });
+      }
 
       const item = await prisma.report.update({ where: { id }, data });
       return item;
