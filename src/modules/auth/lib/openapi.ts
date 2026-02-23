@@ -278,6 +278,7 @@ export const swaggerComponents = {
         sector: { $ref: '#/components/schemas/SectorCreateForRegister' },
         user: { $ref: '#/components/schemas/UserCreateForRegister' },
         accesses: { type: 'array', items: { $ref: '#/components/schemas/AccessCreate' } },
+        branchesCount: { type: 'integer', minimum: 1 },
       },
       required: ['company', 'branch', 'sector', 'user'],
       example: {
@@ -286,6 +287,7 @@ export const swaggerComponents = {
         sector: { name: 'Vendas', description: 'Setor de vendas' },
         user: { name: 'João Silva', birthDate: '1990-01-01', email: 'joao@example.com', password: 'supersecret', phone: '+55 11 97777-7777', address: 'Rua Exemplo, 10' },
         accesses: [{ description: 'Acesso de administrador' }],
+        branchesCount: 3,
       },
     },
     LoginRequest: {
@@ -303,14 +305,14 @@ export const swaggerComponents = {
       type: 'object',
       properties: {
         company: { $ref: '#/components/schemas/Company' },
-        branch: { $ref: '#/components/schemas/Branch' },
+        branches: { type: 'array', items: { $ref: '#/components/schemas/Branch' } },
         sector: { $ref: '#/components/schemas/Sector' },
         accesses: { type: 'array', items: { $ref: '#/components/schemas/Access' } },
         user: { $ref: '#/components/schemas/User' },
       },
       example: {
         company: { id: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc', cnpj: '00.000.000/0000-00', legalName: 'ACME Indústria e Comércio Ltda', tradeName: 'ACME', address: 'Rua Exemplo, 123', phone: '+55 11 99999-9999' },
-        branch: { id: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', companyId: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc', socialName: 'ACME Matriz', tradeName: 'ACME', address: 'Av. Central, 1', phone: '+55 11 98888-8888' },
+        branches: [{ id: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', companyId: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc', socialName: 'ACME Matriz', tradeName: 'ACME', address: 'Av. Central, 1', phone: '+55 11 98888-8888' }],
         sector: { id: '1c2d3e4f-5678-90ab-cdef-1234567890ab', branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', name: 'Vendas', description: 'Setor de vendas' },
         accesses: [{ id: 'acc-123', description: 'Acesso de administrador' }],
         user: { id: 'user-123', sectorId: '1c2d3e4f-5678-90ab-cdef-1234567890ab', name: 'João Silva', birthDate: '1990-01-01', email: 'joao@example.com', phone: '+55 11 97777-7777', address: 'Rua Exemplo, 10', accesses: [{ id: 'acc-123', description: 'Acesso de administrador' }], sector: { id: '1c2d3e4f-5678-90ab-cdef-1234567890ab', branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456', name: 'Vendas', description: 'Setor de vendas' } },

@@ -50,6 +50,7 @@ export default async function authRoutes(app: FastifyInstance) {
       sector,
       user,
       accesses,
+      branchesCount,
     } = request.body as {
       company: {
         cnpj: string;
@@ -79,6 +80,7 @@ export default async function authRoutes(app: FastifyInstance) {
       accesses: {
         description: string;
       }[];
+      branchesCount?: number;
     };
 
     try {
@@ -88,19 +90,37 @@ export default async function authRoutes(app: FastifyInstance) {
           data: company,
         });
 
-        // Create branch
-        const createdBranch = await tx.branch.create({
-          data: {
-            ...branch,
-            companyId: createdCompany.id,
-          },
-        });
+        // create branches list; at least one
+        const totalBranches = branchesCount && branchesCount > 0 ? branchesCount : 1;
+        const createdBranches = [];
+        for (let i = 0; i < totalBranches; i++) {
+          if (i === 0) {
+            const b = await tx.branch.create({
+              data: {
+                ...branch,
+                companyId: createdCompany.id,
+              },
+            });
+            createdBranches.push(b);
+          } else {
+            const b = await tx.branch.create({
+              data: {
+                companyId: createdCompany.id,
+                socialName: `${branch.socialName || branch.tradeName} Filial ${i + 1}`,
+                tradeName: branch.tradeName,
+                address: branch.address,
+                phone: branch.phone,
+              },
+            });
+            createdBranches.push(b);
+          }
+        }
 
-        // Create sector
+        // Create sector on first branch
         const createdSector = await tx.sector.create({
           data: {
             ...sector,
-            branchId: createdBranch.id,
+            branchId: createdBranches[0].id,
           },
         });
 
@@ -142,7 +162,7 @@ export default async function authRoutes(app: FastifyInstance) {
 
         return {
           company: createdCompany,
-          branch: createdBranch,
+          branches: createdBranches,
           sector: createdSector,
           accesses: createdAccesses,
           user: createdUser,
