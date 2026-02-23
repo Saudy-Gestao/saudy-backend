@@ -1,11 +1,15 @@
 require('dotenv/config');
 const { PrismaPg } = require('@prisma/adapter-pg');
+const { Pool } = require('pg');
 // Use require for PrismaClient to match original seed.ts
 const { PrismaClient } = require('@prisma/client');
 
-const adapter = new PrismaPg({
+const isSslEnabled = process.env.DATABASE_SSL === 'true';
+const pool = new Pool({
   connectionString: process.env.DATABASE_URL || '',
+  ssl: isSslEnabled ? { rejectUnauthorized: false } : undefined,
 });
+const adapter = new PrismaPg(pool);
 
 const prisma = new PrismaClient({ adapter });
 

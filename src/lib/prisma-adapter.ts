@@ -5,7 +5,11 @@ const DEFAULT_SCHEMA = 'public';
 
 export function createPrismaAdapter() {
   const dbUrl = process.env.DATABASE_URL || '';
-  const pool = new Pool({ connectionString: dbUrl });
+  const isSslEnabled = process.env.DATABASE_SSL === 'true';
+  const pool = new Pool({
+    connectionString: dbUrl,
+    ssl: isSslEnabled ? { rejectUnauthorized: false } : undefined,
+  });
 
   pool.on('connect', (client: PoolClient) => {
     client.query(`SET search_path TO "${DEFAULT_SCHEMA}"`);
