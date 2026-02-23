@@ -1,3 +1,4 @@
+require('dotenv/config');
 import { defineConfig } from 'prisma/config';
 
 const databaseUrl =
