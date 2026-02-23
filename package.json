@@ -5,10 +5,10 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "pnpm prisma:generate && pnpm tsx watch src/server.ts",
-    "build": "npx prisma:generate && tsc",
+    "build": "pnpm prisma:generate && tsc",
     "start": "npx prisma migrate deploy && node dist/server.js",
-    "prisma:generate": "pnpm exec prisma generate --schema prisma/schema.prisma",
-    "start:with-seed": "pnpm exec prisma generate --schema prisma/schema.prisma && pnpm exec prisma migrate deploy && node src/lib/seed.js && pnpm run dev"
+    "prisma:generate": "npx -y prisma generate --schema prisma/schema.prisma",
+    "start:with-seed": "npx -y prisma generate --schema prisma/schema.prisma && npx -y prisma migrate deploy && node src/lib/seed.js && pnpm run dev"
   },
   "packageManager": "pnpm@10.24.0",
   "dependencies": {
