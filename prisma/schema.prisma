@@ -51,6 +51,7 @@ model Branch {
     tradeName  String
     address    String
     phone      String
+    isMatriz   Boolean  @default(false)
     sectors    Sector[]
 
     @@map("branches")

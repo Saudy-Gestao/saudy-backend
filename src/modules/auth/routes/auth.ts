@@ -99,6 +99,7 @@ export default async function authRoutes(app: FastifyInstance) {
               data: {
                 ...branch,
                 companyId: createdCompany.id,
+                isMatriz: true, // Primeira filial é sempre a matriz
               },
             });
             createdBranches.push(b);
@@ -110,6 +111,7 @@ export default async function authRoutes(app: FastifyInstance) {
                 tradeName: branch.tradeName,
                 address: branch.address,
                 phone: branch.phone,
+                isMatriz: false,
               },
             });
             createdBranches.push(b);

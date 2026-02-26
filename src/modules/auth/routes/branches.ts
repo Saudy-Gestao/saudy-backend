@@ -49,8 +49,21 @@ export default async function branchRoutes(app: FastifyInstance) {
       address: string;
       phone: string;
     };
+    
+    // Verificar se já existe uma matriz para a empresa
+    const existingMatriz = await prisma.branch.findFirst({
+      where: { companyId, isMatriz: true },
+    });
+    
     const branch = await prisma.branch.create({
-      data: { companyId, socialName, tradeName, address, phone },
+      data: { 
+        companyId, 
+        socialName, 
+        tradeName, 
+        address, 
+        phone,
+        isMatriz: !existingMatriz, // Se não houver matriz, esta será a matriz
+      },
     });
     return branch;
   });
@@ -116,11 +129,22 @@ export default async function branchRoutes(app: FastifyInstance) {
       tags: ['Branches'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object' }, 404: { type: 'object' }, 400: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
+      // Verificar se é a matriz antes de deletar
+      const branch = await prisma.branch.findUnique({ where: { id } });
+      
+      if (!branch) {
+        return reply.code(404).send({ error: 'Branch not found' });
+      }
+      
+      if (branch.isMatriz) {
+        return reply.code(400).send({ error: 'Não é possível deletar a filial matriz' });
+      }
+      
       await prisma.branch.delete({
         where: { id },
       });
