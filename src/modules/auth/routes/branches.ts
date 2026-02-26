@@ -28,6 +28,7 @@ export default async function branchRoutes(app: FastifyInstance) {
       where: { companyId: user.sector.branch.companyId },
       include: { company: true },
     });
+    console.log('📋 Branches retornadas da API:', JSON.stringify(branches, null, 2));
     return branches;
   });
 
