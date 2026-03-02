@@ -11,6 +11,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         properties: {
           search: { type: 'string' },
           status: { type: 'string' },
+          authorizationStatus: { type: 'string' },
           specialty: { type: 'string' },
           convenio: { type: 'string' },
           limit: { type: 'number', default: 50 },
@@ -19,10 +20,11 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request) => {
-    const { search, status, specialty, convenio, limit = 50, offset = 0 } = request.query as any;
+    const { search, status, authorizationStatus, specialty, convenio, limit = 50, offset = 0 } = request.query as any;
 
     const where: any = { isActive: true };
     if (status) where.status = status;
+    if (authorizationStatus) where.authorizationStatus = authorizationStatus;
     if (specialty) where.specialty = specialty;
     if (convenio) where.convenio = convenio;
     if (search) {
@@ -72,6 +74,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           time: { type: 'string' },
           type: { type: 'string' },
           status: { type: 'string' },
+          authorizationStatus: { type: 'string' },
+          authorizationNotes: { type: 'string' },
           observations: { type: 'string' },
           totem: { type: 'number' },
         },
@@ -95,6 +99,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         time: data.time || null,
         type: data.type || null,
         status: data.status || null,
+        authorizationStatus: data.authorizationStatus || 'PENDING',
+        authorizationNotes: data.authorizationNotes || null,
+        authorizedAt: data.authorizationStatus === 'AUTHORIZED' ? new Date() : null,
         observations: data.observations || null,
         totem: data.totem ?? null,
       } });
@@ -126,7 +133,15 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       const existing = await prisma.appointment.findUnique({ where: { id } });
       if (!existing) return reply.code(404).send({ error: 'Appointment not found' });
 
-      const item = await prisma.appointment.update({ where: { id }, data });
+      const updateData = { ...data } as any;
+      if (updateData.authorizationStatus === 'AUTHORIZED' && !existing.authorizedAt) {
+        updateData.authorizedAt = new Date();
+      }
+      if (updateData.authorizationStatus && updateData.authorizationStatus !== 'AUTHORIZED') {
+        updateData.authorizedAt = null;
+      }
+
+      const item = await prisma.appointment.update({ where: { id }, data: updateData });
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update appointment');

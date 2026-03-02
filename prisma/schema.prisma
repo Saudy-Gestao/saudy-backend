@@ -539,6 +539,9 @@ model Appointment {
     durationMinutes Int?
     type            String?
     status          String?
+    authorizationStatus String @default("PENDING")
+    authorizationNotes  String? @db.Text
+    authorizedAt        DateTime?
     observations    String?
     totem           Int?
     createdAt       DateTime @default(now())
