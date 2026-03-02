@@ -31,6 +31,17 @@ enum BloodType {
     O_NEGATIVE
 }
 
+enum TeaPreReservationStatus {
+    PENDING_SCHEDULING
+    PROPOSED
+    RESERVED
+    PENDING_AUTHORIZATION
+    AUTHORIZED
+    CONVERTED
+    EXPIRED
+    CANCELED
+}
+
 model Company {
     id        String   @id @default(uuid())
     cnpj      String   @unique
@@ -63,6 +74,7 @@ model Sector {
     name        String
     description String
     users       User[]
+    doctors     Doctor[]
 
     @@map("sectors")
 }
@@ -143,6 +155,8 @@ model Doctor {
     city              String?
     state             String?  @db.VarChar(2)
     zipCode           String?  @db.VarChar(8)
+    roomId            String?
+    room              Sector?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
     isActive          Boolean  @default(true)
     workingDays       String[] @default([])
     workingHoursStart String?
@@ -196,9 +210,119 @@ model Patient {
     createdAt                    DateTime       @default(now())
     updatedAt                    DateTime       @updatedAt
 
-    medicalRecords MedicalRecord[]
+    medicalRecords     MedicalRecord[]
+    teaProfile         TeaProfile?
+    teaPreReservations TeaPreReservation[]
 
     @@map("patients")
+}
+
+model TeaProfile {
+    id                   String   @id @default(uuid())
+    patientId            String   @unique
+    patient              Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+    supportLevel         String?
+    communicationProfile String?  @db.Text
+    sensoryProfile       String?  @db.Text
+    behaviorNotes        String?  @db.Text
+    comorbidities        String[] @default([])
+    therapeuticGoals     String?  @db.Text
+    familyGuidance       String?  @db.Text
+    schoolNotes          String?  @db.Text
+    isActive             Boolean  @default(true)
+    createdAt            DateTime @default(now())
+    updatedAt            DateTime @updatedAt
+
+    plans           TeaTherapeuticPlan[]
+    evolutions      TeaEvolution[]
+    pit             TeaPit?
+    preReservations TeaPreReservation[]
+
+    @@map("tea_profiles")
+}
+
+model TeaTherapeuticPlan {
+    id                      String     @id @default(uuid())
+    teaProfileId            String
+    teaProfile              TeaProfile @relation(fields: [teaProfileId], references: [id], onDelete: Cascade)
+    title                   String
+    objective               String?    @db.Text
+    priority                String     @default("Média")
+    status                  String     @default("Ativo")
+    responsibleDoctorId     String?
+    responsibleProfessional String?
+    targetDate              DateTime?
+    notes                   String?    @db.Text
+    isActive                Boolean    @default(true)
+    createdAt               DateTime   @default(now())
+    updatedAt               DateTime   @updatedAt
+
+    evolutions TeaEvolution[]
+
+    @@index([teaProfileId])
+    @@map("tea_therapeutic_plans")
+}
+
+model TeaEvolution {
+    id                   String              @id @default(uuid())
+    teaProfileId         String
+    teaProfile           TeaProfile          @relation(fields: [teaProfileId], references: [id], onDelete: Cascade)
+    therapeuticPlanId    String?
+    therapeuticPlan      TeaTherapeuticPlan? @relation(fields: [therapeuticPlanId], references: [id], onDelete: SetNull)
+    sessionDate          DateTime            @default(now())
+    professionalDoctorId String?
+    professional         String?
+    interventionSummary  String?             @db.Text
+    patientResponse      String?             @db.Text
+    progressScore        Int?
+    notes                String?             @db.Text
+    createdAt            DateTime            @default(now())
+    updatedAt            DateTime            @updatedAt
+
+    @@index([teaProfileId])
+    @@index([therapeuticPlanId])
+    @@map("tea_evolutions")
+}
+
+model TeaPit {
+    id           String     @id @default(uuid())
+    teaProfileId String     @unique
+    teaProfile   TeaProfile @relation(fields: [teaProfileId], references: [id], onDelete: Cascade)
+    title        String
+    startDate    DateTime?
+    reviewDate   DateTime?
+    status       String     @default("Ativo")
+    notes        String?    @db.Text
+    createdAt    DateTime   @default(now())
+    updatedAt    DateTime   @updatedAt
+
+    therapies       TeaPitTherapy[]
+    preReservations TeaPreReservation[]
+
+    @@map("tea_pits")
+}
+
+model TeaPitTherapy {
+    id                   String   @id @default(uuid())
+    pitId                String
+    pit                  TeaPit   @relation(fields: [pitId], references: [id], onDelete: Cascade)
+    procedureId          String?
+    therapyType          String
+    weeklyFrequency      Int      @default(1)
+    preferredWeekdays    String[] @default([])
+    preferredShift       String?
+    durationMinutes      Int?
+    professionalDoctorId String?
+    professional         String?
+    notes                String?  @db.Text
+    isActive             Boolean  @default(true)
+    createdAt            DateTime @default(now())
+    updatedAt            DateTime @updatedAt
+
+    preReservations TeaPreReservation[]
+
+    @@index([pitId])
+    @@map("tea_pit_therapies")
 }
 
 model MedicalRecord {
@@ -356,23 +480,70 @@ model PreAttendance {
     @@map("pre_attendances")
 }
 
+model TeaPreReservation {
+    id                   String                      @id @default(uuid())
+    teaProfileId         String
+    teaProfile           TeaProfile                  @relation(fields: [teaProfileId], references: [id], onDelete: Cascade)
+    pitId                String
+    pit                  TeaPit                      @relation(fields: [pitId], references: [id], onDelete: Cascade)
+    pitTherapyId         String
+    pitTherapy           TeaPitTherapy               @relation(fields: [pitTherapyId], references: [id], onDelete: Cascade)
+    patientId            String
+    patient              Patient                     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+    procedureId          String?
+    procedureName        String?
+    professionalDoctorId String?
+    professionalName     String?
+    suggestedDate        DateTime?
+    suggestedTime        String?
+    durationMinutes      Int?
+    status               TeaPreReservationStatus     @default(PENDING_SCHEDULING)
+    notes                String?                     @db.Text
+    expiresAt            DateTime?
+    authorizedAt         DateTime?
+    convertedAt          DateTime?
+    createdAt            DateTime                    @default(now())
+    updatedAt            DateTime                    @updatedAt
+    timelineEvents       TeaPreReservationTimeline[]
+
+    @@index([status])
+    @@index([pitTherapyId, status])
+    @@index([patientId])
+    @@map("tea_pre_reservations")
+}
+
+model TeaPreReservationTimeline {
+    id               String            @id @default(uuid())
+    preReservationId String
+    preReservation   TeaPreReservation @relation(fields: [preReservationId], references: [id], onDelete: Cascade)
+    eventType        String
+    eventLabel       String
+    actor            String?
+    payload          Json?
+    createdAt        DateTime          @default(now())
+
+    @@index([preReservationId, createdAt])
+    @@map("tea_pre_reservation_timeline")
+}
+
 model Appointment {
-    id           String   @id @default(uuid())
-    patientName  String?
-    patientCpf   String?
-    patientId    String?
-    doctorName   String?
-    specialty    String?
-    convenio     String?
-    date         String?
-    time         String?
-    type         String?
-    status       String?
-    observations String?
-    totem        Int?
-    createdAt    DateTime @default(now())
-    updatedAt    DateTime @updatedAt
-    isActive     Boolean  @default(true)
+    id              String   @id @default(uuid())
+    patientName     String?
+    patientCpf      String?
+    patientId       String?
+    doctorName      String?
+    specialty       String?
+    convenio        String?
+    date            String?
+    time            String?
+    durationMinutes Int?
+    type            String?
+    status          String?
+    observations    String?
+    totem           Int?
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+    isActive        Boolean  @default(true)
 
     @@map("appointments")
 }
@@ -471,6 +642,7 @@ model Procedure {
     name               String
     description        String?
     price              Decimal?          @db.Decimal(10, 2)
+    durationMinutes    Int?
     acceptsInsurance   Boolean           @default(false)
     acceptedInsurances String[]          @default([])
     modalities         String[]          @default([])

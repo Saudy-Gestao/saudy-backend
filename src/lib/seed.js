@@ -73,6 +73,13 @@ const modules = [
     icon: 'Folder',
     category: 'suporte-clinico',
   },
+  {
+    name: 'modulo-tea',
+    label: 'Módulo TEA',
+    description: 'Cadastro e acompanhamento TEA',
+    icon: 'Brain',
+    category: 'suporte-clinico',
+  },
   
   // Administrativo
   {
@@ -130,6 +137,13 @@ const modules = [
     label: 'Cadastro de Paciente',
     description: 'Registro de pacientes',
     icon: 'UserPlus',
+    category: 'cadastros',
+  },
+  {
+    name: 'cadastro-sala',
+    label: 'Cadastro de Salas',
+    description: 'Salas por filial',
+    icon: 'Warehouse',
     category: 'cadastros',
   }
 ];
