@@ -95,6 +95,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
           name: { type: "string" },
           description: { type: "string" },
           price: { type: ["number", "string"] },
+          durationMinutes: { type: "number" },
           acceptsInsurance: { type: "boolean" },
           acceptedInsurances: { type: "array", items: { type: "string" } },
           modalities: { type: "array", items: { type: "string" } },
@@ -129,6 +130,9 @@ export default async function procedureRoutes(app: FastifyInstance) {
           name: data.name,
           description: data.description || null,
           price: data.price ?? null,
+          durationMinutes: data.durationMinutes !== undefined && data.durationMinutes !== null
+            ? Number(data.durationMinutes)
+            : null,
           acceptsInsurance,
           acceptedInsurances: acceptsInsurance ? acceptedInsurances : [],
           modalities,
@@ -179,6 +183,11 @@ export default async function procedureRoutes(app: FastifyInstance) {
       if (data.name !== undefined) updateData.name = data.name;
       if (data.description !== undefined) updateData.description = data.description || null;
       if (data.price !== undefined) updateData.price = data.price;
+      if (data.durationMinutes !== undefined) {
+        updateData.durationMinutes = data.durationMinutes === null || data.durationMinutes === ''
+          ? null
+          : Number(data.durationMinutes);
+      }
       if (data.acceptsInsurance !== undefined) updateData.acceptsInsurance = Boolean(data.acceptsInsurance);
 
       const acceptedInsurances = normalizeStringArray(data.acceptedInsurances);

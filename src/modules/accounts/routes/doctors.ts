@@ -185,6 +185,19 @@ export default async function doctorRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
     }
 
+    if (data?.roomId !== undefined) {
+      const roomId = String(data.roomId || '').trim();
+      if (roomId) {
+        const room = await prisma.sector.findUnique({ where: { id: roomId } });
+        if (!room) {
+          return reply.code(400).send({ error: 'Validation failed', fields: { roomId: 'Sala inválida' } });
+        }
+        data.roomId = roomId;
+      } else {
+        data.roomId = null;
+      }
+    }
+
     try {
       const doctor = await prisma.doctor.create({
         data: {
@@ -252,6 +265,23 @@ export default async function doctorRoutes(app: FastifyInstance) {
     if (data?.gender !== undefined && data.gender && !['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
 
     if (Object.keys(fieldErrors).length > 0) return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
+
+    if (data?.roomId !== undefined) {
+      const roomId = String(data.roomId || '').trim();
+      if (roomId) {
+        const room = await prisma.sector.findUnique({ where: { id: roomId } });
+        if (!room) {
+          return reply.code(400).send({ error: 'Validation failed', fields: { roomId: 'Sala inválida' } });
+        }
+        data.roomId = roomId;
+      } else {
+        data.roomId = null;
+      }
+    }
+
+    if (data?.birthDate !== undefined && data.birthDate) {
+      data.birthDate = new Date(String(data.birthDate));
+    }
 
     try {
       const doctor = await prisma.doctor.update({
