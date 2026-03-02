@@ -80,6 +80,13 @@ const modules = [
     icon: 'Brain',
     category: 'suporte-clinico',
   },
+  {
+    name: 'autorizacao-convenio',
+    label: 'Autorização Convênio',
+    description: 'Gestão de autorizações de convênio',
+    icon: 'ShieldCheck',
+    category: 'suporte-clinico',
+  },
   
   // Administrativo
   {
