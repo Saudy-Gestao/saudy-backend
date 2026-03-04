@@ -47,7 +47,6 @@ model Branch {
     id         String   @id @default(uuid())
     companyId  String
     company    Company  @relation(fields: [companyId], references: [id])
-    socialName String
     tradeName  String
     address    String
     phone      String
