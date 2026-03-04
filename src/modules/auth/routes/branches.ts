@@ -24,11 +24,41 @@ export default async function branchRoutes(app: FastifyInstance) {
     }
     
     // Return only branches from user's company
+    const companyId = user.sector.branch.companyId;
+
     const branches = await prisma.branch.findMany({
-      where: { companyId: user.sector.branch.companyId },
-      include: { company: true },
+      where: { companyId },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        companyId: true,
+        tradeName: true,
+        address: true,
+        phone: true,
+        isMatriz: true,
+      },
     });
-    return branches;
+
+    if (branches.length === 0) {
+      return branches;
+    }
+
+    const hasMatriz = branches.some((branch) => branch.isMatriz);
+    if (hasMatriz) {
+      return branches;
+    }
+
+    const firstBranchId = branches[0].id;
+    await prisma.branch.update({
+      where: { id: firstBranchId },
+      data: { isMatriz: true },
+    });
+
+    return branches.map((branch) => (
+      branch.id === firstBranchId
+        ? { ...branch, isMatriz: true }
+        : branch
+    ));
   });
 
   // Create a new branch
@@ -42,15 +72,48 @@ export default async function branchRoutes(app: FastifyInstance) {
       response: { 200: { $ref: 'Branch#' } },
     },
   }, async (request, reply) => {
-    const { companyId, socialName, tradeName, address, phone } = request.body as {
+    const { companyId, tradeName, address, phone, isMatriz, type } = request.body as {
       companyId: string;
-      socialName: string;
       tradeName: string;
       address: string;
       phone: string;
+      isMatriz?: boolean;
+      type?: 'Filial' | 'Matriz';
     };
-    const branch = await prisma.branch.create({
-      data: { companyId, socialName, tradeName, address, phone },
+    
+    // Verificar se já existe uma matriz para a empresa
+    const existingMatriz = await prisma.branch.findFirst({
+      where: { companyId, isMatriz: true },
+    });
+    
+    const resolvedIsMatriz = typeof isMatriz === 'boolean' ? isMatriz : type === 'Matriz';
+    const shouldBeMatriz = Boolean(resolvedIsMatriz) || !existingMatriz;
+
+    const branch = await prisma.$transaction(async (tx: any) => {
+      if (shouldBeMatriz) {
+        await tx.branch.updateMany({
+          where: { companyId, isMatriz: true },
+          data: { isMatriz: false },
+        });
+      }
+
+      return tx.branch.create({
+        data: {
+          companyId,
+          tradeName,
+          address,
+          phone,
+          isMatriz: shouldBeMatriz,
+        },
+        select: {
+          id: true,
+          companyId: true,
+          tradeName: true,
+          address: true,
+          phone: true,
+          isMatriz: true,
+        },
+      });
     });
     return branch;
   });
@@ -69,7 +132,14 @@ export default async function branchRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const branch = await prisma.branch.findUnique({
       where: { id },
-      include: { company: true },
+      select: {
+        id: true,
+        companyId: true,
+        tradeName: true,
+        address: true,
+        phone: true,
+        isMatriz: true,
+      },
     });
     if (!branch) {
       return reply.code(404).send({ error: 'Branch not found' });
@@ -86,21 +156,69 @@ export default async function branchRoutes(app: FastifyInstance) {
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { $ref: 'BranchUpdate#' },
-      response: { 200: { $ref: 'Branch#' }, 404: { type: 'object' } },
+      response: { 200: { $ref: 'Branch#' }, 400: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { companyId, socialName, tradeName, address, phone } = request.body as {
+    const { companyId, tradeName, address, phone, isMatriz, type } = request.body as {
       companyId?: string;
-      socialName?: string;
       tradeName?: string;
       address?: string;
       phone?: string;
+      isMatriz?: boolean;
+      type?: 'Filial' | 'Matriz';
     };
     try {
-      const branch = await prisma.branch.update({
-        where: { id },
-        data: { companyId, socialName, tradeName, address, phone },
+      const currentBranch = await prisma.branch.findUnique({ where: { id } });
+      if (!currentBranch) {
+        return reply.code(404).send({ error: 'Branch not found or invalid data' });
+      }
+
+      const targetCompanyId = companyId || currentBranch.companyId;
+      const resolvedIsMatriz = typeof isMatriz === 'boolean' ? isMatriz : (type === 'Matriz' ? true : type === 'Filial' ? false : undefined);
+      const wantsMatriz = resolvedIsMatriz === true;
+      const wantsFilial = resolvedIsMatriz === false;
+
+      if (wantsFilial && currentBranch.isMatriz) {
+        const anotherMatriz = await prisma.branch.findFirst({
+          where: {
+            companyId: targetCompanyId,
+            isMatriz: true,
+            NOT: { id },
+          },
+        });
+
+        if (!anotherMatriz) {
+          return reply.code(400).send({ error: 'A empresa deve ter ao menos uma matriz' });
+        }
+      }
+
+      const branch = await prisma.$transaction(async (tx: any) => {
+        if (wantsMatriz) {
+          await tx.branch.updateMany({
+            where: { companyId: targetCompanyId, isMatriz: true, NOT: { id } },
+            data: { isMatriz: false },
+          });
+        }
+
+        return tx.branch.update({
+          where: { id },
+          data: {
+            companyId,
+            tradeName,
+            address,
+            phone,
+            ...(resolvedIsMatriz !== undefined ? { isMatriz: resolvedIsMatriz } : {}),
+          },
+          select: {
+            id: true,
+            companyId: true,
+            tradeName: true,
+            address: true,
+            phone: true,
+            isMatriz: true,
+          },
+        });
       });
       return branch;
     } catch (error) {
@@ -116,11 +234,22 @@ export default async function branchRoutes(app: FastifyInstance) {
       tags: ['Branches'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object' }, 404: { type: 'object' }, 400: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
+      // Verificar se é a matriz antes de deletar
+      const branch = await prisma.branch.findUnique({ where: { id } });
+      
+      if (!branch) {
+        return reply.code(404).send({ error: 'Branch not found' });
+      }
+      
+      if (branch.isMatriz) {
+        return reply.code(400).send({ error: 'Não é possível deletar a filial matriz' });
+      }
+      
       await prisma.branch.delete({
         where: { id },
       });

@@ -41,7 +41,17 @@ export default async function authRoutes(app: FastifyInstance) {
       summary: 'Register a complete company/branch/sector/user setup',
       tags: ['Auth'],
       body: { $ref: 'RegisterRequest#' },
-      response: { 200: { $ref: 'RegisterResponse#' }, 400: { type: 'object' } },
+      response: {
+        200: { $ref: 'RegisterResponse#' },
+        400: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+            message: { type: 'string' },
+            details: { type: 'string' },
+          },
+        },
+      },
     },
   }, async (request, reply) => {
     const {
@@ -60,7 +70,6 @@ export default async function authRoutes(app: FastifyInstance) {
         phone: string;
       };
       branch: {
-        socialName: string;
         tradeName: string;
         address: string;
         phone: string;
@@ -99,6 +108,7 @@ export default async function authRoutes(app: FastifyInstance) {
               data: {
                 ...branch,
                 companyId: createdCompany.id,
+                isMatriz: true, // Primeira filial é sempre a matriz
               },
             });
             createdBranches.push(b);
@@ -106,10 +116,10 @@ export default async function authRoutes(app: FastifyInstance) {
             const b = await tx.branch.create({
               data: {
                 companyId: createdCompany.id,
-                socialName: `${branch.socialName || branch.tradeName} Filial ${i + 1}`,
-                tradeName: branch.tradeName,
+                tradeName: `${branch.tradeName} Filial ${i + 1}`,
                 address: branch.address,
                 phone: branch.phone,
+                isMatriz: false,
               },
             });
             createdBranches.push(b);
@@ -124,14 +134,16 @@ export default async function authRoutes(app: FastifyInstance) {
           },
         });
 
-        // Create accesses
-        const createdAccesses = await Promise.all(
-          accesses.map((access) =>
-            tx.access.create({
-              data: access,
-            })
-          )
-        );
+        // Create accesses (only if provided)
+        const createdAccesses = accesses && accesses.length > 0 
+          ? await Promise.all(
+              accesses.map((access) =>
+                tx.access.create({
+                  data: access,
+                })
+              )
+            )
+          : [];
 
         // Hash password
         const hashedPassword = await bcrypt.hash(user.password, 10);
@@ -146,9 +158,11 @@ export default async function authRoutes(app: FastifyInstance) {
             phone: user.phone,
             address: user.address,
             sectorId: createdSector.id,
-            accesses: {
-              connect: createdAccesses.map((acc) => ({ id: acc.id })),
-            },
+            accesses: createdAccesses.length > 0
+              ? {
+                  connect: createdAccesses.map((acc) => ({ id: acc.id })),
+                }
+              : undefined,
           },
           include: {
             sector: true,
@@ -182,7 +196,16 @@ export default async function authRoutes(app: FastifyInstance) {
       summary: 'Authenticate user',
       tags: ['Auth'],
       body: { $ref: 'LoginRequest#' },
-      response: { 200: { $ref: 'AuthResponse#' }, 401: { type: 'object' } },
+      response: {
+        200: { $ref: 'AuthResponse#' },
+        401: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+            message: { type: 'string' },
+          },
+        },
+      },
     },
   }, async (request, reply) => {
       const { email, password } = request.body as {
