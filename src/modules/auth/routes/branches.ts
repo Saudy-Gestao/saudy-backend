@@ -18,11 +18,11 @@ export default async function branchRoutes(app: FastifyInstance) {
       where: { id: userId },
       include: { sector: { include: { branch: true } } },
     });
-    
+
     if (!user?.sector?.branch?.companyId) {
       return reply.code(403).send({ error: 'User not associated with a company' });
     }
-    
+
     // Return only branches from user's company
     const companyId = user.sector.branch.companyId;
 
@@ -43,7 +43,7 @@ export default async function branchRoutes(app: FastifyInstance) {
       return branches;
     }
 
-    const hasMatriz = branches.some((branch) => branch.isMatriz);
+    const hasMatriz = branches.some((branch: any) => branch.isMatriz);
     if (hasMatriz) {
       return branches;
     }
@@ -54,7 +54,7 @@ export default async function branchRoutes(app: FastifyInstance) {
       data: { isMatriz: true },
     });
 
-    return branches.map((branch) => (
+    return branches.map((branch: any) => (
       branch.id === firstBranchId
         ? { ...branch, isMatriz: true }
         : branch
@@ -80,12 +80,12 @@ export default async function branchRoutes(app: FastifyInstance) {
       isMatriz?: boolean;
       type?: 'Filial' | 'Matriz';
     };
-    
+
     // Verificar se já existe uma matriz para a empresa
     const existingMatriz = await prisma.branch.findFirst({
       where: { companyId, isMatriz: true },
     });
-    
+
     const resolvedIsMatriz = typeof isMatriz === 'boolean' ? isMatriz : type === 'Matriz';
     const shouldBeMatriz = Boolean(resolvedIsMatriz) || !existingMatriz;
 
@@ -241,15 +241,15 @@ export default async function branchRoutes(app: FastifyInstance) {
     try {
       // Verificar se é a matriz antes de deletar
       const branch = await prisma.branch.findUnique({ where: { id } });
-      
+
       if (!branch) {
         return reply.code(404).send({ error: 'Branch not found' });
       }
-      
+
       if (branch.isMatriz) {
         return reply.code(400).send({ error: 'Não é possível deletar a filial matriz' });
       }
-      
+
       await prisma.branch.delete({
         where: { id },
       });
