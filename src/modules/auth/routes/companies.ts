@@ -1,5 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma'; // Importe a instância do Prisma a partir de src/lib/prisma
+import { Prisma } from '@prisma/client';
+import {
+  findCompanyByNormalizedCnpj,
+  isValidNormalizedCnpj,
+  normalizeCnpj,
+} from '../lib/cnpj';
 
 export default async function companyRoutes(app: FastifyInstance) {
   // Example route to list companies
@@ -48,8 +54,19 @@ export default async function companyRoutes(app: FastifyInstance) {
       address: string;
       phone: string;
     };
+
+    const normalizedCnpj = normalizeCnpj(cnpj);
+    if (!isValidNormalizedCnpj(normalizedCnpj)) {
+      return reply.code(400).send({ error: 'Invalid CNPJ' });
+    }
+
+    const existingCompany = await findCompanyByNormalizedCnpj(prisma, normalizedCnpj);
+    if (existingCompany) {
+      return reply.code(409).send({ error: 'CNPJ already registered' });
+    }
+
     const company = await prisma.company.create({
-      data: { cnpj, legalName, tradeName, address, phone },
+      data: { cnpj: normalizedCnpj, legalName, tradeName, address, phone },
     });
     return company;
   });
@@ -95,13 +112,31 @@ export default async function companyRoutes(app: FastifyInstance) {
       address?: string;
       phone?: string;
     };
+
     try {
+      let normalizedCnpj: string | undefined;
+      if (typeof cnpj === 'string') {
+        normalizedCnpj = normalizeCnpj(cnpj);
+        if (!isValidNormalizedCnpj(normalizedCnpj)) {
+          return reply.code(400).send({ error: 'Invalid CNPJ' });
+        }
+
+        const existingCompany = await findCompanyByNormalizedCnpj(prisma, normalizedCnpj, id);
+        if (existingCompany) {
+          return reply.code(409).send({ error: 'CNPJ already registered' });
+        }
+      }
+
       const company = await prisma.company.update({
         where: { id },
-        data: { cnpj, legalName, tradeName, address, phone },
+        data: { cnpj: normalizedCnpj, legalName, tradeName, address, phone },
       });
       return company;
     } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        return reply.code(409).send({ error: 'CNPJ already registered' });
+      }
+
       return reply.code(404).send({ error: 'Company not found or invalid data' });
     }
   });
