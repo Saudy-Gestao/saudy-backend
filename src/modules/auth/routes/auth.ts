@@ -3,6 +3,12 @@ import prisma from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { sendPasswordResetCodeEmail } from '../lib/mailer';
+import { Prisma } from '@prisma/client';
+import {
+  findCompanyByNormalizedCnpj,
+  isValidNormalizedCnpj,
+  normalizeCnpj,
+} from '../lib/cnpj';
 
 const RESET_CODE_EXPIRATION_MINUTES = 10;
 
@@ -94,9 +100,23 @@ export default async function authRoutes(app: FastifyInstance) {
 
     try {
       const result = await prisma.$transaction(async (tx: any) => {
+        const normalizedCnpj = normalizeCnpj(company.cnpj);
+
+        if (!isValidNormalizedCnpj(normalizedCnpj)) {
+          throw new Error('CNPJ inválido');
+        }
+
+        const existingCompany = await findCompanyByNormalizedCnpj(tx, normalizedCnpj);
+        if (existingCompany) {
+          throw new Error('CNPJ já cadastrado');
+        }
+
         // Create company
         const createdCompany = await tx.company.create({
-          data: company,
+          data: {
+            ...company,
+            cnpj: normalizedCnpj,
+          },
         });
 
         // create branches list; at least one
@@ -186,6 +206,22 @@ export default async function authRoutes(app: FastifyInstance) {
       return result;
     } catch (error) {
       console.log('Error during registration:', error);
+
+      if ((error as Error).message === 'CNPJ já cadastrado') {
+        return reply.code(409).send({ error: 'Duplicate CNPJ', details: 'CNPJ já cadastrado' });
+      }
+
+      if ((error as Error).message === 'CNPJ inválido') {
+        return reply.code(400).send({ error: 'Invalid CNPJ', details: 'CNPJ inválido' });
+      }
+
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const target = Array.isArray(error.meta?.target) ? error.meta?.target.join(',') : String(error.meta?.target || '');
+        if (target.includes('cnpj')) {
+          return reply.code(409).send({ error: 'Duplicate CNPJ', details: 'CNPJ já cadastrado' });
+        }
+      }
+
       return reply.code(400).send({ error: 'Registration failed', details: (error as Error).message });
     }
   });
