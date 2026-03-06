@@ -44,7 +44,11 @@ export default async function companyRoutes(app: FastifyInstance) {
       tags: ['Companies'],
       security: [{ bearerAuth: [] }],
       body: { $ref: 'CompanyCreate#' },
-      response: { 200: { $ref: 'Company#' } },
+      response: {
+        200: { $ref: 'Company#' },
+        400: { type: 'object' },
+        409: { type: 'object' },
+      },
     },
   }, async (request, reply) => {
     const { cnpj, legalName, tradeName, address, phone } = request.body as {
@@ -101,7 +105,12 @@ export default async function companyRoutes(app: FastifyInstance) {
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { $ref: 'CompanyCreate#' },
-      response: { 200: { $ref: 'Company#' }, 404: { type: 'object' } },
+      response: {
+        200: { $ref: 'Company#' },
+        400: { type: 'object' },
+        404: { type: 'object' },
+        409: { type: 'object' },
+      },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
