@@ -82,7 +82,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
         select: {
           id: true,
           name: true,
-          room: { select: { name: true, branch: { select: { tradeName: true, socialName: true } } } },
+          room: { select: { name: true, branch: { select: { tradeName: true } } } },
         },
       }),
     ]);
@@ -91,7 +91,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     doctors.forEach((doctor: any) => {
       const doctorName = String(doctor?.name || '').trim().toLowerCase();
       const roomName = String(doctor?.room?.name || '').trim();
-      const branchName = String(doctor?.room?.branch?.tradeName || doctor?.room?.branch?.socialName || '').trim();
+      const branchName = String(doctor?.room?.branch?.tradeName || '').trim();
       if (!doctorName || !roomName) return;
       roomByDoctorName.set(doctorName, branchName ? `${roomName} (${branchName})` : roomName);
     });
