@@ -73,7 +73,6 @@ export default async function authRoutes(app: FastifyInstance) {
       sector,
       user,
       accesses,
-      branchesCount,
     } = request.body as {
       company: {
         cnpj: string;
@@ -126,32 +125,17 @@ export default async function authRoutes(app: FastifyInstance) {
           },
         });
 
-        // create branches list; at least one
-        const totalBranches = branchesCount && branchesCount > 0 ? branchesCount : 1;
-        const createdBranches = [];
-        for (let i = 0; i < totalBranches; i++) {
-          if (i === 0) {
-            const b = await tx.branch.create({
-              data: {
-                ...branch,
-                companyId: createdCompany.id,
-                isMatriz: true, // Primeira filial é sempre a matriz
-              },
-            });
-            createdBranches.push(b);
-          } else {
-            const b = await tx.branch.create({
-              data: {
-                companyId: createdCompany.id,
-                tradeName: `${branch.tradeName} Filial ${i + 1}`,
-                address: branch.address,
-                phone: branch.phone,
-                isMatriz: false,
-              },
-            });
-            createdBranches.push(b);
-          }
-        }
+        // Always create only the matriz during onboarding.
+        // Additional branches must be created later from Settings.
+        const matrizBranch = await tx.branch.create({
+          data: {
+            ...branch,
+            companyId: createdCompany.id,
+            isMatriz: true,
+          },
+        });
+
+        const createdBranches = [matrizBranch];
 
         // Create sector on first branch
         const createdSector = await tx.sector.create({
