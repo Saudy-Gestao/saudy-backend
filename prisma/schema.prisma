@@ -55,16 +55,26 @@ model Company {
 }
 
 model Branch {
-    id         String   @id @default(uuid())
+    id         String          @id @default(uuid())
     companyId  String
-    company    Company  @relation(fields: [companyId], references: [id])
+    company    Company         @relation(fields: [companyId], references: [id])
     tradeName  String
     address    String
     phone      String
-    isMatriz   Boolean  @default(false)
+    isMatriz   Boolean         @default(false)
     sectors    Sector[]
+    settings   BranchSettings?
 
     @@map("branches")
+}
+
+model BranchSettings {
+    id                              String  @id @default(uuid())
+    branchId                        String  @unique
+    branch                          Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+    requireFacialForReportDelivery  Boolean @default(false)
+
+    @@map("branch_settings")
 }
 
 model Sector {
