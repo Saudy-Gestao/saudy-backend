@@ -55,16 +55,26 @@ model Company {
 }
 
 model Branch {
-    id         String   @id @default(uuid())
+    id         String          @id @default(uuid())
     companyId  String
-    company    Company  @relation(fields: [companyId], references: [id])
+    company    Company         @relation(fields: [companyId], references: [id])
     tradeName  String
     address    String
     phone      String
-    isMatriz   Boolean  @default(false)
+    isMatriz   Boolean         @default(false)
     sectors    Sector[]
+    settings   BranchSettings?
 
     @@map("branches")
+}
+
+model BranchSettings {
+    id                              String  @id @default(uuid())
+    branchId                        String  @unique
+    branch                          Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+    requireFacialForReportDelivery  Boolean @default(false)
+
+    @@map("branch_settings")
 }
 
 model Sector {
@@ -206,6 +216,7 @@ model Patient {
     chronicConditions            String[]       @default([])
     currentMedications           String[]       @default([])
     observations                 String?        @db.Text
+    image                        Bytes?
     isActive                     Boolean        @default(true)
     createdAt                    DateTime       @default(now())
     updatedAt                    DateTime       @updatedAt
@@ -213,6 +224,7 @@ model Patient {
     medicalRecords     MedicalRecord[]
     teaProfile         TeaProfile?
     teaPreReservations TeaPreReservation[]
+    facialLogs         FacialLog[]
 
     @@map("patients")
 }
@@ -760,4 +772,18 @@ model Insurance {
     updatedAt   DateTime @updatedAt
 
     @@map("insurances")
+}
+
+model FacialLog {
+    id        String   @id @default(uuid())
+    patientId String
+    patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+    userId    String
+    trust     Decimal  @db.Decimal(5, 4)
+    createdAt DateTime @default(now())
+
+    @@index([patientId])
+    @@index([userId])
+    @@index([createdAt])
+    @@map("facial_logs")
 }

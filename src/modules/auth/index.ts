@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import companyRoutes from './routes/companies';
 import branchRoutes from './routes/branches';
+import branchSettingsRoutes from './routes/branch-settings';
 import sectorRoutes from './routes/sectors';
 import accessRoutes from './routes/accesses';
 import moduleRoutes from './routes/modules';
@@ -13,6 +14,7 @@ export default async function authModule(app: FastifyInstance) {
 
   app.register(companyRoutes);
   app.register(branchRoutes);
+  app.register(branchSettingsRoutes);
   app.register(sectorRoutes);
   app.register(accessRoutes);
   app.register(userRoutes);

@@ -14,20 +14,56 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           authorizationStatus: { type: 'string' },
           specialty: { type: 'string' },
           convenio: { type: 'string' },
+          patientId: { type: 'string' },
+          patientCpf: { type: 'string' },
+          date: { type: 'string' }, // YYYY-MM-DD
+          startDate: { type: 'string' }, // YYYY-MM-DD
+          endDate: { type: 'string' }, // YYYY-MM-DD
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
       },
     },
   }, async (request) => {
-    const { search, status, authorizationStatus, specialty, convenio, limit = 50, offset = 0 } = request.query as any;
+    const { 
+      search, 
+      status, 
+      authorizationStatus, 
+      specialty, 
+      convenio,
+      patientId,
+      patientCpf,
+      date,
+      startDate,
+      endDate,
+      limit = 50, 
+      offset = 0 
+    } = request.query as any;
 
     const where: any = { isActive: true };
     if (status) where.status = status;
     if (authorizationStatus) where.authorizationStatus = authorizationStatus;
     if (specialty) where.specialty = specialty;
     if (convenio) where.convenio = convenio;
-    if (search) {
+    
+    // Filtro por paciente
+    if (patientId) where.patientId = patientId;
+    if (patientCpf) {
+      const normalizedCpf = patientCpf.replace(/\D/g, '');
+      where.patientCpf = { contains: normalizedCpf };
+    }
+    
+    // Filtro por data
+    if (date) {
+      where.date = date;
+    } else if (startDate || endDate) {
+      where.date = {};
+      if (startDate) where.date.gte = startDate;
+      if (endDate) where.date.lte = endDate;
+    }
+    
+    // Search (só aplica se não tiver filtros específicos de paciente)
+    if (search && !patientId && !patientCpf) {
       where.OR = [
         { patientName: { contains: search, mode: 'insensitive' } },
         { patientCpf: { contains: search, mode: 'insensitive' } },
@@ -36,7 +72,15 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     }
 
     const [items, total] = await Promise.all([
-      prisma.appointment.findMany({ where, take: limit, skip: offset, orderBy: { createdAt: 'desc' } }),
+      prisma.appointment.findMany({ 
+        where, 
+        take: limit, 
+        skip: offset, 
+        orderBy: [
+          { date: 'asc' },
+          { time: 'asc' },
+        ]
+      }),
       prisma.appointment.count({ where }),
     ]);
 
