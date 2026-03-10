@@ -2,6 +2,16 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function appointmentRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
   // Auth hook for all routes in this plugin
   app.addHook('onRequest', async (request, reply) => {
     try {
@@ -44,6 +54,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const {
       doctorId,
       patientId,
@@ -64,7 +77,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       offset?: number;
     };
 
-    const where: any = {};
+    const where: any = { branchId };
 
     if (doctorId) where.doctorId = doctorId;
     if (patientId) where.patientId = patientId;
@@ -130,10 +143,13 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const appointment = await prisma.appointment.findUnique({
-      where: { id },
+    const appointment = await prisma.appointment.findFirst({
+      where: { id, branchId },
       include: {
         patient: true,
         doctor: true,
@@ -161,6 +177,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const data = request.body as {
       patientId: string;
       doctorId: string;
@@ -172,13 +191,13 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     };
 
     // Verify patient exists
-    const patient = await prisma.patient.findUnique({ where: { id: data.patientId } });
+    const patient = await prisma.patient.findFirst({ where: { id: data.patientId, branchId } });
     if (!patient) {
       return reply.code(400).send({ error: 'Patient not found' });
     }
 
     // Verify doctor exists
-    const doctor = await prisma.doctor.findUnique({ where: { id: data.doctorId } });
+    const doctor = await prisma.doctor.findFirst({ where: { id: data.doctorId, branchId } });
     if (!doctor) {
       return reply.code(400).send({ error: 'Doctor not found' });
     }
@@ -191,6 +210,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     const conflictingAppointment = await prisma.appointment.findFirst({
       where: {
         doctorId: data.doctorId,
+        branchId,
         status: { in: ['SCHEDULED', 'CONFIRMED'] },
         scheduledAt: {
           lt: endTime,
@@ -214,6 +234,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       const appointment = await prisma.appointment.create({
         data: {
           ...data,
+          branchId,
           scheduledAt,
           duration,
         },
@@ -254,10 +275,13 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
     const data = request.body as any;
 
-    const existing = await prisma.appointment.findUnique({ where: { id } });
+    const existing = await prisma.appointment.findFirst({ where: { id, branchId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Appointment not found' });
@@ -320,10 +344,13 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
     const { reason } = request.body as { reason?: string };
 
-    const existing = await prisma.appointment.findUnique({ where: { id } });
+    const existing = await prisma.appointment.findFirst({ where: { id, branchId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Appointment not found' });
@@ -369,9 +396,12 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const existing = await prisma.appointment.findUnique({ where: { id } });
+    const existing = await prisma.appointment.findFirst({ where: { id, branchId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Appointment not found' });
@@ -412,10 +442,13 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const existing = await prisma.appointment.findUnique({
-      where: { id },
+    const existing = await prisma.appointment.findFirst({
+      where: { id, branchId },
       include: { medicalRecord: true },
     });
 
@@ -449,6 +482,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -456,6 +492,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
 
     const appointments = await prisma.appointment.findMany({
       where: {
+        branchId,
         scheduledAt: {
           gte: today,
           lt: tomorrow,
@@ -500,12 +537,15 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { startDate, endDate } = request.query as {
       startDate?: string;
       endDate?: string;
     };
 
-    const where: any = {};
+    const where: any = { branchId };
     if (startDate || endDate) {
       where.scheduledAt = {};
       if (startDate) where.scheduledAt.gte = new Date(startDate);

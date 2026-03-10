@@ -364,19 +364,27 @@ export default async function authRoutes(app: FastifyInstance) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
-      const token = app.jwt.sign({ id: authenticatedUser.id, email: authenticatedUser.email });
+      const token = app.jwt.sign({
+        id: user.id,
+        email: user.email,
+        companyId: user.sector?.branch?.companyId || null,
+        branchId: user.sector?.branch?.id || null,
+      });
 
       return {
         token,
         user: {
-          id: authenticatedUser.id,
-          name: authenticatedUser.name,
-          email: authenticatedUser.email,
-          phone: authenticatedUser.phone,
-          address: authenticatedUser.address,
-          birthDate: authenticatedUser.birthDate,
-          sector: authenticatedUser.sector,
-          accesses: authenticatedUser.accesses,
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          address: user.address,
+          birthDate: user.birthDate,
+          companyId: user.sector?.branch?.companyId || null,
+          branchId: user.sector?.branch?.id || null,
+          branch: user.sector?.branch || null,
+          sector: user.sector,
+          accesses: user.accesses,
         },
       };
   });
@@ -588,44 +596,5 @@ export default async function authRoutes(app: FastifyInstance) {
     ]);
 
     return { message: 'Senha alterada com sucesso' };
-  });
-}
-
-async function findUsersByIdentifier(identifier: string) {
-  const normalizedIdentifier = normalizeIdentifier(identifier);
-
-  if (!normalizedIdentifier) {
-    return [] as { id: string; email: string; name: string }[];
-  }
-
-  if (isEmail(normalizedIdentifier)) {
-    return prisma.user.findMany({
-      where: {
-        email: {
-          equals: normalizedIdentifier,
-          mode: 'insensitive',
-        },
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-      },
-    });
-  }
-
-  const cpfDigits = digitsOnly(normalizedIdentifier);
-  return prisma.user.findMany({
-    where: {
-      OR: [
-        { cpf: normalizedIdentifier },
-        { cpf: cpfDigits },
-      ],
-    },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-    },
   });
 }

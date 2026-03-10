@@ -2,6 +2,20 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function sectorRoutes(app: FastifyInstance) {
+  const getLoggedContext = async (userId: string) => {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+
+    const branch = user?.sector?.branch;
+    if (!branch?.companyId || !branch?.id) return null;
+    return {
+      companyId: branch.companyId,
+      branchId: branch.id,
+    };
+  };
+
   // List all sectors
   app.get('/sectors', {
     preHandler: async (request, reply) => { await request.jwtVerify(); },
@@ -12,20 +26,16 @@ export default async function sectorRoutes(app: FastifyInstance) {
       response: { 200: { type: 'array', items: { $ref: 'Sector#' } }, 403: { type: 'object' } },
     },
   }, async (request, reply) => {
-    // Get logged user's company ID
     const userId = (request.user as any).id;
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { sector: { include: { branch: true } } },
-    });
-    
-    if (!user?.sector?.branch?.companyId) {
+    const loggedContext = await getLoggedContext(userId);
+
+    if (!loggedContext?.companyId || !loggedContext?.branchId) {
       return reply.code(403).send({ error: 'User not associated with a company' });
     }
-    
-    // Return only sectors from branches of user's company
+
+    // Return only sectors from logged user's branch
     const sectors = await prisma.sector.findMany({
-      where: { branch: { companyId: user.sector.branch.companyId } },
+      where: { branchId: loggedContext.branchId },
       include: { branch: true },
     });
     return sectors;
@@ -39,7 +49,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
       tags: ['Sectors'],
       security: [{ bearerAuth: [] }],
       body: { $ref: 'SectorCreate#' },
-      response: { 200: { $ref: 'Sector#' } },
+      response: { 200: { $ref: 'Sector#' }, 403: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { branchId, name, description } = request.body as {
@@ -47,8 +57,20 @@ export default async function sectorRoutes(app: FastifyInstance) {
       name: string;
       description: string;
     };
+
+    const userId = (request.user as any).id;
+    const loggedContext = await getLoggedContext(userId);
+
+    if (!loggedContext?.branchId) {
+      return reply.code(403).send({ error: 'User not associated with a branch' });
+    }
+
+    if (branchId && branchId !== loggedContext.branchId) {
+      return reply.code(403).send({ error: 'Você só pode cadastrar setor na sua filial' });
+    }
+
     const sector = await prisma.sector.create({
-      data: { branchId, name, description },
+      data: { branchId: loggedContext.branchId, name, description },
     });
     return sector;
   });
@@ -61,16 +83,26 @@ export default async function sectorRoutes(app: FastifyInstance) {
       tags: ['Sectors'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const userId = (request.user as any).id;
+    const loggedContext = await getLoggedContext(userId);
+
+    if (!loggedContext?.branchId) {
+      return reply.code(403).send({ error: 'User not associated with a branch' });
+    }
+
     const sector = await prisma.sector.findUnique({
       where: { id },
       include: { branch: true },
     });
     if (!sector) {
       return reply.code(404).send({ error: 'Sector not found' });
+    }
+    if (sector.branchId !== loggedContext.branchId) {
+      return reply.code(403).send({ error: 'Setor fora da sua filial' });
     }
     return sector;
   });
@@ -84,7 +116,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object' },
-      response: { 200: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -93,10 +125,29 @@ export default async function sectorRoutes(app: FastifyInstance) {
       name?: string;
       description?: string;
     };
+
+    const userId = (request.user as any).id;
+    const loggedContext = await getLoggedContext(userId);
+
+    if (!loggedContext?.branchId) {
+      return reply.code(403).send({ error: 'User not associated with a branch' });
+    }
+
     try {
+      const current = await prisma.sector.findUnique({ where: { id } });
+      if (!current) {
+        return reply.code(404).send({ error: 'Sector not found' });
+      }
+      if (current.branchId !== loggedContext.branchId) {
+        return reply.code(403).send({ error: 'Setor fora da sua filial' });
+      }
+      if (branchId && branchId !== loggedContext.branchId) {
+        return reply.code(403).send({ error: 'Você só pode mover setor para sua filial' });
+      }
+
       const sector = await prisma.sector.update({
         where: { id },
-        data: { branchId, name, description },
+        data: { branchId: loggedContext.branchId, name, description },
       });
       return sector;
     } catch (error) {
@@ -112,11 +163,26 @@ export default async function sectorRoutes(app: FastifyInstance) {
       tags: ['Sectors'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const userId = (request.user as any).id;
+    const loggedContext = await getLoggedContext(userId);
+
+    if (!loggedContext?.branchId) {
+      return reply.code(403).send({ error: 'User not associated with a branch' });
+    }
+
     try {
+      const current = await prisma.sector.findUnique({ where: { id } });
+      if (!current) {
+        return reply.code(404).send({ error: 'Sector not found' });
+      }
+      if (current.branchId !== loggedContext.branchId) {
+        return reply.code(403).send({ error: 'Setor fora da sua filial' });
+      }
+
       await prisma.sector.delete({
         where: { id },
       });

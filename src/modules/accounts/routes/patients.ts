@@ -2,14 +2,18 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function patientRoutes(app: FastifyInstance) {
-  // Auth hook for all routes in this plugin
-  // Allow unauthenticated POST and GET to /patients (public create + read)
-  app.addHook('onRequest', async (request, reply) => {
-    const url = (request.raw && request.raw.url) ? request.raw.url : '';
-    const isPublicCreate = request.method === 'POST' && /\/patients\/?(\?.*)?$/.test(url);
-    const isPublicRead = request.method === 'GET' && /\/patients(\/.*)?(\?.*)?$/.test(url);
-    if (isPublicCreate || isPublicRead) return;
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
 
+  // Auth hook for all routes in this plugin
+  app.addHook('onRequest', async (request, reply) => {
     try {
       await request.jwtVerify();
     } catch (err) {
@@ -44,9 +48,13 @@ export default async function patientRoutes(app: FastifyInstance) {
             total: { type: 'number' },
           },
         },
+        403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const {
       isActive,
       search,
@@ -61,7 +69,7 @@ export default async function patientRoutes(app: FastifyInstance) {
       offset?: number;
     };
 
-    const where: any = {};
+    const where: any = { branchId };
 
     if (isActive !== undefined) {
       where.isActive = isActive;
@@ -108,6 +116,7 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
       response: {
         200: { $ref: 'Patient#' },
+        403: { type: 'object' },
         404: {
           type: 'object',
           properties: { error: { type: 'string' } },
@@ -116,10 +125,13 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const patient = await prisma.patient.findUnique({
-      where: { id },
+    const patient = await prisma.patient.findFirst({
+      where: { id, branchId },
     });
 
     if (!patient) {
@@ -144,6 +156,7 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
       response: {
         200: { $ref: 'Patient#' },
+        403: { type: 'object' },
         404: {
           type: 'object',
           properties: { error: { type: 'string' } },
@@ -152,10 +165,13 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { cpf } = request.params as { cpf: string };
 
-    const patient = await prisma.patient.findUnique({
-      where: { cpf },
+    const patient = await prisma.patient.findFirst({
+      where: { cpf, branchId },
     });
 
     if (!patient) {
@@ -175,9 +191,13 @@ export default async function patientRoutes(app: FastifyInstance) {
       response: {
         201: { $ref: 'Patient#' },
         400: { type: 'object', additionalProperties: true },
+        403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const data = request.body as any;
 
     // Explicit check for empty or missing parsed body
@@ -210,6 +230,7 @@ export default async function patientRoutes(app: FastifyInstance) {
       const patient = await prisma.patient.create({
         data: {
           ...data,
+          branchId,
           birthDate: new Date(data.birthDate),
           healthInsuranceExpiry: data.healthInsuranceExpiry ? new Date(data.healthInsuranceExpiry) : null,
           allergies: data.allergies || [],
@@ -250,6 +271,7 @@ export default async function patientRoutes(app: FastifyInstance) {
           properties: { error: { type: 'string' }, details: { type: 'string' } },
           additionalProperties: true,
         },
+        403: { type: 'object' },
         404: {
           type: 'object',
           properties: { error: { type: 'string' } },
@@ -258,10 +280,13 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
     const data = request.body as any;
 
-    const existing = await prisma.patient.findUnique({ where: { id } });
+    const existing = await prisma.patient.findFirst({ where: { id, branchId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Patient not found' });
@@ -317,7 +342,7 @@ export default async function patientRoutes(app: FastifyInstance) {
 
       const patient = await prisma.patient.update({
         where: { id },
-        data: updateData,
+        data: { ...updateData, branchId },
       });
 
       return patient;
@@ -350,6 +375,7 @@ export default async function patientRoutes(app: FastifyInstance) {
           properties: { error: { type: 'string' }, details: { type: 'string' } },
           additionalProperties: true,
         },
+        403: { type: 'object' },
         404: {
           type: 'object',
           properties: { error: { type: 'string' } },
@@ -358,9 +384,12 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const existing = await prisma.patient.findUnique({ where: { id } });
+    const existing = await prisma.patient.findFirst({ where: { id, branchId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Patient not found' });
@@ -368,7 +397,7 @@ export default async function patientRoutes(app: FastifyInstance) {
 
     // Check for appointments and medical records
     const [appointmentsCount, recordsCount] = await Promise.all([
-      prisma.appointment.count({ where: { patientId: id } }),
+      prisma.appointment.count({ where: { patientId: id, branchId } }),
       prisma.medicalRecord.count({ where: { patientId: id } }),
     ]);
 
@@ -408,13 +437,17 @@ export default async function patientRoutes(app: FastifyInstance) {
             },
           },
         },
+        403: { type: 'object' },
         404: { type: 'object' },
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const patient = await prisma.patient.findUnique({ where: { id } });
+    const patient = await prisma.patient.findFirst({ where: { id, branchId } });
 
     if (!patient) {
       return reply.code(404).send({ error: 'Patient not found' });
@@ -465,19 +498,24 @@ export default async function patientRoutes(app: FastifyInstance) {
             },
           },
         },
+        403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const [
       totalPatients,
       activePatients,
       withHealthInsurance,
       genderStats,
     ] = await Promise.all([
-      prisma.patient.count(),
-      prisma.patient.count({ where: { isActive: true } }),
-      prisma.patient.count({ where: { hasHealthInsurance: true } }),
+      prisma.patient.count({ where: { branchId } }),
+      prisma.patient.count({ where: { branchId, isActive: true } }),
+      prisma.patient.count({ where: { branchId, hasHealthInsurance: true } }),
       prisma.patient.groupBy({
+        where: { branchId },
         by: ['gender'],
         _count: { gender: true },
       }),

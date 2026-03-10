@@ -2,6 +2,24 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function reportAddendumRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
+  app.addHook('onRequest', async (request, reply) => {
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+
   app.get('/', {
     schema: {
       summary: 'List report addendums',
@@ -17,6 +35,9 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { worklistItemId, status, limit = 50, offset = 0 } = request.query as any;
 
     if (!worklistItemId) {
@@ -25,6 +46,7 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
 
     const where: any = {
       worklistItemId,
+      branchId,
       isActive: true,
     };
 
@@ -62,16 +84,20 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const data = request.body as any;
 
     try {
-      const worklistItem = await prisma.reportWorklistItem.findUnique({ where: { id: data.worklistItemId } });
+      const worklistItem = await prisma.reportWorklistItem.findFirst({ where: { id: data.worklistItemId, branchId } });
       if (!worklistItem) {
         return reply.code(404).send({ error: 'Report worklist item not found' });
       }
 
       const item = await prisma.reportAddendum.create({
         data: {
+          branchId,
           worklistItemId: data.worklistItemId,
           content: data.content || '',
           status: data.status || 'draft',
@@ -97,14 +123,17 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
       body: { type: 'object' },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
     const data = request.body as any;
 
     try {
-      const existing = await prisma.reportAddendum.findUnique({ where: { id } });
+      const existing = await prisma.reportAddendum.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Report addendum not found' });
 
-      const item = await prisma.reportAddendum.update({ where: { id }, data });
+      const item = await prisma.reportAddendum.update({ where: { id }, data: { ...data, branchId } });
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update report addendum');
@@ -119,7 +148,12 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
+    const existing = await prisma.reportAddendum.findFirst({ where: { id, branchId } });
+    if (!existing) return reply.code(404).send({ error: 'Report addendum not found' });
     await prisma.reportAddendum.delete({ where: { id } });
     return { message: 'Deleted' };
   });
