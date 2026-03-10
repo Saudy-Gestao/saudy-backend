@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { sendPasswordResetCodeEmail } from '../lib/mailer';
+import { sendAdminRegisterCodeEmail, sendPasswordResetCodeEmail } from '../lib/mailer';
 import { Prisma } from '@prisma/client';
 import {
   findCompanyByNormalizedCnpj,
@@ -11,6 +11,7 @@ import {
 } from '../lib/cnpj';
 
 const RESET_CODE_EXPIRATION_MINUTES = 10;
+const ADMIN_EMAIL_CODE_EXPIRATION_MINUTES = 10;
 
 function hashResetCode(code: string) {
   return crypto.createHash('sha256').update(code).digest('hex');
@@ -46,6 +47,10 @@ function validateStrongPassword(password: string) {
 
 function isBcryptHash(value: string) {
   return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
+}
+
+function isEtechdevDomain(email: string) {
+  return /@etechdev(?:\.[a-z0-9-]+)*$/i.test(email.trim());
 }
 
 async function validateUserPasswordAndUpgradeIfNeeded(userId: string, storedPassword: string, incomingPassword: string) {
@@ -100,6 +105,206 @@ async function findUsersByIdentifier(identifier: string) {
 }
 
 export default async function authRoutes(app: FastifyInstance) {
+  app.post('/adm/login', {
+    schema: {
+      summary: 'Authenticate ADM Hub user',
+      tags: ['Auth'],
+      body: {
+        type: 'object',
+        properties: {
+          email: { type: 'string' },
+          password: { type: 'string' },
+        },
+        required: ['email', 'password'],
+      },
+      response: {
+        200: { $ref: 'AuthResponse#' },
+        401: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+          },
+        },
+        403: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { email, password } = request.body as { email: string; password: string };
+    const normalizedEmail = normalizeEmail(String(email || ''));
+
+    const adminUser = await prisma.adminUser.findFirst({
+      where: {
+        email: {
+          equals: normalizedEmail,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    if (!adminUser) {
+      return reply.code(401).send({ error: 'Invalid credentials' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(String(password || ''), adminUser.password);
+    if (!isPasswordValid) {
+      return reply.code(401).send({ error: 'Invalid credentials' });
+    }
+
+    if (!adminUser.emailVerifiedAt) {
+      return reply.code(403).send({ error: 'E-mail não verificado. Confirme o código enviado para continuar.' });
+    }
+
+    const token = app.jwt.sign({ id: adminUser.id, email: adminUser.email, admHubOnly: true });
+
+    return {
+      token,
+      user: {
+        id: adminUser.id,
+        name: adminUser.name,
+        email: adminUser.email,
+        isAdmHubOnly: true,
+      },
+    };
+  });
+
+  app.post('/adm/request-register-code', {
+    schema: {
+      summary: 'Request admin registration code',
+      tags: ['Auth'],
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          email: { type: 'string' },
+          password: { type: 'string' },
+        },
+        required: ['name', 'email', 'password'],
+      },
+    },
+  }, async (request, reply) => {
+    const { name, email, password } = request.body as {
+      name: string;
+      email: string;
+      password: string;
+    };
+
+    const normalizedName = String(name || '').trim();
+    const normalizedEmail = normalizeEmail(String(email || ''));
+    const incomingPassword = String(password || '');
+
+    if (!normalizedName || !normalizedEmail || !incomingPassword) {
+      return reply.code(400).send({ error: 'Preencha todos os campos obrigatórios' });
+    }
+
+    if (!isEtechdevDomain(normalizedEmail)) {
+      return reply.code(400).send({ error: 'Apenas e-mails do domínio @etechdev são permitidos' });
+    }
+
+    if (!validateStrongPassword(incomingPassword)) {
+      return reply.code(400).send({ error: 'A senha não atende aos requisitos de segurança' });
+    }
+
+    const code = generateResetCode();
+    const codeHash = hashResetCode(code);
+    const expiresAt = new Date(Date.now() + ADMIN_EMAIL_CODE_EXPIRATION_MINUTES * 60 * 1000);
+    const hashedPassword = await bcrypt.hash(incomingPassword, 10);
+
+    await prisma.adminUser.upsert({
+      where: { email: normalizedEmail },
+      create: {
+        name: normalizedName,
+        email: normalizedEmail,
+        password: hashedPassword,
+        emailCodeHash: codeHash,
+        emailCodeExpiresAt: expiresAt,
+        emailVerifiedAt: null,
+      },
+      update: {
+        name: normalizedName,
+        password: hashedPassword,
+        emailCodeHash: codeHash,
+        emailCodeExpiresAt: expiresAt,
+        emailVerifiedAt: null,
+      },
+    });
+
+    try {
+      const sent = await sendAdminRegisterCodeEmail({
+        to: normalizedEmail,
+        code,
+        userName: normalizedName,
+      });
+
+      if (!sent) {
+        return reply.code(500).send({ error: 'Serviço de e-mail não configurado para validação ADM' });
+      }
+    } catch (error) {
+      app.log.error(error, 'Failed to send admin register email');
+      return reply.code(500).send({ error: 'Falha ao enviar código de confirmação' });
+    }
+
+    return { message: 'Código enviado para o e-mail informado' };
+  });
+
+  app.post('/adm/verify-register-code', {
+    schema: {
+      summary: 'Verify admin registration code',
+      tags: ['Auth'],
+      body: {
+        type: 'object',
+        properties: {
+          email: { type: 'string' },
+          code: { type: 'string' },
+        },
+        required: ['email', 'code'],
+      },
+    },
+  }, async (request, reply) => {
+    const { email, code } = request.body as { email: string; code: string };
+    const normalizedEmail = normalizeEmail(String(email || ''));
+    const normalizedCode = String(code || '').trim();
+
+    const adminUser = await prisma.adminUser.findUnique({ where: { email: normalizedEmail } });
+
+    if (!adminUser || !adminUser.emailCodeHash || !adminUser.emailCodeExpiresAt) {
+      return reply.code(400).send({ error: 'Código inválido ou expirado' });
+    }
+
+    if (adminUser.emailCodeExpiresAt <= new Date()) {
+      return reply.code(400).send({ error: 'Código inválido ou expirado' });
+    }
+
+    if (hashResetCode(normalizedCode) !== adminUser.emailCodeHash) {
+      return reply.code(400).send({ error: 'Código inválido ou expirado' });
+    }
+
+    const updatedAdminUser = await prisma.adminUser.update({
+      where: { id: adminUser.id },
+      data: {
+        emailVerifiedAt: new Date(),
+        emailCodeHash: null,
+        emailCodeExpiresAt: null,
+      },
+    });
+
+    const token = app.jwt.sign({ id: updatedAdminUser.id, email: updatedAdminUser.email, admHubOnly: true });
+
+    return {
+      token,
+      user: {
+        id: updatedAdminUser.id,
+        name: updatedAdminUser.name,
+        email: updatedAdminUser.email,
+        isAdmHubOnly: true,
+      },
+    };
+  });
+
   // Register complete setup
   app.post('/register', {
     schema: {
@@ -313,6 +518,13 @@ export default async function authRoutes(app: FastifyInstance) {
             message: { type: 'string' },
           },
         },
+        403: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+            message: { type: 'string' },
+          },
+        },
       },
     },
   }, async (request, reply) => {
@@ -325,6 +537,33 @@ export default async function authRoutes(app: FastifyInstance) {
       const normalizedEmail = identifier.toLowerCase();
       const normalizedCpf = digitsOnly(identifier);
       const loginByEmail = isEmail(identifier);
+
+      if (loginByEmail) {
+        const adminUser = await prisma.adminUser.findUnique({ where: { email: normalizedEmail } });
+
+        if (adminUser) {
+          const isAdminPasswordValid = await bcrypt.compare(password, adminUser.password);
+          if (!isAdminPasswordValid) {
+            return reply.code(401).send({ error: 'Invalid credentials' });
+          }
+
+          if (!adminUser.emailVerifiedAt) {
+            return reply.code(403).send({ error: 'E-mail não verificado. Confirme o código enviado para continuar.' });
+          }
+
+          const token = app.jwt.sign({ id: adminUser.id, email: adminUser.email, admHubOnly: true });
+
+          return {
+            token,
+            user: {
+              id: adminUser.id,
+              name: adminUser.name,
+              email: adminUser.email,
+              isAdmHubOnly: true,
+            },
+          };
+        }
+      }
 
       const includeRelations = {
         sector: {
