@@ -70,6 +70,35 @@ async function validateUserPasswordAndUpgradeIfNeeded(userId: string, storedPass
   return false;
 }
 
+async function findUsersByIdentifier(identifier: string) {
+  const normalizedIdentifier = normalizeIdentifier(identifier);
+  if (!normalizedIdentifier) return [] as any[];
+
+  if (isEmail(normalizedIdentifier)) {
+    const usersByEmail = await prisma.user.findMany({
+      where: {
+        email: { equals: normalizedIdentifier, mode: 'insensitive' },
+      },
+    });
+
+    const exactCase = usersByEmail.filter((u: any) => u.email === normalizedIdentifier);
+    const remaining = usersByEmail.filter((u: any) => u.email !== normalizedIdentifier);
+    return [...exactCase, ...remaining];
+  }
+
+  const normalizedCpf = digitsOnly(normalizedIdentifier);
+  if (!normalizedCpf) return [] as any[];
+
+  return prisma.user.findMany({
+    where: {
+      OR: [
+        { cpf: normalizedCpf },
+        { cpf: normalizedIdentifier },
+      ],
+    },
+  });
+}
+
 export default async function authRoutes(app: FastifyInstance) {
   // Register complete setup
   app.post('/register', {
@@ -365,26 +394,26 @@ export default async function authRoutes(app: FastifyInstance) {
       }
 
       const token = app.jwt.sign({
-        id: user.id,
-        email: user.email,
-        companyId: user.sector?.branch?.companyId || null,
-        branchId: user.sector?.branch?.id || null,
+        id: authenticatedUser.id,
+        email: authenticatedUser.email,
+        companyId: authenticatedUser.sector?.branch?.companyId || null,
+        branchId: authenticatedUser.sector?.branch?.id || null,
       });
 
       return {
         token,
         user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          address: user.address,
-          birthDate: user.birthDate,
-          companyId: user.sector?.branch?.companyId || null,
-          branchId: user.sector?.branch?.id || null,
-          branch: user.sector?.branch || null,
-          sector: user.sector,
-          accesses: user.accesses,
+          id: authenticatedUser.id,
+          name: authenticatedUser.name,
+          email: authenticatedUser.email,
+          phone: authenticatedUser.phone,
+          address: authenticatedUser.address,
+          birthDate: authenticatedUser.birthDate,
+          companyId: authenticatedUser.sector?.branch?.companyId || null,
+          branchId: authenticatedUser.sector?.branch?.id || null,
+          branch: authenticatedUser.sector?.branch || null,
+          sector: authenticatedUser.sector,
+          accesses: authenticatedUser.accesses,
         },
       };
   });

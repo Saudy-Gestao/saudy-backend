@@ -208,6 +208,7 @@ export default async function userRoutes(app: FastifyInstance) {
       phone?: string;
       address?: string;
     };
+    const normalizedEmail = email ? String(email).trim().toLowerCase() : undefined;
 
     const requestUserId = (request.user as any).id as string;
     const loggedContext = await getLoggedContext(requestUserId);
