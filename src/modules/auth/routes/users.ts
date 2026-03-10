@@ -267,7 +267,7 @@ export default async function userRoutes(app: FastifyInstance) {
         accesses: accessIds ? { set: accessIds.map((accessId) => ({ id: accessId })) } : undefined,
         name,
         birthDate: birthDate ? new Date(birthDate) : undefined,
-        email,
+        email: normalizedEmail,
         phone,
         address,
       };

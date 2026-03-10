@@ -8,6 +8,7 @@
     "build": "pnpm prisma:generate && tsc",
     "start": "pnpm exec prisma migrate deploy && pnpm run seed && node dist/server.js",
     "seed": "node src/lib/seed.js",
+    "reset:user-password": "pnpm exec tsx src/scripts/reset-user-password.ts",
     "prisma:generate": "pnpm exec prisma generate --schema prisma/schema.prisma",
     "start:with-seed": "pnpm exec prisma generate --schema prisma/schema.prisma && pnpm exec prisma migrate deploy && pnpm run seed && pnpm run dev"
   },

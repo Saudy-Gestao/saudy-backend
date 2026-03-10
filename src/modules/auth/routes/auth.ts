@@ -24,6 +24,10 @@ function normalizeIdentifier(value: string) {
   return value.trim();
 }
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
 function isEmail(value: string) {
   return value.includes('@');
 }
@@ -38,6 +42,32 @@ function validateStrongPassword(password: string) {
   const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
 
   return minLength && hasNumber && hasSpecial;
+}
+
+function isBcryptHash(value: string) {
+  return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
+}
+
+async function validateUserPasswordAndUpgradeIfNeeded(userId: string, storedPassword: string, incomingPassword: string) {
+  if (!storedPassword) {
+    return false;
+  }
+
+  if (isBcryptHash(storedPassword)) {
+    return bcrypt.compare(incomingPassword, storedPassword);
+  }
+
+  // Legacy compatibility: allow plaintext-stored passwords and migrate to bcrypt on successful login.
+  if (storedPassword === incomingPassword) {
+    const upgradedHash = await bcrypt.hash(incomingPassword, 10);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: upgradedHash },
+    });
+    return true;
+  }
+
+  return false;
 }
 
 export default async function authRoutes(app: FastifyInstance) {
@@ -156,15 +186,19 @@ export default async function authRoutes(app: FastifyInstance) {
             )
           : [];
 
-        // Hash password
-        const hashedPassword = await bcrypt.hash(user.password, 10);
+        // Compatibility: accept either plain password (hash here) or a pre-hashed bcrypt password.
+        const normalizedEmail = String(user.email || '').trim().toLowerCase();
+        const incomingPassword = String(user.password || '');
+        const hashedPassword = isBcryptHash(incomingPassword)
+          ? incomingPassword
+          : await bcrypt.hash(incomingPassword, 10);
 
         // Create user
         const createdUser = await tx.user.create({
           data: {
             name: user.name,
             birthDate: new Date(user.birthDate),
-            email: user.email,
+            email: normalizedEmail,
             password: hashedPassword,
             phone: user.phone,
             address: user.address,
@@ -194,7 +228,25 @@ export default async function authRoutes(app: FastifyInstance) {
         };
       });
 
-      return result;
+      const token = app.jwt.sign({ id: result.user.id, email: result.user.email });
+
+      return {
+        company: result.company,
+        branches: result.branches,
+        sector: result.sector,
+        accesses: result.accesses,
+        token,
+        user: {
+          id: result.user.id,
+          name: result.user.name,
+          email: result.user.email,
+          phone: result.user.phone,
+          address: result.user.address,
+          birthDate: result.user.birthDate,
+          sector: result.user.sector,
+          accesses: result.user.accesses,
+        },
+      };
     } catch (error) {
       console.log('Error during registration:', error);
 
@@ -240,34 +292,75 @@ export default async function authRoutes(app: FastifyInstance) {
         password: string;
       };
 
-      const user = await prisma.user.findUnique({
-        where: { email },
-        include: { 
-          sector: {
-            include: {
-              branch: {
-                include: {
-                  company: true
-                }
-              }
-            }
-          }, 
-          accesses: {
-            include: {
-              modules: true  // Incluir módulos dos acessos
-            }
-          }
+      const identifier = String(email || '').trim();
+      const normalizedEmail = identifier.toLowerCase();
+      const normalizedCpf = digitsOnly(identifier);
+      const loginByEmail = isEmail(identifier);
+
+      const includeRelations = {
+        sector: {
+          include: {
+            branch: {
+              include: {
+                company: true,
+              },
+            },
+          },
         },
-      });
+        accesses: {
+          include: {
+            modules: true,
+          },
+        },
+      } as const;
 
-      console.log('User fetched for login:', email);
+      const candidateUsers: any[] = [];
 
-      if (!user) {
+      if (loginByEmail) {
+        const usersByEmail = await prisma.user.findMany({
+          where: {
+            email: { equals: identifier, mode: 'insensitive' },
+          },
+          include: includeRelations,
+        });
+
+        // Prefer exact case match first, then keep remaining legacy candidates.
+        const exactCase = usersByEmail.filter((u: any) => u.email === identifier);
+        const remaining = usersByEmail.filter((u: any) => u.email !== identifier);
+        candidateUsers.push(...exactCase, ...remaining);
+      } else if (normalizedCpf) {
+        // Allow logging in with CPF, as suggested by the UI label "E-mail/CPF".
+        const userByCpf = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { cpf: normalizedCpf },
+              { cpf: identifier },
+            ],
+          },
+          include: includeRelations,
+        });
+
+        if (userByCpf) {
+          candidateUsers.push(userByCpf);
+        }
+      }
+
+      console.log('User fetched for login:', identifier);
+
+      if (candidateUsers.length === 0) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
+      let authenticatedUser: any = null;
+      for (const candidate of candidateUsers) {
+        const isPasswordValid = await validateUserPasswordAndUpgradeIfNeeded(candidate.id, candidate.password, password);
+        if (isPasswordValid) {
+          authenticatedUser = candidate;
+          break;
+        }
+      }
+
+      if (!authenticatedUser) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
@@ -324,18 +417,9 @@ export default async function authRoutes(app: FastifyInstance) {
       return { message: 'Se o usuário existir, enviaremos um código de recuperação.' };
     }
 
-    const user = isEmail(normalizedIdentifier)
-      ? await prisma.user.findUnique({ where: { email: normalizedIdentifier } })
-      : await prisma.user.findFirst({
-          where: {
-            OR: [
-              { cpf: normalizedIdentifier },
-              { cpf: digitsOnly(normalizedIdentifier) },
-            ],
-          },
-        });
+    const users = await findUsersByIdentifier(normalizedIdentifier);
 
-    if (!user) {
+    if (users.length === 0) {
       return { message: 'Se o usuário existir, enviaremos um código de recuperação.' };
     }
 
@@ -343,20 +427,26 @@ export default async function authRoutes(app: FastifyInstance) {
     const codeHash = hashResetCode(code);
     const expiresAt = new Date(Date.now() + RESET_CODE_EXPIRATION_MINUTES * 60 * 1000);
 
-    await prisma.passwordResetCode.create({
-      data: {
-        userId: user.id,
-        requestIdentifier: normalizedIdentifier,
-        codeHash,
-        expiresAt,
-      },
-    });
+    await Promise.all(
+      users.map((user: { id: string }) =>
+        prisma.passwordResetCode.create({
+          data: {
+            userId: user.id,
+            requestIdentifier: isEmail(normalizedIdentifier)
+              ? normalizeEmail(normalizedIdentifier)
+              : digitsOnly(normalizedIdentifier),
+            codeHash,
+            expiresAt,
+          },
+        })
+      )
+    );
 
     try {
       await sendPasswordResetCodeEmail({
-        to: user.email,
+        to: users[0].email,
         code,
-        userName: user.name,
+        userName: users[0].name,
       });
     } catch (error) {
       app.log.error(error, 'Failed to send password reset email');
@@ -393,24 +483,17 @@ export default async function authRoutes(app: FastifyInstance) {
     const normalizedIdentifier = normalizeIdentifier(identifier);
     const normalizedCode = code.trim();
 
-    const user = isEmail(normalizedIdentifier)
-      ? await prisma.user.findUnique({ where: { email: normalizedIdentifier } })
-      : await prisma.user.findFirst({
-          where: {
-            OR: [
-              { cpf: normalizedIdentifier },
-              { cpf: digitsOnly(normalizedIdentifier) },
-            ],
-          },
-        });
+    const users = await findUsersByIdentifier(normalizedIdentifier);
 
-    if (!user) {
+    if (users.length === 0) {
       return reply.code(400).send({ error: 'Código inválido ou expirado' });
     }
 
+    const candidateUserIds = users.map((user: { id: string }) => user.id);
+
     const resetRecord = await prisma.passwordResetCode.findFirst({
       where: {
-        userId: user.id,
+        userId: { in: candidateUserIds },
         usedAt: null,
         expiresAt: { gt: new Date() },
       },
@@ -476,31 +559,26 @@ export default async function authRoutes(app: FastifyInstance) {
     const normalizedIdentifier = normalizeIdentifier(identifier);
     const normalizedCode = code.trim();
 
-    const user = isEmail(normalizedIdentifier)
-      ? await prisma.user.findUnique({ where: { email: normalizedIdentifier } })
-      : await prisma.user.findFirst({
-          where: {
-            OR: [
-              { cpf: normalizedIdentifier },
-              { cpf: digitsOnly(normalizedIdentifier) },
-            ],
-          },
-        });
+    const users = await findUsersByIdentifier(normalizedIdentifier);
 
-    if (!user) {
+    if (users.length === 0) {
       return reply.code(400).send({ error: 'Código inválido ou expirado' });
     }
 
+    const candidateUserIds = users.map((user: { id: string }) => user.id);
+    const codeHash = hashResetCode(normalizedCode);
+
     const resetRecord = await prisma.passwordResetCode.findFirst({
       where: {
-        userId: user.id,
+        userId: { in: candidateUserIds },
         usedAt: null,
         expiresAt: { gt: new Date() },
+        codeHash,
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!resetRecord || hashResetCode(normalizedCode) !== resetRecord.codeHash) {
+    if (!resetRecord) {
       return reply.code(400).send({ error: 'Código inválido ou expirado' });
     }
 
@@ -508,7 +586,7 @@ export default async function authRoutes(app: FastifyInstance) {
 
     await prisma.$transaction([
       prisma.user.update({
-        where: { id: user.id },
+        where: { id: resetRecord.userId },
         data: { password: hashedPassword },
       }),
       prisma.passwordResetCode.update({
