@@ -74,9 +74,10 @@ export default async function userRoutes(app: FastifyInstance) {
       phone: string;
       address: string;
     };
+    const normalizedEmail = String(email || '').trim().toLowerCase();
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
-      data: { sectorId, accesses: { connect: accessIds.map(id => ({ id })) }, name, birthDate: new Date(birthDate), email, password: hashedPassword, phone, address },
+      data: { sectorId, accesses: { connect: accessIds.map(id => ({ id })) }, name, birthDate: new Date(birthDate), email: normalizedEmail, password: hashedPassword, phone, address },
       include: {
         sector: {
           include: {
@@ -157,12 +158,13 @@ export default async function userRoutes(app: FastifyInstance) {
       address?: string;
     };
     try {
+      const normalizedEmail = email ? String(email).trim().toLowerCase() : undefined;
       const data: any = {
         sectorId,
         accesses: accessIds ? { set: accessIds.map(id => ({ id })) } : undefined,
         name,
         birthDate: birthDate ? new Date(birthDate) : undefined,
-        email,
+        email: normalizedEmail,
         phone,
         address,
       };

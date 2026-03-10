@@ -44,6 +44,28 @@ function isBcryptHash(value: string) {
   return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
 }
 
+async function validateUserPasswordAndUpgradeIfNeeded(userId: string, storedPassword: string, incomingPassword: string) {
+  if (!storedPassword) {
+    return false;
+  }
+
+  if (isBcryptHash(storedPassword)) {
+    return bcrypt.compare(incomingPassword, storedPassword);
+  }
+
+  // Legacy compatibility: allow plaintext-stored passwords and migrate to bcrypt on successful login.
+  if (storedPassword === incomingPassword) {
+    const upgradedHash = await bcrypt.hash(incomingPassword, 10);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: upgradedHash },
+    });
+    return true;
+  }
+
+  return false;
+}
+
 export default async function authRoutes(app: FastifyInstance) {
   // Register complete setup
   app.post('/register', {
@@ -248,8 +270,10 @@ export default async function authRoutes(app: FastifyInstance) {
         password: string;
       };
 
-      const rawEmail = String(email || '').trim();
-      const normalizedEmail = rawEmail.toLowerCase();
+      const identifier = String(email || '').trim();
+      const normalizedEmail = identifier.toLowerCase();
+      const normalizedCpf = digitsOnly(identifier);
+      const loginByEmail = isEmail(identifier);
 
       const includeRelations = {
         sector: {
@@ -268,55 +292,69 @@ export default async function authRoutes(app: FastifyInstance) {
         },
       } as const;
 
-      // 1) Prefer the normalized email used by new registrations.
-      let user = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
-        include: includeRelations,
-      });
+      const candidateUsers: any[] = [];
 
-      // 2) Legacy fallback: exact raw email (older records may have mixed case).
-      if (!user && rawEmail !== normalizedEmail) {
-        user = await prisma.user.findUnique({
-          where: { email: rawEmail },
-          include: includeRelations,
-        });
-      }
-
-      // 3) Last fallback for legacy duplicates with different casing.
-      if (!user) {
-        user = await prisma.user.findFirst({
+      if (loginByEmail) {
+        const usersByEmail = await prisma.user.findMany({
           where: {
-            email: { equals: rawEmail, mode: 'insensitive' },
+            email: { equals: identifier, mode: 'insensitive' },
           },
-          orderBy: { createdAt: 'desc' },
           include: includeRelations,
         });
+
+        // Prefer exact case match first, then keep remaining legacy candidates.
+        const exactCase = usersByEmail.filter((u: any) => u.email === identifier);
+        const remaining = usersByEmail.filter((u: any) => u.email !== identifier);
+        candidateUsers.push(...exactCase, ...remaining);
+      } else if (normalizedCpf) {
+        // Allow logging in with CPF, as suggested by the UI label "E-mail/CPF".
+        const userByCpf = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { cpf: normalizedCpf },
+              { cpf: identifier },
+            ],
+          },
+          include: includeRelations,
+        });
+
+        if (userByCpf) {
+          candidateUsers.push(userByCpf);
+        }
       }
 
-      console.log('User fetched for login:', normalizedEmail);
+      console.log('User fetched for login:', identifier);
 
-      if (!user) {
+      if (candidateUsers.length === 0) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
-      const isPasswordValid = await bcrypt.compare(password, user.password);
-      if (!isPasswordValid) {
+      let authenticatedUser: any = null;
+      for (const candidate of candidateUsers) {
+        const isPasswordValid = await validateUserPasswordAndUpgradeIfNeeded(candidate.id, candidate.password, password);
+        if (isPasswordValid) {
+          authenticatedUser = candidate;
+          break;
+        }
+      }
+
+      if (!authenticatedUser) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
-      const token = app.jwt.sign({ id: user.id, email: user.email });
+      const token = app.jwt.sign({ id: authenticatedUser.id, email: authenticatedUser.email });
 
       return {
         token,
         user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          address: user.address,
-          birthDate: user.birthDate,
-          sector: user.sector,
-          accesses: user.accesses,
+          id: authenticatedUser.id,
+          name: authenticatedUser.name,
+          email: authenticatedUser.email,
+          phone: authenticatedUser.phone,
+          address: authenticatedUser.address,
+          birthDate: authenticatedUser.birthDate,
+          sector: authenticatedUser.sector,
+          accesses: authenticatedUser.accesses,
         },
       };
   });
