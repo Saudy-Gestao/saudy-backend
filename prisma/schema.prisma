@@ -127,6 +127,20 @@ model User {
     @@map("users")
 }
 
+model AdminUser {
+    id                String    @id @default(uuid())
+    name              String
+    email             String    @unique
+    password          String
+    emailCodeHash     String?
+    emailCodeExpiresAt DateTime?
+    emailVerifiedAt   DateTime?
+    createdAt         DateTime  @default(now())
+    updatedAt         DateTime  @updatedAt
+
+    @@map("admin_users")
+}
+
 model PasswordResetCode {
     id                String    @id @default(uuid())
     userId            String
