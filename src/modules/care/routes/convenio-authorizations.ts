@@ -18,6 +18,16 @@ const toStatus = (value: unknown): AuthorizationStatus => {
 };
 
 export default async function convenioAuthorizationRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     try {
       await request.jwtVerify();
@@ -42,15 +52,34 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       },
     },
   }, async (request) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return { total: 0, items: [] };
+
     const { search, statuses, sourceTypes, limit = 2000, offset = 0 } = request.query as any;
     const statusFilter = new Set(parseCsv(statuses).map((item) => item.toUpperCase()));
     const sourceFilter = new Set(parseCsv(sourceTypes).map((item) => item.toUpperCase()));
     const searchText = String(search || '').trim().toLowerCase();
 
-    const [appointments, teaReservations, doctors] = await Promise.all([
+    const doctors = await prisma.doctor.findMany({
+      where: {
+        room: {
+          branchId,
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        room: { select: { name: true, branch: { select: { tradeName: true } } } },
+      },
+    });
+    const doctorIds = doctors.map((item: any) => String(item.id));
+    const doctorNames = doctors.map((item: any) => String(item.name || '').trim()).filter(Boolean);
+
+    const [appointments, teaReservations] = await Promise.all([
       prisma.appointment.findMany({
         where: {
           isActive: true,
+          branchId,
           NOT: {
             type: 'RETORNO TEA',
           },
@@ -61,6 +90,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       }),
       prisma.teaPreReservation.findMany({
         where: {
+          professionalDoctorId: doctorIds.length > 0 ? { in: doctorIds } : undefined,
           OR: [
             { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {
@@ -78,13 +108,6 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
         take: Number(limit),
         skip: Number(offset),
       }),
-      prisma.doctor.findMany({
-        select: {
-          id: true,
-          name: true,
-          room: { select: { name: true, branch: { select: { tradeName: true } } } },
-        },
-      }),
     ]);
 
     const roomByDoctorName = new Map<string, string>();
@@ -96,7 +119,12 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       roomByDoctorName.set(doctorName, branchName ? `${roomName} (${branchName})` : roomName);
     });
 
-    const mappedAppointments = appointments.map((item: any) => ({
+    const mappedAppointments = appointments
+      .filter((item: any) => {
+        const doctorName = String(item?.doctorName || '').trim();
+        return doctorName ? doctorNames.includes(doctorName) : true;
+      })
+      .map((item: any) => ({
       id: String(item.id),
       sourceType: 'APPOINTMENT',
       sourceLabel: 'Agendamento',
@@ -111,7 +139,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       rawStatus: String(item.authorizationStatus || 'PENDING'),
       notes: item.authorizationNotes || null,
       updatedAt: item.updatedAt,
-    }));
+      }));
 
     const teaByTherapy = new Map<string, any[]>();
     teaReservations.forEach((item: any) => {
@@ -212,6 +240,9 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { sourceType, id } = request.params as { sourceType: string; id: string };
     const { status, notes } = request.body as { status: AuthorizationStatus; notes?: string };
 
@@ -219,6 +250,13 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     const targetStatus = toStatus(status);
 
     if (source === 'APPOINTMENT') {
+      const existing = await prisma.appointment.findFirst({
+        where: { id, branchId, isActive: true },
+      });
+      if (!existing) {
+        return reply.code(404).send({ error: 'Appointment authorization item not found' });
+      }
+
       const updated = await prisma.appointment.update({
         where: { id },
         data: {
@@ -231,9 +269,20 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     }
 
     if (source === 'TEA') {
+      const doctors = await prisma.doctor.findMany({
+        where: {
+          room: {
+            branchId,
+          },
+        },
+        select: { id: true },
+      });
+      const doctorIds = doctors.map((item: any) => String(item.id));
+
       const seriesItems = await prisma.teaPreReservation.findMany({
         where: {
           pitTherapyId: id,
+          professionalDoctorId: doctorIds.length > 0 ? { in: doctorIds } : undefined,
           OR: [
             { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {

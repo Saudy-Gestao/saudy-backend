@@ -2,14 +2,18 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function doctorRoutes(app: FastifyInstance) {
-  // Auth hook for all routes in this plugin
-  // Allow unauthenticated POST and GET to /doctors (public create + read)
-  app.addHook('onRequest', async (request, reply) => {
-    const url = (request.raw && request.raw.url) ? request.raw.url : '';
-    const isPublicCreate = request.method === 'POST' && /\/doctors\/?(\?.*)?$/.test(url);
-    const isPublicRead = request.method === 'GET' && /\/doctors(\/.*)?(\?.*)?$/.test(url);
-    if (isPublicCreate || isPublicRead) return;
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
 
+  // Auth hook for all routes in this plugin
+  app.addHook('onRequest', async (request, reply) => {
     try {
       await request.jwtVerify();
     } catch (err) {
@@ -39,13 +43,16 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { specialty, isActive, search } = request.query as {
       specialty?: string;
       isActive?: boolean;
       search?: string;
     };
 
-    const where: any = {};
+    const where: any = { branchId };
 
     if (specialty) {
       where.OR = [
@@ -98,10 +105,13 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const doctor = await prisma.doctor.findUnique({
-      where: { id },
+    const doctor = await prisma.doctor.findFirst({
+      where: { id, branchId },
     });
 
     if (!doctor) {
@@ -135,10 +145,13 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { crm, state } = request.params as { crm: string; state: string };
 
     const doctor = await prisma.doctor.findFirst({
-      where: { crm, crmState: state.toUpperCase() },
+      where: { crm, crmState: state.toUpperCase(), branchId },
     });
 
     if (!doctor) {
@@ -161,6 +174,9 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const data = request.body as any;
 
     // Explicit check for empty or missing parsed body
@@ -189,7 +205,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       const roomId = String(data.roomId || '').trim();
       if (roomId) {
         const room = await prisma.sector.findUnique({ where: { id: roomId } });
-        if (!room) {
+        if (!room || room.branchId !== branchId) {
           return reply.code(400).send({ error: 'Validation failed', fields: { roomId: 'Sala inválida' } });
         }
         data.roomId = roomId;
@@ -202,6 +218,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       const doctor = await prisma.doctor.create({
         data: {
           ...data,
+          branchId,
           birthDate: new Date(data.birthDate),
           specialties: data.specialties || [],
           workingDays: data.workingDays || [],
@@ -248,10 +265,13 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
     const data = request.body as any;
 
-    const existing = await prisma.doctor.findUnique({ where: { id } });
+    const existing = await prisma.doctor.findFirst({ where: { id, branchId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Doctor not found' });
@@ -270,7 +290,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       const roomId = String(data.roomId || '').trim();
       if (roomId) {
         const room = await prisma.sector.findUnique({ where: { id: roomId } });
-        if (!room) {
+        if (!room || room.branchId !== branchId) {
           return reply.code(400).send({ error: 'Validation failed', fields: { roomId: 'Sala inválida' } });
         }
         data.roomId = roomId;
@@ -286,7 +306,10 @@ export default async function doctorRoutes(app: FastifyInstance) {
     try {
       const doctor = await prisma.doctor.update({
         where: { id },
-        data,
+        data: {
+          ...data,
+          branchId,
+        },
       });
 
       return doctor;
@@ -327,9 +350,12 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as { id: string };
 
-    const existing = await prisma.doctor.findUnique({ where: { id } });
+    const existing = await prisma.doctor.findFirst({ where: { id, branchId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Doctor not found' });
@@ -337,7 +363,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
     // Check for appointments
     const appointmentsCount = await prisma.appointment.count({
-      where: { doctorId: id },
+      where: { doctorId: id, branchId },
     });
 
     if (appointmentsCount > 0) {
@@ -366,7 +392,11 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const doctors = await prisma.doctor.findMany({
+      where: { branchId },
       select: {
         specialty: true,
         specialties: true,

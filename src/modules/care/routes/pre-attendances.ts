@@ -2,6 +2,24 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function preAttendanceRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
+  app.addHook('onRequest', async (request, reply) => {
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+
   app.get('/', {
     schema: {
       summary: 'List pre-attendances',
@@ -18,9 +36,12 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
       },
     },
   }, async (request) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return { items: [], total: 0 };
+
     const { search, status, queueType, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = { isActive: true };
+    const where: any = { isActive: true, branchId };
     if (status) where.status = status;
     if (queueType) where.queueType = queueType;
     if (search) {
@@ -46,8 +67,11 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
-    const item = await prisma.preAttendance.findUnique({ where: { id } });
+    const item = await prisma.preAttendance.findFirst({ where: { id, branchId } });
     if (!item) return reply.code(404).send({ error: 'Pre-attendance not found' });
     return item;
   });
@@ -99,12 +123,17 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
       response: {
         201: { type: 'object' },
         400: { type: 'object', additionalProperties: true },
+        403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const data = request.body as any;
     try {
       const item = await prisma.preAttendance.create({ data: {
+        branchId,
         fullName: data.fullName,
         cpf: data.cpf,
         patientId: data.patientId || null,
@@ -157,18 +186,22 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
       response: {
         200: { type: 'object' },
         400: { type: 'object', additionalProperties: true },
+        403: { type: 'object' },
         404: { type: 'object', additionalProperties: true },
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
     const data = request.body as any;
 
     try {
-      const existing = await prisma.preAttendance.findUnique({ where: { id } });
+      const existing = await prisma.preAttendance.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Pre-attendance not found' });
 
-      const item = await prisma.preAttendance.update({ where: { id }, data });
+      const item = await prisma.preAttendance.update({ where: { id }, data: { ...data, branchId } });
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update pre-attendance');
@@ -183,7 +216,12 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
+    const existing = await prisma.preAttendance.findFirst({ where: { id, branchId } });
+    if (!existing) return reply.code(404).send({ error: 'Pre-attendance not found' });
     await prisma.preAttendance.delete({ where: { id } });
     return { message: 'Deleted' };
   });

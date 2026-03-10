@@ -271,7 +271,12 @@ export default async function authRoutes(app: FastifyInstance) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
-      const token = app.jwt.sign({ id: user.id, email: user.email });
+      const token = app.jwt.sign({
+        id: user.id,
+        email: user.email,
+        companyId: user.sector?.branch?.companyId || null,
+        branchId: user.sector?.branch?.id || null,
+      });
 
       return {
         token,
@@ -282,6 +287,9 @@ export default async function authRoutes(app: FastifyInstance) {
           phone: user.phone,
           address: user.address,
           birthDate: user.birthDate,
+          companyId: user.sector?.branch?.companyId || null,
+          branchId: user.sector?.branch?.id || null,
+          branch: user.sector?.branch || null,
           sector: user.sector,
           accesses: user.accesses,
         },

@@ -29,6 +29,24 @@ const normalizeDoctorLinks = (data: any) => {
 };
 
 export default async function procedureRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
+  app.addHook("onRequest", async (request, reply) => {
+    try {
+      await request.jwtVerify();
+    } catch (err) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+  });
+
   app.get("/", {
     schema: {
       summary: "List procedures",
@@ -44,10 +62,13 @@ export default async function procedureRoutes(app: FastifyInstance) {
         },
       },
     },
-  }, async (request) => {
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { search, acceptsInsurance, doctorId, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = { isActive: true };
+    const where: any = { isActive: true, branchId };
     if (acceptsInsurance !== undefined) where.acceptsInsurance = acceptsInsurance;
     if (doctorId) where.doctors = { some: { doctorId } };
     if (search) {
@@ -78,8 +99,11 @@ export default async function procedureRoutes(app: FastifyInstance) {
       params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { id } = request.params as any;
-    const item = await prisma.procedure.findUnique({ where: { id }, include: { doctors: true } });
+    const item = await prisma.procedure.findFirst({ where: { id, branchId }, include: { doctors: true } });
     if (!item) return reply.code(404).send({ error: "Procedure not found" });
     return item;
   });
@@ -118,6 +142,9 @@ export default async function procedureRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const data = request.body as any;
     const doctorLinks = normalizeDoctorLinks(data) || [];
     const acceptedInsurances = normalizeStringArray(data.acceptedInsurances) || [];
@@ -127,6 +154,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
     try {
       const item = await prisma.procedure.create({
         data: {
+          branchId,
           name: data.name,
           description: data.description || null,
           price: data.price ?? null,
@@ -171,12 +199,15 @@ export default async function procedureRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { id } = request.params as any;
     const data = request.body as any;
     const doctorLinks = normalizeDoctorLinks(data);
 
     try {
-      const existing = await prisma.procedure.findUnique({ where: { id } });
+      const existing = await prisma.procedure.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: "Procedure not found" });
 
       const updateData: any = {};
@@ -198,7 +229,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
       if (data.acceptsInsurance === false) updateData.acceptedInsurances = [];
 
       const actions: any[] = [
-        prisma.procedure.update({ where: { id }, data: updateData }),
+        prisma.procedure.update({ where: { id }, data: { ...updateData, branchId } }),
       ];
 
       if (doctorLinks !== null) {
@@ -218,7 +249,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
       }
 
       await prisma.$transaction(actions);
-      const item = await prisma.procedure.findUnique({ where: { id }, include: { doctors: true } });
+      const item = await prisma.procedure.findFirst({ where: { id, branchId }, include: { doctors: true } });
       return item;
     } catch (err: any) {
       request.log.error({ err }, "Failed to update procedure");
@@ -233,7 +264,12 @@ export default async function procedureRoutes(app: FastifyInstance) {
       params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { id } = request.params as any;
+    const existing = await prisma.procedure.findFirst({ where: { id, branchId } });
+    if (!existing) return reply.code(404).send({ error: "Procedure not found" });
     await prisma.procedure.delete({ where: { id } });
     return { message: "Deleted" };
   });

@@ -144,6 +144,7 @@ model PasswordResetCode {
 
 model Doctor {
     id                String   @id @default(uuid())
+    branchId          String?
     crm               String
     crmState          String   @db.VarChar(2)
     name              String
@@ -177,11 +178,13 @@ model Doctor {
     medicalRecords MedicalRecord[]
 
     @@unique([crm, crmState])
+    @@index([branchId])
     @@map("doctors")
 }
 
 model Patient {
     id                           String         @id @default(uuid())
+    branchId                     String?
     name                         String
     email                        String?
     phone                        String?
@@ -226,6 +229,7 @@ model Patient {
     teaPreReservations TeaPreReservation[]
     facialLogs         FacialLog[]
 
+    @@index([branchId])
     @@map("patients")
 }
 
@@ -451,6 +455,7 @@ model Delivery {
 
 model PreAttendance {
     id                 String   @id @default(uuid())
+    branchId           String?
     fullName           String
     cpf                String
     patientId          String?
@@ -489,6 +494,7 @@ model PreAttendance {
     updatedAt          DateTime @updatedAt
     isActive           Boolean  @default(true)
 
+    @@index([branchId])
     @@map("pre_attendances")
 }
 
@@ -540,6 +546,7 @@ model TeaPreReservationTimeline {
 
 model Appointment {
     id              String   @id @default(uuid())
+    branchId        String?
     patientName     String?
     patientCpf      String?
     patientId       String?
@@ -560,11 +567,13 @@ model Appointment {
     updatedAt       DateTime @updatedAt
     isActive        Boolean  @default(true)
 
+    @@index([branchId])
     @@map("appointments")
 }
 
 model Consultation {
     id               String   @id @default(uuid())
+    branchId         String?
     patientName      String?
     convenio         String?
     convenioStatus   String?
@@ -593,11 +602,13 @@ model Consultation {
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
 
+    @@index([branchId])
     @@map("consultations")
 }
 
 model Report {
     id                String   @id @default(uuid())
+    branchId          String?
     patientName       String
     cpf               String?
     birthDate         String?
@@ -616,11 +627,13 @@ model Report {
     updatedAt         DateTime @updatedAt
     isActive          Boolean  @default(true)
 
+    @@index([branchId])
     @@map("reports")
 }
 
 model ReportWorklistItem {
     id               String   @id @default(uuid())
+    branchId         String?
     externalStudyId  String?
     accessionNumber  String?
     patientName      String
@@ -644,11 +657,13 @@ model ReportWorklistItem {
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
 
+    @@index([branchId])
     @@map("report_worklist_items")
 }
 
 model ReportAddendum {
     id               String             @id @default(uuid())
+    branchId         String?
     worklistItemId   String
     content          String             @db.Text
     status           String             @default("draft")
@@ -661,12 +676,14 @@ model ReportAddendum {
     isActive         Boolean            @default(true)
     worklistItem     ReportWorklistItem @relation(fields: [worklistItemId], references: [id], onDelete: Cascade)
 
+    @@index([branchId])
     @@index([worklistItemId, status])
     @@map("report_addendums")
 }
 
 model ReportTemplate {
     id        String   @id @default(uuid())
+    branchId  String?
     name      String
     examType  String
     group     String?
@@ -675,11 +692,13 @@ model ReportTemplate {
     updatedAt DateTime @updatedAt
     isActive  Boolean  @default(true)
 
+    @@index([branchId])
     @@map("report_templates")
 }
 
 model ReportPhrase {
     id        String   @id @default(uuid())
+    branchId  String?
     examType  String
     label     String
     text      String   @db.Text
@@ -687,20 +706,24 @@ model ReportPhrase {
     updatedAt DateTime @updatedAt
     isActive  Boolean  @default(true)
 
+    @@index([branchId])
     @@map("report_phrases")
 }
 
 model ReportConfig {
     id               String   @id @default(uuid())
+    branchId         String?
     requiresReviewer Boolean  @default(true)
     createdAt        DateTime @default(now())
     updatedAt        DateTime @updatedAt
 
+    @@index([branchId])
     @@map("report_configs")
 }
 
 model Envelopment {
     id           String   @id @default(uuid())
+    branchId     String?
     patientName  String?
     dateTime     String?
     responsible  String?
@@ -714,11 +737,13 @@ model Envelopment {
     updatedAt    DateTime @updatedAt
     isActive     Boolean  @default(true)
 
+    @@index([branchId])
     @@map("envelopments")
 }
 
 model Document {
     id           String   @id @default(uuid())
+    branchId     String?
     patientName  String?
     documentType String?
     description  String?
@@ -729,11 +754,13 @@ model Document {
     updatedAt    DateTime @updatedAt
     isActive     Boolean  @default(true)
 
+    @@index([branchId])
     @@map("documents")
 }
 
 model Procedure {
     id                 String            @id @default(uuid())
+    branchId           String?
     name               String
     description        String?
     price              Decimal?          @db.Decimal(10, 2)
@@ -746,6 +773,7 @@ model Procedure {
     updatedAt          DateTime          @updatedAt
     doctors            ProcedureDoctor[]
 
+    @@index([branchId])
     @@map("procedures")
 }
 
@@ -764,6 +792,7 @@ model ProcedureDoctor {
 
 model Insurance {
     id          String   @id @default(uuid())
+    branchId    String?
     name        String
     code        String?
     description String?
@@ -771,6 +800,7 @@ model Insurance {
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt
 
+    @@index([branchId])
     @@map("insurances")
 }
 

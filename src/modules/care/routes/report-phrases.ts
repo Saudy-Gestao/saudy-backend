@@ -2,6 +2,23 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function reportPhraseRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
+  app.addHook('onRequest', async (request, reply) => {
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
   app.get('/', {
     schema: {
       summary: 'List report phrases',
@@ -16,10 +33,13 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
         },
       },
     },
-  }, async (request) => {
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { search, examType, limit = 200, offset = 0 } = request.query as any;
 
-    const where: any = { isActive: true };
+    const where: any = { isActive: true, branchId };
     if (examType) where.examType = examType;
     if (search) {
       where.OR = [
@@ -52,6 +72,9 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const data = request.body as any;
 
     if (!data.label || !String(data.label).trim()) {
@@ -67,6 +90,7 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
     try {
       const item = await prisma.reportPhrase.create({
         data: {
+          branchId,
           examType: data.examType,
           label: data.label,
           text: data.text,
@@ -88,14 +112,17 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
       body: { type: 'object' },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
     const data = request.body as any;
 
     try {
-      const existing = await prisma.reportPhrase.findUnique({ where: { id } });
+      const existing = await prisma.reportPhrase.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Report phrase not found' });
 
-      const item = await prisma.reportPhrase.update({ where: { id }, data });
+      const item = await prisma.reportPhrase.update({ where: { id }, data: { ...data, branchId } });
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update report phrase');
@@ -110,7 +137,12 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
+    const existing = await prisma.reportPhrase.findFirst({ where: { id, branchId } });
+    if (!existing) return reply.code(404).send({ error: 'Report phrase not found' });
     await prisma.reportPhrase.delete({ where: { id } });
     return { message: 'Deleted' };
   });

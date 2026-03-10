@@ -72,31 +72,48 @@ function formatDateToIso(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-async function resolveDoctorNameById(doctorId?: string): Promise<string | null> {
+async function resolveDoctorNameById(doctorId?: string, branchId?: string): Promise<string | null> {
   if (!doctorId) return null;
-  const doctor = await prisma.doctor.findUnique({
-    where: { id: String(doctorId) },
+  const doctor = await prisma.doctor.findFirst({
+    where: { id: String(doctorId), ...(branchId ? { branchId } : {}) },
     select: { name: true },
   });
   return doctor?.name ? String(doctor.name) : null;
 }
 
-async function resolveProcedureNameById(procedureId?: string): Promise<string | null> {
+async function resolveProcedureNameById(procedureId?: string, branchId?: string): Promise<string | null> {
   if (!procedureId) return null;
-  const procedure = await prisma.procedure.findUnique({
-    where: { id: String(procedureId) },
+  const procedure = await prisma.procedure.findFirst({
+    where: { id: String(procedureId), ...(branchId ? { branchId } : {}) },
     select: { name: true },
   });
   return procedure?.name ? String(procedure.name) : null;
 }
 
 export default async function teaProfilesRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     try {
       await request.jwtVerify();
     } catch {
       return reply.code(401).send({ error: 'Unauthorized' });
     }
+
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) {
+      return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+    }
+
+    (request as any).branchId = branchId;
   });
 
   app.get('/', {
@@ -113,11 +130,13 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request) => {
+    const branchId = (request as any).branchId as string;
     const { search, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = { isActive: true };
+    const where: any = { isActive: true, patient: { branchId } };
     if (search) {
       where.patient = {
+        branchId,
         OR: [
           { name: { contains: search, mode: 'insensitive' } },
           { cpf: { contains: search, mode: 'insensitive' } },
@@ -163,9 +182,10 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { id } = request.params as { id: string };
-    const item = await prisma.teaProfile.findUnique({
-      where: { id },
+    const item = await prisma.teaProfile.findFirst({
+      where: { id, patient: { branchId } },
       include: {
         patient: {
           select: {
@@ -230,6 +250,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const body = request.body as any;
     const patientPayload = body?.patient || {};
     const teaPayload = body?.tea || {};
@@ -237,14 +258,14 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     let patient: any = null;
 
     if (body?.patientId) {
-      patient = await prisma.patient.findUnique({ where: { id: String(body.patientId) } });
+      patient = await prisma.patient.findFirst({ where: { id: String(body.patientId), branchId } });
       if (!patient) return reply.code(404).send({ error: 'Patient not found for provided patientId' });
     }
 
     if (!patient) {
       const cpf = normalizeCpf(patientPayload?.cpf);
       if (cpf) {
-        patient = await prisma.patient.findUnique({ where: { cpf } });
+        patient = await prisma.patient.findFirst({ where: { cpf, branchId } });
       }
     }
 
@@ -265,6 +286,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
 
       patient = await prisma.patient.create({
         data: {
+          branchId,
           name: String(patientPayload.name),
           cpf,
           birthDate: new Date(patientPayload.birthDate),
@@ -363,10 +385,11 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { teaProfileId } = request.params as { teaProfileId: string };
     const { search, isActive } = request.query as { search?: string; isActive?: boolean };
 
-    const teaProfile = await prisma.teaProfile.findUnique({ where: { id: teaProfileId } });
+    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     const where: any = { teaProfileId };
@@ -413,10 +436,11 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { teaProfileId } = request.params as { teaProfileId: string };
     const data = request.body as any;
 
-    const teaProfile = await prisma.teaProfile.findUnique({ where: { id: teaProfileId } });
+    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     if (!data?.title || String(data.title).trim() === '') {
@@ -425,7 +449,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
 
     const responsibleDoctorId = data.responsibleDoctorId ? String(data.responsibleDoctorId) : null;
     const resolvedResponsibleProfessional = responsibleDoctorId
-      ? await resolveDoctorNameById(responsibleDoctorId)
+      ? await resolveDoctorNameById(responsibleDoctorId, branchId)
       : null;
 
     if (responsibleDoctorId && !resolvedResponsibleProfessional) {
@@ -462,10 +486,13 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       body: { type: 'object' },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { planId } = request.params as { planId: string };
     const data = request.body as any;
 
-    const existing = await prisma.teaTherapeuticPlan.findUnique({ where: { id: planId } });
+    const existing = await prisma.teaTherapeuticPlan.findFirst({
+      where: { id: planId, teaProfile: { patient: { branchId } } },
+    });
     if (!existing) return reply.code(404).send({ error: 'Therapeutic plan not found' });
 
     const updateData: any = { ...data };
@@ -476,7 +503,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (data?.responsibleDoctorId !== undefined) {
       const responsibleDoctorId = data.responsibleDoctorId ? String(data.responsibleDoctorId) : null;
       if (responsibleDoctorId) {
-        const resolvedResponsibleProfessional = await resolveDoctorNameById(responsibleDoctorId);
+        const resolvedResponsibleProfessional = await resolveDoctorNameById(responsibleDoctorId, branchId);
         if (!resolvedResponsibleProfessional) {
           return reply.code(400).send({ error: 'Validation failed', fields: { responsibleDoctorId: 'Médico responsável inválido' } });
         }
@@ -507,9 +534,10 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { planId } = request.params as { planId: string };
 
-    const existing = await prisma.teaTherapeuticPlan.findUnique({ where: { id: planId } });
+    const existing = await prisma.teaTherapeuticPlan.findFirst({ where: { id: planId, teaProfile: { patient: { branchId } } } });
     if (!existing) return reply.code(404).send({ error: 'Therapeutic plan not found' });
 
     await prisma.teaTherapeuticPlan.update({
@@ -531,9 +559,10 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { teaProfileId } = request.params as { teaProfileId: string };
 
-    const teaProfile = await prisma.teaProfile.findUnique({ where: { id: teaProfileId } });
+    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     const items = await prisma.teaEvolution.findMany({
@@ -573,11 +602,12 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { teaProfileId } = request.params as { teaProfileId: string };
     const data = request.body as any;
     const actor = resolveActorFromRequest(request);
 
-    const teaProfile = await prisma.teaProfile.findUnique({ where: { id: teaProfileId } });
+    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     if (data?.therapeuticPlanId) {
@@ -589,7 +619,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
 
     const professionalDoctorId = data.professionalDoctorId ? String(data.professionalDoctorId) : null;
     const resolvedProfessionalName = professionalDoctorId
-      ? await resolveDoctorNameById(professionalDoctorId)
+      ? await resolveDoctorNameById(professionalDoctorId, branchId)
       : null;
     if (professionalDoctorId && !resolvedProfessionalName) {
       return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'Médico inválido' } });
@@ -635,11 +665,12 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { teaProfileId } = request.params as { teaProfileId: string };
     const { startDate, endDate } = request.query as { startDate?: string; endDate?: string };
 
-    const teaProfile = await prisma.teaProfile.findUnique({
-      where: { id: teaProfileId },
+    const teaProfile = await prisma.teaProfile.findFirst({
+      where: { id: teaProfileId, patient: { branchId } },
       include: {
         patient: {
           select: {
@@ -700,7 +731,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
         },
         orderBy: { sessionDate: 'desc' },
       }),
-      prisma.teaPit.findUnique({
+      prisma.teaPit.findFirst({
         where: { teaProfileId },
         include: {
           therapies: {
@@ -751,12 +782,13 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { teaProfileId } = request.params as { teaProfileId: string };
 
-    const teaProfile = await prisma.teaProfile.findUnique({ where: { id: teaProfileId } });
+    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
-    const pit = await prisma.teaPit.findUnique({
+    const pit = await prisma.teaPit.findFirst({
       where: { teaProfileId },
       include: {
         therapies: {
@@ -828,11 +860,12 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
     const { teaProfileId } = request.params as { teaProfileId: string };
     const data = request.body as any;
     const actor = resolveActorFromRequest(request);
 
-    const teaProfile = await prisma.teaProfile.findUnique({ where: { id: teaProfileId } });
+    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     if (!data?.title || String(data.title).trim() === '') {
@@ -849,8 +882,8 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
             const professionalDoctorId = t.professionalDoctorId ? String(t.professionalDoctorId) : null;
 
             const [resolvedProcedureName, resolvedProfessionalName] = await Promise.all([
-              procedureId ? resolveProcedureNameById(procedureId) : Promise.resolve(null),
-              professionalDoctorId ? resolveDoctorNameById(professionalDoctorId) : Promise.resolve(null),
+              procedureId ? resolveProcedureNameById(procedureId, branchId) : Promise.resolve(null),
+              professionalDoctorId ? resolveDoctorNameById(professionalDoctorId, branchId) : Promise.resolve(null),
             ]);
 
             const hasInvalidProcedure = Boolean(procedureId && !resolvedProcedureName);
@@ -917,8 +950,8 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       notes: data.notes || null,
     };
 
-    const existingPit = await prisma.teaPit.findUnique({
-      where: { teaProfileId },
+    const existingPit = await prisma.teaPit.findFirst({
+        where: { teaProfileId },
       include: {
         therapies: {
           orderBy: { createdAt: 'asc' },

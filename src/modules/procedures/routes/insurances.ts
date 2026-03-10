@@ -2,6 +2,24 @@ import { FastifyInstance } from "fastify";
 import prisma from "../lib/prisma";
 
 export default async function insuranceRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
+  app.addHook("onRequest", async (request, reply) => {
+    try {
+      await request.jwtVerify();
+    } catch (err) {
+      return reply.code(401).send({ error: "Unauthorized" });
+    }
+  });
+
   app.get("/", {
     schema: {
       summary: "List insurances",
@@ -16,10 +34,13 @@ export default async function insuranceRoutes(app: FastifyInstance) {
         },
       },
     },
-  }, async (request) => {
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { search, isActive, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = {};
+    const where: any = { branchId };
     if (isActive !== undefined) where.isActive = isActive;
     if (search) {
       where.OR = [
@@ -49,8 +70,11 @@ export default async function insuranceRoutes(app: FastifyInstance) {
       params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { id } = request.params as any;
-    const item = await prisma.insurance.findUnique({ where: { id } });
+    const item = await prisma.insurance.findFirst({ where: { id, branchId } });
     if (!item) return reply.code(404).send({ error: "Insurance not found" });
     return item;
   });
@@ -75,10 +99,14 @@ export default async function insuranceRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const data = request.body as any;
     try {
       const item = await prisma.insurance.create({
         data: {
+          branchId,
           name: data.name,
           code: data.code || null,
           description: data.description || null,
@@ -106,11 +134,14 @@ export default async function insuranceRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { id } = request.params as any;
     const data = request.body as any;
 
     try {
-      const existing = await prisma.insurance.findUnique({ where: { id } });
+      const existing = await prisma.insurance.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: "Insurance not found" });
 
       const updateData: any = {};
@@ -119,7 +150,7 @@ export default async function insuranceRoutes(app: FastifyInstance) {
       if (data.description !== undefined) updateData.description = data.description || null;
       if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
-      const item = await prisma.insurance.update({ where: { id }, data: updateData });
+      const item = await prisma.insurance.update({ where: { id }, data: { ...updateData, branchId } });
       return item;
     } catch (err: any) {
       request.log.error({ err }, "Failed to update insurance");
@@ -134,7 +165,12 @@ export default async function insuranceRoutes(app: FastifyInstance) {
       params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
+
     const { id } = request.params as any;
+    const existing = await prisma.insurance.findFirst({ where: { id, branchId } });
+    if (!existing) return reply.code(404).send({ error: "Insurance not found" });
     await prisma.insurance.delete({ where: { id } });
     return { message: "Deleted" };
   });

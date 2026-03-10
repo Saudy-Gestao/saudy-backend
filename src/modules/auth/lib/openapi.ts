@@ -208,6 +208,7 @@ export const swaggerComponents = {
     UserCreate: {
       type: 'object',
       properties: {
+        branchId: { type: 'string' },
         sectorId: { type: 'string' },
         accessIds: { type: 'array', items: { type: 'string' } },
         name: { type: 'string' },
@@ -217,8 +218,9 @@ export const swaggerComponents = {
         phone: { type: 'string' },
         address: { type: 'string' },
       },
-      required: ['sectorId', 'name', 'birthDate', 'email', 'password'],
+      required: ['branchId', 'sectorId', 'name', 'birthDate', 'email', 'password'],
       example: {
+        branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456',
         sectorId: '1c2d3e4f-5678-90ab-cdef-1234567890ab',
         accessIds: ['acc-123'],
         name: 'João Silva',
@@ -232,6 +234,7 @@ export const swaggerComponents = {
     UserUpdate: {
       type: 'object',
       properties: {
+        branchId: { type: 'string' },
         sectorId: { type: 'string' },
         accessIds: { type: 'array', items: { type: 'string' } },
         name: { type: 'string' },
@@ -242,6 +245,7 @@ export const swaggerComponents = {
         address: { type: 'string' },
       },
       example: {
+        branchId: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456',
         sectorId: '1c2d3e4f-5678-90ab-cdef-1234567890ab',
         accessIds: ['acc-123'],
         name: 'João Silva',
@@ -435,6 +439,7 @@ export const ajvSchemas: Record<string, any> = {
   UserCreate: {
     type: 'object',
     properties: {
+      branchId: { type: 'string' },
       sectorId: { type: 'string' },
       accessIds: { type: 'array', items: { type: 'string' } },
       name: { type: 'string' },
@@ -444,11 +449,12 @@ export const ajvSchemas: Record<string, any> = {
       phone: { type: 'string' },
       address: { type: 'string' },
     },
-    required: ['sectorId', 'name', 'birthDate', 'email', 'password'],
+    required: ['branchId', 'sectorId', 'name', 'birthDate', 'email', 'password'],
   },
   UserUpdate: {
     type: 'object',
     properties: {
+      branchId: { type: 'string' },
       sectorId: { type: 'string' },
       accessIds: { type: 'array', items: { type: 'string' } },
       name: { type: 'string' },

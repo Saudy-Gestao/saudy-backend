@@ -2,6 +2,24 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function consultationRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
+  app.addHook('onRequest', async (request, reply) => {
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+
   app.get('/', {
     schema: {
       summary: 'List consultations',
@@ -17,10 +35,13 @@ export default async function consultationRoutes(app: FastifyInstance) {
         },
       },
     },
-  }, async (request) => {
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { search, convenioStatus, queueType, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = { isActive: true };
+    const where: any = { isActive: true, branchId };
     if (convenioStatus) where.convenioStatus = convenioStatus;
     if (queueType) where.queueType = queueType;
     if (search) {
@@ -45,8 +66,11 @@ export default async function consultationRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
-    const item = await prisma.consultation.findUnique({ where: { id } });
+    const item = await prisma.consultation.findFirst({ where: { id, branchId } });
     if (!item) return reply.code(404).send({ error: 'Consultation not found' });
     return item;
   });
@@ -91,9 +115,13 @@ export default async function consultationRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const data = request.body as any;
     try {
       const item = await prisma.consultation.create({ data: {
+        branchId,
         patientName: data.patientName,
         convenio: data.convenio || null,
         convenioStatus: data.convenioStatus || null,
@@ -140,14 +168,17 @@ export default async function consultationRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
     const data = request.body as any;
 
     try {
-      const existing = await prisma.consultation.findUnique({ where: { id } });
+      const existing = await prisma.consultation.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Consultation not found' });
 
-      const item = await prisma.consultation.update({ where: { id }, data });
+      const item = await prisma.consultation.update({ where: { id }, data: { ...data, branchId } });
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update consultation');
@@ -162,7 +193,12 @@ export default async function consultationRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
     const { id } = request.params as any;
+    const existing = await prisma.consultation.findFirst({ where: { id, branchId } });
+    if (!existing) return reply.code(404).send({ error: 'Consultation not found' });
     await prisma.consultation.delete({ where: { id } });
     return { message: 'Deleted' };
   });

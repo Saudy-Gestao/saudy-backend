@@ -200,12 +200,26 @@ function pickPendingRepresentativeReservation(reservations: any[]): any | null {
 }
 
 export default async function teaPreReservationsRoutes(app: FastifyInstance) {
+  const getLoggedBranchId = async (request: any) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    return user?.sector?.branch?.id || null;
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     try {
       await request.jwtVerify();
     } catch {
       return reply.code(401).send({ error: 'Unauthorized' });
     }
+
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+    (request as any).branchId = branchId;
   });
 
   const expireOverdueReservations = async () => {
@@ -603,8 +617,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .filter(Boolean),
     );
 
-    const therapy = await prisma.teaPitTherapy.findUnique({
-      where: { id: pitTherapyId },
+    const therapy = await prisma.teaPitTherapy.findFirst({
+      where: { id: pitTherapyId, pit: { teaProfile: { patient: { branchId: (request as any).branchId as string } } } },
       include: {
         pit: {
           include: {
@@ -631,8 +645,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
     }
 
-    const doctor = await prisma.doctor.findUnique({
-      where: { id: therapy.professionalDoctorId },
+    const doctor = await prisma.doctor.findFirst({
+      where: { id: therapy.professionalDoctorId, branchId: (request as any).branchId as string },
       select: {
         id: true,
         name: true,
@@ -852,8 +866,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const { pitTherapyId } = request.params as { pitTherapyId: string };
     const { weekStart } = request.query as { weekStart?: string };
 
-    const therapy = await prisma.teaPitTherapy.findUnique({
-      where: { id: pitTherapyId },
+    const therapy = await prisma.teaPitTherapy.findFirst({
+      where: { id: pitTherapyId, pit: { teaProfile: { patient: { branchId: (request as any).branchId as string } } } },
       include: {
         pit: {
           include: {
@@ -880,8 +894,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
     }
 
-    const doctor = await prisma.doctor.findUnique({
-      where: { id: therapy.professionalDoctorId },
+    const doctor = await prisma.doctor.findFirst({
+      where: { id: therapy.professionalDoctorId, branchId: (request as any).branchId as string },
       select: {
         id: true,
         name: true,
@@ -1053,8 +1067,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Validation failed', fields: { pitTherapyId: 'pitTherapyId é obrigatório' } });
     }
 
-    const therapy = await prisma.teaPitTherapy.findUnique({
-      where: { id: pitTherapyId },
+    const therapy = await prisma.teaPitTherapy.findFirst({
+      where: { id: pitTherapyId, pit: { teaProfile: { patient: { branchId: (request as any).branchId as string } } } },
       include: {
         pit: {
           include: {
@@ -1312,8 +1326,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Validation failed', fields: { pitTherapyId: 'pitTherapyId é obrigatório' } });
       }
 
-      const therapy = await prisma.teaPitTherapy.findUnique({
-        where: { id: pitTherapyId },
+      const therapy = await prisma.teaPitTherapy.findFirst({
+      where: { id: pitTherapyId, pit: { teaProfile: { patient: { branchId: (request as any).branchId as string } } } },
         select: { id: true, weeklyFrequency: true },
       });
 
@@ -1411,8 +1425,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
         if (!pitTherapyId || !suggestedDate || !suggestedTime) continue;
 
-        const therapy = await prisma.teaPitTherapy.findUnique({
-          where: { id: pitTherapyId },
+        const therapy = await prisma.teaPitTherapy.findFirst({
+      where: { id: pitTherapyId, pit: { teaProfile: { patient: { branchId: (request as any).branchId as string } } } },
           include: {
             pit: {
               include: {
@@ -1551,7 +1565,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Validation failed', fields: { status: 'Status inválido' } });
     }
 
-    const existing = await prisma.teaPreReservation.findUnique({ where: { id } });
+    const existing = await prisma.teaPreReservation.findFirst({ where: { id, patient: { branchId: (request as any).branchId as string } } });
     if (!existing) return reply.code(404).send({ error: 'Pre-reservation not found' });
 
     const applySeries = Boolean(body?.applySeries);
@@ -1908,8 +1922,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const preReservation = await prisma.teaPreReservation.findUnique({
-      where: { id },
+    const preReservation = await prisma.teaPreReservation.findFirst({
+      where: {
+        id,
+        patient: { branchId: (request as any).branchId as string },
+      },
       include: {
         patient: {
           select: {
@@ -2021,7 +2038,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const preReservation = await prisma.teaPreReservation.findUnique({ where: { id }, select: { id: true } });
+    const preReservation = await prisma.teaPreReservation.findFirst({
+      where: { id, patient: { branchId: (request as any).branchId as string } },
+      select: { id: true },
+    });
     if (!preReservation) {
       return reply.code(404).send({ error: 'Pre-reservation not found' });
     }
@@ -2060,8 +2080,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const body = request.body as { overrideStatus?: string; observation?: string; convertSeries?: boolean };
     const actor = resolveActorFromRequest(request);
 
-    const preReservation = await prisma.teaPreReservation.findUnique({
-      where: { id },
+    const preReservation = await prisma.teaPreReservation.findFirst({
+      where: {
+        id,
+        patient: { branchId: (request as any).branchId as string },
+      },
       include: {
         patient: {
           select: {
