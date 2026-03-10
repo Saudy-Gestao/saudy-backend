@@ -568,6 +568,7 @@ model Appointment {
     isActive        Boolean  @default(true)
 
     @@index([branchId])
+    @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
     @@map("appointments")
 }
 
