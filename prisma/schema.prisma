@@ -607,6 +607,86 @@ model Report {
     @@map("reports")
 }
 
+model ReportWorklistItem {
+    id               String   @id @default(uuid())
+    externalStudyId  String?
+    accessionNumber  String?
+    patientName      String
+    patientCpf       String?
+    patientBirthDate String?
+    examType         String
+    scheduledAt      String?
+    convenio         String?
+    requestingDoctor String?
+    assignedTo       String?
+    priority         String   @default("normal")
+    status           String   @default("pendente")
+    reportText       String?  @db.Text
+    issuerSignedAt   String?
+    reviewerSignedAt String?
+    dicomStudyUid    String?
+    dicomSeriesUid   String?
+    metadata         Json?
+    addendums        ReportAddendum[]
+    createdAt        DateTime @default(now())
+    updatedAt        DateTime @updatedAt
+    isActive         Boolean  @default(true)
+
+    @@map("report_worklist_items")
+}
+
+model ReportAddendum {
+    id               String             @id @default(uuid())
+    worklistItemId   String
+    content          String             @db.Text
+    status           String             @default("draft")
+    issuerSignedAt   String?
+    reviewerSignedAt String?
+    savedAt          String?
+    finalizedAt      String?
+    createdAt        DateTime           @default(now())
+    updatedAt        DateTime           @updatedAt
+    isActive         Boolean            @default(true)
+    worklistItem     ReportWorklistItem @relation(fields: [worklistItemId], references: [id], onDelete: Cascade)
+
+    @@index([worklistItemId, status])
+    @@map("report_addendums")
+}
+
+model ReportTemplate {
+    id        String   @id @default(uuid())
+    name      String
+    examType  String
+    group     String?
+    content   String   @db.Text
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+    isActive  Boolean  @default(true)
+
+    @@map("report_templates")
+}
+
+model ReportPhrase {
+    id        String   @id @default(uuid())
+    examType  String
+    label     String
+    text      String   @db.Text
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+    isActive  Boolean  @default(true)
+
+    @@map("report_phrases")
+}
+
+model ReportConfig {
+    id               String   @id @default(uuid())
+    requiresReviewer Boolean  @default(true)
+    createdAt        DateTime @default(now())
+    updatedAt        DateTime @updatedAt
+
+    @@map("report_configs")
+}
+
 model Envelopment {
     id           String   @id @default(uuid())
     patientName  String?
