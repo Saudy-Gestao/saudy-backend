@@ -40,6 +40,10 @@ function validateStrongPassword(password: string) {
   return minLength && hasNumber && hasSpecial;
 }
 
+function isBcryptHash(value: string) {
+  return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
+}
+
 export default async function authRoutes(app: FastifyInstance) {
   // Register complete setup
   app.post('/register', {
@@ -156,15 +160,19 @@ export default async function authRoutes(app: FastifyInstance) {
             )
           : [];
 
-        // Hash password
-        const hashedPassword = await bcrypt.hash(user.password, 10);
+        // Compatibility: accept either plain password (hash here) or a pre-hashed bcrypt password.
+        const normalizedEmail = String(user.email || '').trim().toLowerCase();
+        const incomingPassword = String(user.password || '');
+        const hashedPassword = isBcryptHash(incomingPassword)
+          ? incomingPassword
+          : await bcrypt.hash(incomingPassword, 10);
 
         // Create user
         const createdUser = await tx.user.create({
           data: {
             name: user.name,
             birthDate: new Date(user.birthDate),
-            email: user.email,
+            email: normalizedEmail,
             password: hashedPassword,
             phone: user.phone,
             address: user.address,
@@ -240,27 +248,52 @@ export default async function authRoutes(app: FastifyInstance) {
         password: string;
       };
 
-      const user = await prisma.user.findUnique({
-        where: { email },
-        include: { 
-          sector: {
-            include: {
-              branch: {
-                include: {
-                  company: true
-                }
-              }
-            }
-          }, 
-          accesses: {
-            include: {
-              modules: true  // Incluir módulos dos acessos
-            }
-          }
+      const rawEmail = String(email || '').trim();
+      const normalizedEmail = rawEmail.toLowerCase();
+
+      const includeRelations = {
+        sector: {
+          include: {
+            branch: {
+              include: {
+                company: true,
+              },
+            },
+          },
         },
+        accesses: {
+          include: {
+            modules: true,
+          },
+        },
+      } as const;
+
+      // 1) Prefer the normalized email used by new registrations.
+      let user = await prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        include: includeRelations,
       });
 
-      console.log('User fetched for login:', email);
+      // 2) Legacy fallback: exact raw email (older records may have mixed case).
+      if (!user && rawEmail !== normalizedEmail) {
+        user = await prisma.user.findUnique({
+          where: { email: rawEmail },
+          include: includeRelations,
+        });
+      }
+
+      // 3) Last fallback for legacy duplicates with different casing.
+      if (!user) {
+        user = await prisma.user.findFirst({
+          where: {
+            email: { equals: rawEmail, mode: 'insensitive' },
+          },
+          orderBy: { createdAt: 'desc' },
+          include: includeRelations,
+        });
+      }
+
+      console.log('User fetched for login:', normalizedEmail);
 
       if (!user) {
         return reply.code(401).send({ error: 'Invalid credentials' });
