@@ -1,6 +1,3 @@
--- DropIndex
-DROP INDEX "appointments_authorizationStatus_idx";
-
 -- AlterTable
 ALTER TABLE "appointments" ADD COLUMN     "branchId" TEXT;
 
