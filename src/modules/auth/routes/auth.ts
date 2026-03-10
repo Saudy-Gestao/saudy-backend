@@ -24,6 +24,10 @@ function normalizeIdentifier(value: string) {
   return value.trim();
 }
 
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
 function isEmail(value: string) {
   return value.includes('@');
 }
@@ -224,7 +228,25 @@ export default async function authRoutes(app: FastifyInstance) {
         };
       });
 
-      return result;
+      const token = app.jwt.sign({ id: result.user.id, email: result.user.email });
+
+      return {
+        company: result.company,
+        branches: result.branches,
+        sector: result.sector,
+        accesses: result.accesses,
+        token,
+        user: {
+          id: result.user.id,
+          name: result.user.name,
+          email: result.user.email,
+          phone: result.user.phone,
+          address: result.user.address,
+          birthDate: result.user.birthDate,
+          sector: result.user.sector,
+          accesses: result.user.accesses,
+        },
+      };
     } catch (error) {
       console.log('Error during registration:', error);
 
@@ -387,18 +409,9 @@ export default async function authRoutes(app: FastifyInstance) {
       return { message: 'Se o usuário existir, enviaremos um código de recuperação.' };
     }
 
-    const user = isEmail(normalizedIdentifier)
-      ? await prisma.user.findUnique({ where: { email: normalizedIdentifier } })
-      : await prisma.user.findFirst({
-          where: {
-            OR: [
-              { cpf: normalizedIdentifier },
-              { cpf: digitsOnly(normalizedIdentifier) },
-            ],
-          },
-        });
+    const users = await findUsersByIdentifier(normalizedIdentifier);
 
-    if (!user) {
+    if (users.length === 0) {
       return { message: 'Se o usuário existir, enviaremos um código de recuperação.' };
     }
 
@@ -406,20 +419,26 @@ export default async function authRoutes(app: FastifyInstance) {
     const codeHash = hashResetCode(code);
     const expiresAt = new Date(Date.now() + RESET_CODE_EXPIRATION_MINUTES * 60 * 1000);
 
-    await prisma.passwordResetCode.create({
-      data: {
-        userId: user.id,
-        requestIdentifier: normalizedIdentifier,
-        codeHash,
-        expiresAt,
-      },
-    });
+    await Promise.all(
+      users.map((user: { id: string }) =>
+        prisma.passwordResetCode.create({
+          data: {
+            userId: user.id,
+            requestIdentifier: isEmail(normalizedIdentifier)
+              ? normalizeEmail(normalizedIdentifier)
+              : digitsOnly(normalizedIdentifier),
+            codeHash,
+            expiresAt,
+          },
+        })
+      )
+    );
 
     try {
       await sendPasswordResetCodeEmail({
-        to: user.email,
+        to: users[0].email,
         code,
-        userName: user.name,
+        userName: users[0].name,
       });
     } catch (error) {
       app.log.error(error, 'Failed to send password reset email');
@@ -456,24 +475,17 @@ export default async function authRoutes(app: FastifyInstance) {
     const normalizedIdentifier = normalizeIdentifier(identifier);
     const normalizedCode = code.trim();
 
-    const user = isEmail(normalizedIdentifier)
-      ? await prisma.user.findUnique({ where: { email: normalizedIdentifier } })
-      : await prisma.user.findFirst({
-          where: {
-            OR: [
-              { cpf: normalizedIdentifier },
-              { cpf: digitsOnly(normalizedIdentifier) },
-            ],
-          },
-        });
+    const users = await findUsersByIdentifier(normalizedIdentifier);
 
-    if (!user) {
+    if (users.length === 0) {
       return reply.code(400).send({ error: 'Código inválido ou expirado' });
     }
 
+    const candidateUserIds = users.map((user: { id: string }) => user.id);
+
     const resetRecord = await prisma.passwordResetCode.findFirst({
       where: {
-        userId: user.id,
+        userId: { in: candidateUserIds },
         usedAt: null,
         expiresAt: { gt: new Date() },
       },
@@ -539,31 +551,26 @@ export default async function authRoutes(app: FastifyInstance) {
     const normalizedIdentifier = normalizeIdentifier(identifier);
     const normalizedCode = code.trim();
 
-    const user = isEmail(normalizedIdentifier)
-      ? await prisma.user.findUnique({ where: { email: normalizedIdentifier } })
-      : await prisma.user.findFirst({
-          where: {
-            OR: [
-              { cpf: normalizedIdentifier },
-              { cpf: digitsOnly(normalizedIdentifier) },
-            ],
-          },
-        });
+    const users = await findUsersByIdentifier(normalizedIdentifier);
 
-    if (!user) {
+    if (users.length === 0) {
       return reply.code(400).send({ error: 'Código inválido ou expirado' });
     }
 
+    const candidateUserIds = users.map((user: { id: string }) => user.id);
+    const codeHash = hashResetCode(normalizedCode);
+
     const resetRecord = await prisma.passwordResetCode.findFirst({
       where: {
-        userId: user.id,
+        userId: { in: candidateUserIds },
         usedAt: null,
         expiresAt: { gt: new Date() },
+        codeHash,
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!resetRecord || hashResetCode(normalizedCode) !== resetRecord.codeHash) {
+    if (!resetRecord) {
       return reply.code(400).send({ error: 'Código inválido ou expirado' });
     }
 
@@ -571,7 +578,7 @@ export default async function authRoutes(app: FastifyInstance) {
 
     await prisma.$transaction([
       prisma.user.update({
-        where: { id: user.id },
+        where: { id: resetRecord.userId },
         data: { password: hashedPassword },
       }),
       prisma.passwordResetCode.update({
@@ -581,5 +588,44 @@ export default async function authRoutes(app: FastifyInstance) {
     ]);
 
     return { message: 'Senha alterada com sucesso' };
+  });
+}
+
+async function findUsersByIdentifier(identifier: string) {
+  const normalizedIdentifier = normalizeIdentifier(identifier);
+
+  if (!normalizedIdentifier) {
+    return [] as { id: string; email: string; name: string }[];
+  }
+
+  if (isEmail(normalizedIdentifier)) {
+    return prisma.user.findMany({
+      where: {
+        email: {
+          equals: normalizedIdentifier,
+          mode: 'insensitive',
+        },
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+      },
+    });
+  }
+
+  const cpfDigits = digitsOnly(normalizedIdentifier);
+  return prisma.user.findMany({
+    where: {
+      OR: [
+        { cpf: normalizedIdentifier },
+        { cpf: cpfDigits },
+      ],
+    },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+    },
   });
 }
