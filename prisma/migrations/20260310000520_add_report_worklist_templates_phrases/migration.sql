@@ -1,5 +1,3 @@
--- DropIndex
-DROP INDEX "appointments_authorizationStatus_idx";
 
 -- CreateTable
 CREATE TABLE "report_worklist_items" (
