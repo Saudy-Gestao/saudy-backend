@@ -56,6 +56,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         properties: {
           search: { type: "string" },
           acceptsInsurance: { type: "boolean" },
+          isActive: { type: "boolean" },
           doctorId: { type: "string" },
           limit: { type: "number", default: 50 },
           offset: { type: "number", default: 0 },
@@ -66,10 +67,11 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
 
-    const { search, acceptsInsurance, doctorId, limit = 50, offset = 0 } = request.query as any;
+    const { search, acceptsInsurance, isActive, doctorId, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = { isActive: true, branchId };
+    const where: any = { branchId };
     if (acceptsInsurance !== undefined) where.acceptsInsurance = acceptsInsurance;
+    if (isActive !== undefined) where.isActive = isActive;
     if (doctorId) where.doctors = { some: { doctorId } };
     if (search) {
       where.OR = [
@@ -220,6 +222,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
           : Number(data.durationMinutes);
       }
       if (data.acceptsInsurance !== undefined) updateData.acceptsInsurance = Boolean(data.acceptsInsurance);
+      if (data.isActive !== undefined) updateData.isActive = Boolean(data.isActive);
 
       const acceptedInsurances = normalizeStringArray(data.acceptedInsurances);
       const modalities = normalizeStringArray(data.modalities);

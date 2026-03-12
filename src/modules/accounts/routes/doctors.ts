@@ -191,6 +191,8 @@ export default async function doctorRoutes(app: FastifyInstance) {
     if (!data?.crm || String(data.crm).trim() === '') fieldErrors.crm = 'CRM é obrigatório';
     if (!data?.crmState || String(data.crmState).trim() === '') fieldErrors.crmState = 'UF do CRM é obrigatório';
     if (!data?.email || !/^[\w-.]+@[\w-]+\.[\w-.]+$/.test(String(data.email))) fieldErrors.email = 'Email inválido';
+    if (!data?.cellphone || !/^\d{10,11}$/.test(String(data.cellphone))) fieldErrors.cellphone = 'Celular inválido';
+    if (data?.phone !== undefined && data.phone !== null && String(data.phone).trim() !== '' && !/^\d{10,11}$/.test(String(data.phone))) fieldErrors.phone = 'Telefone inválido';
     if (!data?.cpf || !/^\d{11}$/.test(String(data.cpf))) fieldErrors.cpf = 'CPF deve conter 11 dígitos numéricos';
     if (!data?.birthDate || isNaN(Date.parse(String(data.birthDate)))) fieldErrors.birthDate = 'Data de nascimento inválida';
     else if (new Date(String(data.birthDate)) > new Date()) fieldErrors.birthDate = 'Data de nascimento inválida';
@@ -200,6 +202,11 @@ export default async function doctorRoutes(app: FastifyInstance) {
     if (Object.keys(fieldErrors).length > 0) {
       return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
     }
+
+    const normalizedPhone = String(data.phone || '').trim();
+    const normalizedCellphone = String(data.cellphone || '').trim();
+    data.phone = normalizedPhone || normalizedCellphone;
+    data.cellphone = normalizedCellphone || null;
 
     if (data?.roomId !== undefined) {
       const roomId = String(data.roomId || '').trim();
@@ -347,6 +354,11 @@ export default async function doctorRoutes(app: FastifyInstance) {
           properties: { error: { type: 'string' } },
           additionalProperties: true,
         },
+        500: {
+          type: 'object',
+          properties: { error: { type: 'string' }, details: { type: 'string' } },
+          additionalProperties: true,
+        },
       },
     },
   }, async (request, reply) => {
@@ -361,9 +373,13 @@ export default async function doctorRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Doctor not found' });
     }
 
-    // Check for appointments
+    // Check for appointments. Current Appointment model stores doctorName (not doctorId).
     const appointmentsCount = await prisma.appointment.count({
-      where: { doctorId: id, branchId },
+      where: {
+        branchId,
+        doctorName: existing.name,
+        isActive: true,
+      },
     });
 
     if (appointmentsCount > 0) {
@@ -373,9 +389,20 @@ export default async function doctorRoutes(app: FastifyInstance) {
       });
     }
 
-    await prisma.doctor.delete({ where: { id } });
+    try {
+      await prisma.doctor.delete({ where: { id } });
+      return { message: 'Doctor deleted successfully' };
+    } catch (error: any) {
+      if (error?.code === 'P2003') {
+        return reply.code(400).send({
+          error: 'Cannot delete doctor',
+          details: 'This doctor is referenced by other records. Remove/reassign dependencies first, or deactivate the doctor instead.',
+        });
+      }
 
-    return { message: 'Doctor deleted successfully' };
+      request.log.error({ err: error, doctorId: id }, 'Failed to delete doctor');
+      return reply.code(500).send({ error: 'Failed to delete doctor', details: error?.message || 'Internal error' });
+    }
   });
 
   // List specialties (distinct)
