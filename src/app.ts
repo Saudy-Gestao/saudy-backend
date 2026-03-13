@@ -10,6 +10,7 @@ import adminModule from './modules/admin';
 import careModule from './modules/care';
 import proceduresModule from './modules/procedures';
 import dicomModule from './modules/dicom';
+import { startOrthancPoller } from './modules/dicom/orthanc';
 
 const app = fastify({ logger: true });
 
@@ -75,5 +76,8 @@ app.register(adminModule, { prefix: '/admin' });
 app.register(careModule, { prefix: '/care' });
 app.register(dicomModule, { prefix: '/dicom' });
 app.register(proceduresModule, { prefix: '/procedures' });
+
+// start Orthanc poller (if configured)
+startOrthancPoller();
 
 export default app;

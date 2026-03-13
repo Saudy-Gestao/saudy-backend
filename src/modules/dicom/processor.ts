@@ -24,6 +24,7 @@ function ensureStorageDir() {
 export async function processDicomBuffer(
   buffer: Buffer,
   branchId: string | null,
+  instanceId?: string,
 ): Promise<any /* ReportWorklistItem */> {
   // parse minimal metadata
   const byteArray = new Uint8Array(buffer);
@@ -117,6 +118,7 @@ export async function processDicomBuffer(
         studyUid: studyInstanceUid || undefined,
         seriesUid: seriesInstanceUid || undefined,
         path: fullPath,
+        instanceId: instanceId || undefined,
       },
     });
   } catch (err) {

@@ -687,11 +687,19 @@ model DicomFile {
     worklistItem   ReportWorklistItem   @relation(fields: [worklistItemId], references: [id], onDelete: Cascade)
     studyUid       String?
     seriesUid      String?
+    instanceId     String?              @unique
     path           String
     createdAt      DateTime             @default(now())
 
     @@index([worklistItemId])
     @@map("dicom_files")
+}
+
+model OrthancStudy {
+    studyUid    String   @id
+    processedAt DateTime @default(now())
+
+    @@map("orthanc_studies")
 }
 
 model ReportAddendum {
