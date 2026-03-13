@@ -9,6 +9,8 @@ import accountsModule from './modules/accounts';
 import adminModule from './modules/admin';
 import careModule from './modules/care';
 import proceduresModule from './modules/procedures';
+import dicomModule from './modules/dicom';
+import { startOrthancPoller } from './modules/dicom/orthanc';
 
 const app = fastify({ logger: true });
 
@@ -65,13 +67,17 @@ app.get('/health', async (_request: FastifyRequest, _reply: FastifyReply) => {
 app.get('/', async () => ({
   message: 'Saudy Monolith API',
   docs: '/docs',
-  modules: ['/auth', '/accounts', '/admin', '/care', '/procedures'],
+  modules: ['/auth', '/accounts', '/admin', '/care', '/dicom', '/procedures'],
 }));
 
 app.register(authModule, { prefix: '/auth' });
 app.register(accountsModule, { prefix: '/accounts' });
 app.register(adminModule, { prefix: '/admin' });
 app.register(careModule, { prefix: '/care' });
+app.register(dicomModule, { prefix: '/dicom' });
 app.register(proceduresModule, { prefix: '/procedures' });
+
+// start Orthanc poller (if configured)
+startOrthancPoller();
 
 export default app;

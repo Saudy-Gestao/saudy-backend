@@ -666,14 +666,40 @@ model ReportWorklistItem {
     reviewerSignedAt String?
     dicomStudyUid    String?
     dicomSeriesUid   String?
+    dicomPath        String?   // local filesystem path or storage key
+    dicomUrl         String?   // public URL to retrieve the DICOM or preview
+    dicomReceivedAt  DateTime? // when the file was ingested
     metadata         Json?
     addendums        ReportAddendum[]
+    dicomFiles       DicomFile[]
     createdAt        DateTime @default(now())
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
 
     @@index([branchId])
+    @@index([dicomStudyUid])
     @@map("report_worklist_items")
+}
+
+model DicomFile {
+    id             String               @id @default(uuid())
+    worklistItemId String
+    worklistItem   ReportWorklistItem   @relation(fields: [worklistItemId], references: [id], onDelete: Cascade)
+    studyUid       String?
+    seriesUid      String?
+    instanceId     String?              @unique
+    path           String
+    createdAt      DateTime             @default(now())
+
+    @@index([worklistItemId])
+    @@map("dicom_files")
+}
+
+model OrthancStudy {
+    studyUid    String   @id
+    processedAt DateTime @default(now())
+
+    @@map("orthanc_studies")
 }
 
 model ReportAddendum {

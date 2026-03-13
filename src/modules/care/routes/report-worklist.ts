@@ -41,16 +41,20 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
 
     const { search, status, examType, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = { isActive: true, branchId };
+    // show items that either belong to this branch or have no branch assigned (imported by poller)
+    const where: any = { isActive: true, OR: [{ branchId }, { branchId: null }] };
     if (status) where.status = status;
     if (examType) where.examType = examType;
     if (search) {
-      where.OR = [
-        { patientName: { contains: search, mode: 'insensitive' } },
-        { patientCpf: { contains: search, mode: 'insensitive' } },
-        { examType: { contains: search, mode: 'insensitive' } },
-        { accessionNumber: { contains: search, mode: 'insensitive' } },
-      ];
+      where.AND = where.AND || [];
+      where.AND.push({
+        OR: [
+          { patientName: { contains: search, mode: 'insensitive' } },
+          { patientCpf: { contains: search, mode: 'insensitive' } },
+          { examType: { contains: search, mode: 'insensitive' } },
+          { accessionNumber: { contains: search, mode: 'insensitive' } },
+        ],
+      });
     }
 
     const [items, total] = await Promise.all([
@@ -94,7 +98,7 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
-    const item = await prisma.reportWorklistItem.findFirst({ where: { id, branchId } });
+    const item = await prisma.reportWorklistItem.findFirst({ where: { id, OR: [{ branchId }, { branchId: null }] } });
     if (!item) return reply.code(404).send({ error: 'Report worklist item not found' });
 
     const finalizedAddendumCount = await prisma.reportAddendum.count({
@@ -137,6 +141,9 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
           reviewerSignedAt: { type: 'string' },
           dicomStudyUid: { type: 'string' },
           dicomSeriesUid: { type: 'string' },
+          dicomPath: { type: 'string' },
+          dicomUrl: { type: 'string' },
+          dicomReceivedAt: { type: 'string', format: 'date-time' },
           metadata: { type: 'object', additionalProperties: true },
         },
       },
@@ -179,6 +186,9 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
           reviewerSignedAt: data.reviewerSignedAt || null,
           dicomStudyUid: data.dicomStudyUid || null,
           dicomSeriesUid: data.dicomSeriesUid || null,
+          dicomPath: data.dicomPath || null,
+          dicomUrl: data.dicomUrl || null,
+          dicomReceivedAt: data.dicomReceivedAt || null,
           metadata: data.metadata || null,
         },
       });
@@ -210,7 +220,7 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
     const data = request.body as any;
 
     try {
-      const existing = await prisma.reportWorklistItem.findFirst({ where: { id, branchId } });
+      const existing = await prisma.reportWorklistItem.findFirst({ where: { id, OR: [{ branchId }, { branchId: null }] } });
       if (!existing) return reply.code(404).send({ error: 'Report worklist item not found' });
 
       const isAttemptingUnfinalize =
@@ -252,7 +262,7 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
-    const existing = await prisma.reportWorklistItem.findFirst({ where: { id, branchId } });
+    const existing = await prisma.reportWorklistItem.findFirst({ where: { id, OR: [{ branchId }, { branchId: null }] } });
     if (!existing) return reply.code(404).send({ error: 'Report worklist item not found' });
     await prisma.reportWorklistItem.delete({ where: { id } });
     return { message: 'Deleted' };
