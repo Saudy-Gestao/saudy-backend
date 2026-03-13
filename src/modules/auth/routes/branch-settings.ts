@@ -23,6 +23,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
             id: { type: 'string' },
             branchId: { type: 'string' },
             requireFacialForReportDelivery: { type: 'boolean' },
+            requireFacialForPatientRegistration: { type: 'boolean' },
           },
         },
         403: {
@@ -87,6 +88,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
         type: 'object',
         properties: {
           requireFacialForReportDelivery: { type: 'boolean' },
+          requireFacialForPatientRegistration: { type: 'boolean' },
         },
       },
       response: {
@@ -96,6 +98,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
             id: { type: 'string' },
             branchId: { type: 'string' },
             requireFacialForReportDelivery: { type: 'boolean' },
+            requireFacialForPatientRegistration: { type: 'boolean' },
           },
         },
         403: {
@@ -108,7 +111,10 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { branchId } = request.params as { branchId: string };
-    const { requireFacialForReportDelivery } = request.body as { requireFacialForReportDelivery?: boolean };
+    const { requireFacialForReportDelivery, requireFacialForPatientRegistration } = request.body as {
+      requireFacialForReportDelivery?: boolean;
+      requireFacialForPatientRegistration?: boolean;
+    };
 
     // Verify user has access to this branch
     const userId = (request.user as any).id;
@@ -134,10 +140,12 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
       where: { branchId },
       update: {
         ...(requireFacialForReportDelivery !== undefined ? { requireFacialForReportDelivery } : {}),
+        ...(requireFacialForPatientRegistration !== undefined ? { requireFacialForPatientRegistration } : {}),
       },
       create: {
         branchId,
         ...(requireFacialForReportDelivery !== undefined ? { requireFacialForReportDelivery } : {}),
+        ...(requireFacialForPatientRegistration !== undefined ? { requireFacialForPatientRegistration } : {}),
       },
     });
 

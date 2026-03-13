@@ -2,6 +2,16 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function invoiceRoutes(app: FastifyInstance) {
+  const parseDateOnly = (value?: string | null) => {
+    if (!value) return null;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (match) {
+      const [, year, month, day] = match;
+      return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12, 0, 0));
+    }
+    return new Date(value);
+  };
+
   // List invoices
   app.get('/', {
     schema: {
@@ -86,7 +96,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
             number: numToUse,
             patientName: data.patientName || null,
             issuedAt: data.issuedAt ? new Date(data.issuedAt) : undefined,
-            dueDate: data.dueDate ? new Date(data.dueDate) : null,
+            dueDate: parseDateOnly(data.dueDate),
             status: data.status || 'EMITIDA',
             convention: data.convention || null,
             value: data.value,
@@ -131,8 +141,11 @@ export default async function invoiceRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { id } = request.params as any;
-    const data = request.body as any;
+    const data = { ...(request.body as any) };
     try {
+      if (data.dueDate !== undefined) {
+        data.dueDate = parseDateOnly(data.dueDate);
+      }
       if (data.value !== undefined || data.discount !== undefined) {
         const existing = await prisma.invoice.findUnique({ where: { id } });
         const value = data.value !== undefined ? data.value : Number(existing?.value || 0);

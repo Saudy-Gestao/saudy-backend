@@ -28,6 +28,22 @@ const normalizeDoctorLinks = (data: any) => {
   return null;
 };
 
+const normalizeProcedureMaterials = (data: any) => {
+  if (!Array.isArray(data?.procedureMaterials)) return null;
+
+  return data.procedureMaterials
+    .map((material: any) => {
+      const inventoryItemId = String(material?.inventoryItemId || '').trim();
+      const quantity = Number(material?.quantity);
+      if (!inventoryItemId || !Number.isFinite(quantity) || quantity <= 0) return null;
+      return {
+        inventoryItemId,
+        quantity: Math.floor(quantity),
+      };
+    })
+    .filter(Boolean) as { inventoryItemId: string; quantity: number }[];
+};
+
 export default async function procedureRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -86,7 +102,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         take: limit,
         skip: offset,
         orderBy: { createdAt: "desc" },
-        include: { doctors: true },
+        include: { doctors: true, materials: { include: { inventoryItem: true } } },
       }),
       prisma.procedure.count({ where }),
     ]);
@@ -105,7 +121,10 @@ export default async function procedureRoutes(app: FastifyInstance) {
     if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
 
     const { id } = request.params as any;
-    const item = await prisma.procedure.findFirst({ where: { id, branchId }, include: { doctors: true } });
+    const item = await prisma.procedure.findFirst({
+      where: { id, branchId },
+      include: { doctors: true, materials: { include: { inventoryItem: true } } },
+    });
     if (!item) return reply.code(404).send({ error: "Procedure not found" });
     return item;
   });
@@ -136,6 +155,16 @@ export default async function procedureRoutes(app: FastifyInstance) {
               },
             },
           },
+          procedureMaterials: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                inventoryItemId: { type: "string" },
+                quantity: { type: "number" },
+              },
+            },
+          },
         },
       },
       response: {
@@ -149,6 +178,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
 
     const data = request.body as any;
     const doctorLinks = normalizeDoctorLinks(data) || [];
+    const procedureMaterials = normalizeProcedureMaterials(data) || [];
     const acceptedInsurances = normalizeStringArray(data.acceptedInsurances) || [];
     const modalities = normalizeStringArray(data.modalities) || [];
     const acceptsInsurance = Boolean(data.acceptsInsurance);
@@ -177,8 +207,16 @@ export default async function procedureRoutes(app: FastifyInstance) {
                 },
               }
             : undefined,
+          materials: procedureMaterials.length
+            ? {
+                createMany: {
+                  data: procedureMaterials,
+                  skipDuplicates: true,
+                },
+              }
+            : undefined,
         },
-        include: { doctors: true },
+        include: { doctors: true, materials: { include: { inventoryItem: true } } },
       });
 
       return reply.code(201).send(item);
@@ -207,6 +245,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const { id } = request.params as any;
     const data = request.body as any;
     const doctorLinks = normalizeDoctorLinks(data);
+    const procedureMaterials = normalizeProcedureMaterials(data);
 
     try {
       const existing = await prisma.procedure.findFirst({ where: { id, branchId } });
@@ -251,8 +290,27 @@ export default async function procedureRoutes(app: FastifyInstance) {
         }
       }
 
+      if (procedureMaterials !== null) {
+        actions.push(prisma.procedureMaterial.deleteMany({ where: { procedureId: id } }));
+        if (procedureMaterials.length) {
+          actions.push(
+            prisma.procedureMaterial.createMany({
+              data: procedureMaterials.map((material) => ({
+                procedureId: id,
+                inventoryItemId: material.inventoryItemId,
+                quantity: material.quantity,
+              })),
+              skipDuplicates: true,
+            }),
+          );
+        }
+      }
+
       await prisma.$transaction(actions);
-      const item = await prisma.procedure.findFirst({ where: { id, branchId }, include: { doctors: true } });
+      const item = await prisma.procedure.findFirst({
+        where: { id, branchId },
+        include: { doctors: true, materials: { include: { inventoryItem: true } } },
+      });
       return item;
     } catch (err: any) {
       request.log.error({ err }, "Failed to update procedure");

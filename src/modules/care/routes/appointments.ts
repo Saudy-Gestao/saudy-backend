@@ -1,5 +1,77 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import type { Prisma } from '@prisma/client';
+
+const COMPLETED_STATUSES = new Set(['REALIZADO', 'COMPLETED', 'FINALIZADO', 'ATENDIDO']);
+const CANCELED_STATUSES = new Set(['CANCELADO', 'CANCELED']);
+
+const normalizeStatus = (status?: string | null) => String(status || '').trim().toUpperCase();
+
+const recomputeInventoryItemStatus = async (tx: Prisma.TransactionClient, inventoryItemId: string) => {
+  const item = await tx.inventoryItem.findUnique({ where: { id: inventoryItemId } });
+  if (!item) return;
+  const minQuantity = Number.isFinite(Number(item.minQuantity)) ? Number(item.minQuantity) : 0;
+  const nextStatus = item.quantity <= minQuantity ? 'LOW' : 'AVAILABLE';
+  if ((item.status || '').toUpperCase() !== nextStatus) {
+    await tx.inventoryItem.update({
+      where: { id: item.id },
+      data: { status: nextStatus },
+    });
+  }
+};
+
+const applyProcedureMaterialStock = async (
+  tx: Prisma.TransactionClient,
+  appointment: { branchId?: string | null; specialty?: string | null },
+  mode: 'consume' | 'revert',
+) => {
+  const procedureName = String(appointment.specialty || '').trim();
+  if (!procedureName) return;
+
+  const procedure = await tx.procedure.findFirst({
+    where: {
+      branchId: appointment.branchId || undefined,
+      name: { equals: procedureName, mode: 'insensitive' },
+    },
+  });
+  if (!procedure) return;
+
+  const materials = await tx.procedureMaterial.findMany({
+    where: { procedureId: procedure.id },
+  });
+  if (!materials.length) return;
+
+  if (mode === 'consume') {
+    for (const material of materials) {
+      const updated = await tx.inventoryItem.updateMany({
+        where: {
+          id: material.inventoryItemId,
+          quantity: { gte: material.quantity },
+        },
+        data: {
+          quantity: { decrement: material.quantity },
+        },
+      });
+
+      if (updated.count === 0) {
+        const item = await tx.inventoryItem.findUnique({ where: { id: material.inventoryItemId } });
+        const name = item?.name || material.inventoryItemId;
+        throw new Error(`Estoque insuficiente para material "${name}".`);
+      }
+
+      await recomputeInventoryItemStatus(tx, material.inventoryItemId);
+    }
+    return;
+  }
+
+  for (const material of materials) {
+    await tx.inventoryItem.update({
+      where: { id: material.inventoryItemId },
+      data: { quantity: { increment: material.quantity } },
+    });
+    await recomputeInventoryItemStatus(tx, material.inventoryItemId);
+  }
+};
 
 export default async function appointmentRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
@@ -210,15 +282,31 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       const existing = await prisma.appointment.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Appointment not found' });
 
-      const updateData = { ...data } as any;
-      if (updateData.authorizationStatus === 'AUTHORIZED' && !existing.authorizedAt) {
-        updateData.authorizedAt = new Date();
-      }
-      if (updateData.authorizationStatus && updateData.authorizationStatus !== 'AUTHORIZED') {
-        updateData.authorizedAt = null;
-      }
+      const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const updateData = { ...data } as any;
+        if (updateData.authorizationStatus === 'AUTHORIZED' && !existing.authorizedAt) {
+          updateData.authorizedAt = new Date();
+        }
+        if (updateData.authorizationStatus && updateData.authorizationStatus !== 'AUTHORIZED') {
+          updateData.authorizedAt = null;
+        }
 
-      const item = await prisma.appointment.update({ where: { id }, data: { ...updateData, branchId } });
+        const prevStatus = normalizeStatus(existing.status);
+        const nextStatus = normalizeStatus(updateData.status ?? existing.status);
+        const wasConsumed = Boolean(existing.inventoryConsumedAt);
+
+        if (COMPLETED_STATUSES.has(nextStatus) && !wasConsumed) {
+          await applyProcedureMaterialStock(tx, existing, 'consume');
+          updateData.inventoryConsumedAt = new Date();
+        }
+
+        if (CANCELED_STATUSES.has(nextStatus) && !CANCELED_STATUSES.has(prevStatus) && wasConsumed) {
+          await applyProcedureMaterialStock(tx, existing, 'revert');
+          updateData.inventoryConsumedAt = null;
+        }
+
+        return tx.appointment.update({ where: { id }, data: { ...updateData, branchId } });
+      });
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update appointment');
