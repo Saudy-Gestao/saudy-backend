@@ -78,6 +78,6 @@ app.register(dicomModule, { prefix: '/dicom' });
 app.register(proceduresModule, { prefix: '/procedures' });
 
 // start Orthanc poller (if configured)
-//startOrthancPoller();
+startOrthancPoller();
 
 export default app;
