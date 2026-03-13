@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from './lib/prisma';
 import { processDicomBuffer } from './processor';
-import fs from 'fs';
+import { getDicomStreamFromGcs } from './gcs';
 
 export default async function dicomRoutes(app: FastifyInstance) {
   // require authentication similar to other modules
@@ -90,11 +90,14 @@ export default async function dicomRoutes(app: FastifyInstance) {
     if (!record) {
       return reply.code(404).send({ error: 'DICOM not found' });
     }
-    if (!fs.existsSync(record.path)) {
-      return reply.code(404).send({ error: 'File not found on disk' });
+    // always stream from GCS bucket
+    let stream;
+    try {
+      stream = getDicomStreamFromGcs(record.path);
+    } catch (err: any) {
+      request.log.error({ err }, 'failed to open gcs stream');
+      return reply.code(404).send({ error: 'File not found in cloud storage' });
     }
-
-    const stream = fs.createReadStream(record.path);
     reply.header('Content-Type', 'application/dicom');
     return reply.send(stream);
   });
@@ -124,8 +127,14 @@ export default async function dicomRoutes(app: FastifyInstance) {
     const { fileId } = request.params as any;
     const f = await prisma.dicomFile.findUnique({ where: { id: fileId } });
     if (!f) return reply.code(404).send({ error: 'DICOM not found' });
-    if (!fs.existsSync(f.path)) return reply.code(404).send({ error: 'File not found on disk' });
-    const stream = fs.createReadStream(f.path);
+    // always stream from cloud
+    let stream;
+    try {
+      stream = getDicomStreamFromGcs(f.path);
+    } catch (err: any) {
+      request.log.error({ err }, 'failed to open gcs stream');
+      return reply.code(404).send({ error: 'File not found in cloud storage' });
+    }
     reply.header('Content-Type', 'application/dicom');
     return reply.send(stream);
   });

@@ -1,8 +1,8 @@
-import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import dicomParser from 'dicom-parser';
 import prisma from './lib/prisma';
+import { uploadDicomToGcs } from './gcs';
 
 export interface ParsedDicomData {
   studyInstanceUid: string;
@@ -13,14 +13,7 @@ export interface ParsedDicomData {
   studyDate: string;
 }
 
-const STORAGE_DIR = path.join(process.cwd(), 'storage', 'dicom');
-
-function ensureStorageDir() {
-  if (!fs.existsSync(STORAGE_DIR)) {
-    fs.mkdirSync(STORAGE_DIR, { recursive: true });
-  }
-}
-
+// images are stored exclusively in a GCS bucket; no local directory used
 export async function processDicomBuffer(
   buffer: Buffer,
   branchId: string | null,
@@ -40,13 +33,13 @@ export async function processDicomBuffer(
     ? `${studyDateRaw.slice(6, 8)}/${studyDateRaw.slice(4, 6)}/${studyDateRaw.slice(0, 4)}`
     : '';
 
-  ensureStorageDir();
-  const fileName = `${uuidv4()}.dcm`;
-  const fullPath = path.join(STORAGE_DIR, fileName);
-  await fs.promises.writeFile(fullPath, buffer);
+  // always upload to GCS
+  const objectName = `${uuidv4()}.dcm`;
+  await uploadDicomToGcs(objectName, buffer);
+  const fullPath = objectName; // store object name in database
 
   // compute url for retrieval (we serve through our own route)
-  const dicomUrl = `/dicom/${studyInstanceUid || fileName}/file`;
+  const dicomUrl = `/dicom/${studyInstanceUid || fullPath}/file`;
 
   // find existing worklist item
   let item = null;
