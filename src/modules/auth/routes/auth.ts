@@ -543,25 +543,23 @@ export default async function authRoutes(app: FastifyInstance) {
 
         if (adminUser) {
           const isAdminPasswordValid = await bcrypt.compare(password, adminUser.password);
-          if (!isAdminPasswordValid) {
-            return reply.code(401).send({ error: 'Invalid credentials' });
+          if (isAdminPasswordValid) {
+            if (!adminUser.emailVerifiedAt) {
+              return reply.code(403).send({ error: 'E-mail não verificado. Confirme o código enviado para continuar.' });
+            }
+
+            const token = app.jwt.sign({ id: adminUser.id, email: adminUser.email, admHubOnly: true });
+
+            return {
+              token,
+              user: {
+                id: adminUser.id,
+                name: adminUser.name,
+                email: adminUser.email,
+                isAdmHubOnly: true,
+              },
+            };
           }
-
-          if (!adminUser.emailVerifiedAt) {
-            return reply.code(403).send({ error: 'E-mail não verificado. Confirme o código enviado para continuar.' });
-          }
-
-          const token = app.jwt.sign({ id: adminUser.id, email: adminUser.email, admHubOnly: true });
-
-          return {
-            token,
-            user: {
-              id: adminUser.id,
-              name: adminUser.name,
-              email: adminUser.email,
-              isAdmHubOnly: true,
-            },
-          };
         }
       }
 
