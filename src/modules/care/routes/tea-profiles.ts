@@ -72,6 +72,13 @@ function formatDateToIso(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeStrategies(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
 async function resolveDoctorNameById(doctorId?: string, branchId?: string): Promise<string | null> {
   if (!doctorId) return null;
   const doctor = await prisma.doctor.findFirst({
@@ -571,6 +578,9 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
         therapeuticPlan: {
           select: { id: true, title: true },
         },
+        appointment: {
+          select: { id: true, date: true, time: true, specialty: true, status: true },
+        },
       },
       orderBy: { sessionDate: 'desc' },
     });
@@ -592,11 +602,20 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
         properties: {
           therapeuticPlanId: { type: 'string' },
           sessionDate: { type: 'string' },
+          appointmentId: { type: 'string' },
           professionalDoctorId: { type: 'string' },
           professional: { type: 'string' },
           interventionSummary: { type: 'string' },
           patientResponse: { type: 'string' },
           progressScore: { type: 'number' },
+          sessionGoal: { type: 'string' },
+          strategiesUsed: { type: 'array', items: { type: 'string' } },
+          engagementLevel: { type: 'string' },
+          regulationLevel: { type: 'string' },
+          behaviorLevel: { type: 'string' },
+          familyFeedback: { type: 'string' },
+          homePlan: { type: 'string' },
+          alerts: { type: 'string' },
           notes: { type: 'string' },
         },
       },
@@ -617,6 +636,33 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       if (!plan) return reply.code(400).send({ error: 'Therapeutic plan does not belong to this TEA profile' });
     }
 
+    if (!String(data?.sessionGoal || '').trim()) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { sessionGoal: 'Objetivo da sessão é obrigatório' } });
+    }
+    if (!String(data?.interventionSummary || '').trim()) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { interventionSummary: 'Intervenção realizada é obrigatória' } });
+    }
+    const parsedStrategies = normalizeStrategies(data?.strategiesUsed);
+    if (!parsedStrategies.length) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { strategiesUsed: 'Informe ao menos uma estratégia utilizada' } });
+    }
+
+    const appointmentId = data?.appointmentId ? String(data.appointmentId) : null;
+    if (appointmentId) {
+      const appointment = await prisma.appointment.findFirst({
+        where: {
+          id: appointmentId,
+          branchId,
+          patientId: teaProfile.patientId,
+          isActive: true,
+        },
+        select: { id: true },
+      });
+      if (!appointment) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { appointmentId: 'Agendamento inválido para este paciente' } });
+      }
+    }
+
     const professionalDoctorId = data.professionalDoctorId ? String(data.professionalDoctorId) : null;
     const resolvedProfessionalName = professionalDoctorId
       ? await resolveDoctorNameById(professionalDoctorId, branchId)
@@ -629,22 +675,160 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       data: {
         teaProfileId,
         therapeuticPlanId: data.therapeuticPlanId || null,
+        appointmentId,
         sessionDate: data.sessionDate ? new Date(data.sessionDate) : new Date(),
         professionalDoctorId,
         professional: resolvedProfessionalName || data.professional || null,
         interventionSummary: data.interventionSummary || null,
         patientResponse: data.patientResponse || null,
         progressScore: Number.isFinite(data.progressScore) ? Number(data.progressScore) : null,
+        sessionGoal: data.sessionGoal || null,
+        strategiesUsed: parsedStrategies,
+        engagementLevel: data.engagementLevel || null,
+        regulationLevel: data.regulationLevel || null,
+        behaviorLevel: data.behaviorLevel || null,
+        familyFeedback: data.familyFeedback || null,
+        homePlan: data.homePlan || null,
+        alerts: data.alerts || null,
+        createdBy: actor,
         notes: data.notes || null,
       },
       include: {
         therapeuticPlan: {
           select: { id: true, title: true },
         },
+        appointment: {
+          select: { id: true, date: true, time: true, specialty: true, status: true },
+        },
       },
     });
 
     return reply.code(201).send(item);
+  });
+
+  app.put('/:teaProfileId/evolutions/:evolutionId', {
+    schema: {
+      summary: 'Update evolution record',
+      tags: ['TeaProfiles'],
+      params: {
+        type: 'object',
+        properties: { teaProfileId: { type: 'string' }, evolutionId: { type: 'string' } },
+        required: ['teaProfileId', 'evolutionId'],
+      },
+      body: {
+        type: 'object',
+        properties: {
+          therapeuticPlanId: { type: 'string' },
+          sessionDate: { type: 'string' },
+          appointmentId: { type: 'string' },
+          professionalDoctorId: { type: 'string' },
+          professional: { type: 'string' },
+          sessionGoal: { type: 'string' },
+          strategiesUsed: { type: 'array', items: { type: 'string' } },
+          engagementLevel: { type: 'string' },
+          regulationLevel: { type: 'string' },
+          behaviorLevel: { type: 'string' },
+          interventionSummary: { type: 'string' },
+          patientResponse: { type: 'string' },
+          progressScore: { type: 'number' },
+          familyFeedback: { type: 'string' },
+          homePlan: { type: 'string' },
+          alerts: { type: 'string' },
+          notes: { type: 'string' },
+          editReason: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
+    const { teaProfileId, evolutionId } = request.params as { teaProfileId: string; evolutionId: string };
+    const data = request.body as any;
+    const actor = resolveActorFromRequest(request);
+
+    const teaProfile = await prisma.teaProfile.findFirst({
+      where: { id: teaProfileId, patient: { branchId } },
+      select: { id: true, patientId: true },
+    });
+    if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
+
+    const existing = await prisma.teaEvolution.findFirst({ where: { id: evolutionId, teaProfileId } });
+    if (!existing) return reply.code(404).send({ error: 'Evolution not found' });
+
+    if (!String(data?.editReason || '').trim()) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { editReason: 'Motivo da retificação é obrigatório' } });
+    }
+    if (!String(data?.sessionGoal || '').trim()) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { sessionGoal: 'Objetivo da sessão é obrigatório' } });
+    }
+    if (!String(data?.interventionSummary || '').trim()) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { interventionSummary: 'Intervenção realizada é obrigatória' } });
+    }
+    const parsedStrategies = normalizeStrategies(data?.strategiesUsed);
+    if (!parsedStrategies.length) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { strategiesUsed: 'Informe ao menos uma estratégia utilizada' } });
+    }
+
+    const appointmentId = data?.appointmentId ? String(data.appointmentId) : null;
+    if (appointmentId) {
+      const appointment = await prisma.appointment.findFirst({
+        where: {
+          id: appointmentId,
+          branchId,
+          patientId: teaProfile.patientId,
+          isActive: true,
+        },
+        select: { id: true },
+      });
+      if (!appointment) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { appointmentId: 'Agendamento inválido para este paciente' } });
+      }
+    }
+
+    if (data?.therapeuticPlanId) {
+      const plan = await prisma.teaTherapeuticPlan.findFirst({
+        where: { id: String(data.therapeuticPlanId), teaProfileId },
+      });
+      if (!plan) return reply.code(400).send({ error: 'Therapeutic plan does not belong to this TEA profile' });
+    }
+
+    const professionalDoctorId = data.professionalDoctorId ? String(data.professionalDoctorId) : null;
+    const resolvedProfessionalName = professionalDoctorId
+      ? await resolveDoctorNameById(professionalDoctorId, branchId)
+      : null;
+    if (professionalDoctorId && !resolvedProfessionalName) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'Médico inválido' } });
+    }
+
+    const updated = await prisma.teaEvolution.update({
+      where: { id: evolutionId },
+      data: {
+        therapeuticPlanId: data.therapeuticPlanId || null,
+        appointmentId,
+        sessionDate: data.sessionDate ? new Date(data.sessionDate) : existing.sessionDate,
+        professionalDoctorId,
+        professional: resolvedProfessionalName || data.professional || null,
+        interventionSummary: data.interventionSummary || null,
+        patientResponse: data.patientResponse || null,
+        progressScore: Number.isFinite(data.progressScore) ? Number(data.progressScore) : null,
+        sessionGoal: data.sessionGoal || null,
+        strategiesUsed: parsedStrategies,
+        engagementLevel: data.engagementLevel || null,
+        regulationLevel: data.regulationLevel || null,
+        behaviorLevel: data.behaviorLevel || null,
+        familyFeedback: data.familyFeedback || null,
+        homePlan: data.homePlan || null,
+        alerts: data.alerts || null,
+        notes: data.notes || null,
+        lastEditedBy: actor,
+        lastEditReason: String(data.editReason || '').trim() || null,
+      },
+      include: {
+        therapeuticPlan: { select: { id: true, title: true } },
+        appointment: { select: { id: true, date: true, time: true, specialty: true, status: true } },
+      },
+    });
+
+    return updated;
   });
 
   app.get('/:teaProfileId/reports', {

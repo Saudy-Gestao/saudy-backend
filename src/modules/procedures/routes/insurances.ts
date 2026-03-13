@@ -2,6 +2,22 @@ import { FastifyInstance } from "fastify";
 import prisma from "../lib/prisma";
 
 export default async function insuranceRoutes(app: FastifyInstance) {
+  const normalizeBranchId = (value: string | null | undefined) => (value || "").trim();
+  const normalizeSubInsurances = (value: unknown) => {
+    if (!Array.isArray(value)) return undefined;
+    return Array.from(
+      new Set(
+        value
+          .map((item) => String(item || "").trim())
+          .filter((item) => item.length > 0),
+      ),
+    );
+  };
+  const canAccessInsurance = (insuranceBranchId: string | null | undefined, loggedBranchId: string) => {
+    const normalized = normalizeBranchId(insuranceBranchId);
+    return normalized === "" || normalized === loggedBranchId;
+  };
+
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
     if (!userId) return null;
@@ -40,14 +56,28 @@ export default async function insuranceRoutes(app: FastifyInstance) {
 
     const { search, isActive, limit = 50, offset = 0 } = request.query as any;
 
-    const where: any = { branchId };
-    if (isActive !== undefined) where.isActive = isActive;
+    const where: any = {
+      AND: [
+        {
+          OR: [
+            { branchId },
+            { branchId: null },
+            { branchId: "" },
+          ],
+        },
+      ],
+    };
+    if (isActive !== undefined) {
+      where.AND.push({ isActive });
+    }
     if (search) {
-      where.OR = [
-        { name: { contains: search, mode: "insensitive" } },
-        { code: { contains: search, mode: "insensitive" } },
-        { description: { contains: search, mode: "insensitive" } },
-      ];
+      where.AND.push({
+        OR: [
+          { name: { contains: search, mode: "insensitive" } },
+          { code: { contains: search, mode: "insensitive" } },
+          { description: { contains: search, mode: "insensitive" } },
+        ],
+      });
     }
 
     const [items, total] = await Promise.all([
@@ -56,6 +86,12 @@ export default async function insuranceRoutes(app: FastifyInstance) {
         take: limit,
         skip: offset,
         orderBy: { createdAt: "desc" },
+        include: {
+          subInsurances: {
+            where: { isActive: true },
+            orderBy: { name: "asc" },
+          },
+        },
       }),
       prisma.insurance.count({ where }),
     ]);
@@ -74,8 +110,17 @@ export default async function insuranceRoutes(app: FastifyInstance) {
     if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
 
     const { id } = request.params as any;
-    const item = await prisma.insurance.findFirst({ where: { id, branchId } });
+    const item = await prisma.insurance.findUnique({
+      where: { id },
+      include: {
+        subInsurances: {
+          where: { isActive: true },
+          orderBy: { name: "asc" },
+        },
+      },
+    });
     if (!item) return reply.code(404).send({ error: "Insurance not found" });
+    if (!canAccessInsurance(item.branchId, branchId)) return reply.code(404).send({ error: "Insurance not found" });
     return item;
   });
 
@@ -91,6 +136,7 @@ export default async function insuranceRoutes(app: FastifyInstance) {
           code: { type: "string" },
           description: { type: "string" },
           isActive: { type: "boolean" },
+          subInsurances: { type: "array", items: { type: "string" } },
         },
       },
       response: {
@@ -103,15 +149,40 @@ export default async function insuranceRoutes(app: FastifyInstance) {
     if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
 
     const data = request.body as any;
+    const subInsurances = normalizeSubInsurances(data.subInsurances) || [];
     try {
-      const item = await prisma.insurance.create({
-        data: {
-          branchId,
-          name: data.name,
-          code: data.code || null,
-          description: data.description || null,
-          isActive: data.isActive ?? true,
-        },
+      const item = await prisma.$transaction(async (tx: any) => {
+        const created = await tx.insurance.create({
+          data: {
+            branchId,
+            name: data.name,
+            code: data.code || null,
+            description: data.description || null,
+            isActive: data.isActive ?? true,
+          },
+        });
+
+        if (subInsurances.length) {
+          await tx.subInsurance.createMany({
+            data: subInsurances.map((name) => ({
+              branchId,
+              insuranceId: created.id,
+              name,
+              isActive: true,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        return tx.insurance.findUnique({
+          where: { id: created.id },
+          include: {
+            subInsurances: {
+              where: { isActive: true },
+              orderBy: { name: "asc" },
+            },
+          },
+        });
       });
 
       return reply.code(201).send(item);
@@ -139,10 +210,12 @@ export default async function insuranceRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
     const data = request.body as any;
+    const subInsurances = normalizeSubInsurances(data.subInsurances);
 
     try {
-      const existing = await prisma.insurance.findFirst({ where: { id, branchId } });
+      const existing = await prisma.insurance.findUnique({ where: { id } });
       if (!existing) return reply.code(404).send({ error: "Insurance not found" });
+      if (!canAccessInsurance(existing.branchId, branchId)) return reply.code(404).send({ error: "Insurance not found" });
 
       const updateData: any = {};
       if (data.name !== undefined) updateData.name = data.name;
@@ -150,7 +223,38 @@ export default async function insuranceRoutes(app: FastifyInstance) {
       if (data.description !== undefined) updateData.description = data.description || null;
       if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
-      const item = await prisma.insurance.update({ where: { id }, data: { ...updateData, branchId } });
+      const persistedBranchId = normalizeBranchId(existing.branchId) !== "" ? String(existing.branchId) : branchId;
+      const item = await prisma.$transaction(async (tx: any) => {
+        await tx.insurance.update({
+          where: { id },
+          data: { ...updateData, branchId: persistedBranchId },
+        });
+
+        if (subInsurances !== undefined) {
+          await tx.subInsurance.deleteMany({ where: { insuranceId: id } });
+          if (subInsurances.length) {
+            await tx.subInsurance.createMany({
+              data: subInsurances.map((name) => ({
+                insuranceId: id,
+                branchId: persistedBranchId,
+                name,
+                isActive: true,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+
+        return tx.insurance.findUnique({
+          where: { id },
+          include: {
+            subInsurances: {
+              where: { isActive: true },
+              orderBy: { name: "asc" },
+            },
+          },
+        });
+      });
       return item;
     } catch (err: any) {
       request.log.error({ err }, "Failed to update insurance");
@@ -169,8 +273,9 @@ export default async function insuranceRoutes(app: FastifyInstance) {
     if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
 
     const { id } = request.params as any;
-    const existing = await prisma.insurance.findFirst({ where: { id, branchId } });
+    const existing = await prisma.insurance.findUnique({ where: { id } });
     if (!existing) return reply.code(404).send({ error: "Insurance not found" });
+    if (!canAccessInsurance(existing.branchId, branchId)) return reply.code(404).send({ error: "Insurance not found" });
     await prisma.insurance.delete({ where: { id } });
     return { message: "Deleted" };
   });

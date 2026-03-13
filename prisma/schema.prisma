@@ -73,6 +73,7 @@ model BranchSettings {
     branchId                        String  @unique
     branch                          Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
     requireFacialForReportDelivery  Boolean @default(false)
+    requireFacialForPatientRegistration Boolean @default(true)
 
     @@map("branch_settings")
 }
@@ -299,18 +300,32 @@ model TeaEvolution {
     teaProfile           TeaProfile          @relation(fields: [teaProfileId], references: [id], onDelete: Cascade)
     therapeuticPlanId    String?
     therapeuticPlan      TeaTherapeuticPlan? @relation(fields: [therapeuticPlanId], references: [id], onDelete: SetNull)
+    appointmentId        String?
+    appointment          Appointment?        @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
     sessionDate          DateTime            @default(now())
     professionalDoctorId String?
     professional         String?
     interventionSummary  String?             @db.Text
     patientResponse      String?             @db.Text
     progressScore        Int?
+    sessionGoal          String?             @db.Text
+    strategiesUsed       String[]            @default([])
+    engagementLevel      String?
+    regulationLevel      String?
+    behaviorLevel        String?
+    familyFeedback       String?             @db.Text
+    homePlan             String?             @db.Text
+    alerts               String?             @db.Text
+    createdBy            String?
+    lastEditedBy         String?
+    lastEditReason       String?             @db.Text
     notes                String?             @db.Text
     createdAt            DateTime            @default(now())
     updatedAt            DateTime            @updatedAt
 
     @@index([teaProfileId])
     @@index([therapeuticPlanId])
+    @@index([appointmentId])
     @@map("tea_evolutions")
 }
 
@@ -408,6 +423,7 @@ model InventoryItem {
     isActive    Boolean   @default(true)
     createdAt   DateTime  @default(now())
     updatedAt   DateTime  @updatedAt
+    procedureMaterials ProcedureMaterial[]
 
     @@map("inventory_items")
 }
@@ -575,11 +591,13 @@ model Appointment {
     authorizationStatus String @default("PENDING")
     authorizationNotes  String? @db.Text
     authorizedAt        DateTime?
+    inventoryConsumedAt DateTime?
     observations    String?
     totem           Int?
     createdAt       DateTime @default(now())
     updatedAt       DateTime @updatedAt
     isActive        Boolean  @default(true)
+    teaEvolutions   TeaEvolution[]
 
     @@index([branchId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
@@ -787,9 +805,50 @@ model Procedure {
     createdAt          DateTime          @default(now())
     updatedAt          DateTime          @updatedAt
     doctors            ProcedureDoctor[]
+    evolutionTemplates TeaEvolutionTemplate[]
+    materials          ProcedureMaterial[]
 
     @@index([branchId])
     @@map("procedures")
+}
+
+model ProcedureMaterial {
+    id              String        @id @default(uuid())
+    procedureId     String
+    inventoryItemId String
+    quantity        Int           @default(1)
+    createdAt       DateTime      @default(now())
+    updatedAt       DateTime      @updatedAt
+
+    procedure     Procedure     @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+    inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+    @@unique([procedureId, inventoryItemId])
+    @@index([procedureId])
+    @@index([inventoryItemId])
+    @@map("procedure_materials")
+}
+
+model TeaEvolutionTemplate {
+    id                  String   @id @default(uuid())
+    branchId            String
+    procedureId         String
+    procedure           Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+    name                String?
+    sessionGoal         String?  @db.Text
+    interventionSummary String?  @db.Text
+    patientResponse     String?  @db.Text
+    familyFeedback      String?  @db.Text
+    homePlan            String?  @db.Text
+    strategiesUsed      String[] @default([])
+    isActive            Boolean  @default(true)
+    createdAt           DateTime @default(now())
+    updatedAt           DateTime @updatedAt
+
+    @@unique([branchId, procedureId])
+    @@index([branchId])
+    @@index([procedureId])
+    @@map("tea_evolution_templates")
 }
 
 model ProcedureDoctor {
@@ -814,9 +873,26 @@ model Insurance {
     isActive    Boolean  @default(true)
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt
+    subInsurances SubInsurance[]
 
     @@index([branchId])
     @@map("insurances")
+}
+
+model SubInsurance {
+    id          String   @id @default(uuid())
+    branchId    String?
+    insuranceId String
+    insurance   Insurance @relation(fields: [insuranceId], references: [id], onDelete: Cascade)
+    name        String
+    isActive    Boolean  @default(true)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    @@unique([insuranceId, name])
+    @@index([branchId])
+    @@index([insuranceId])
+    @@map("sub_insurances")
 }
 
 model FacialLog {
