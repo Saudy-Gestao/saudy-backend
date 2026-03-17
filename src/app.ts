@@ -68,7 +68,7 @@ app.get('/', async () => ({
   message: 'Saudy Monolith API',
   docs: '/docs',
   modules: ['/auth', '/accounts', '/admin', '/care', '/dicom', '/procedures'],
-}));
+}));  
 
 app.register(authModule, { prefix: '/auth' });
 app.register(accountsModule, { prefix: '/accounts' });
