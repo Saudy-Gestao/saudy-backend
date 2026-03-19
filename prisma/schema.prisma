@@ -115,6 +115,8 @@ model User {
     id                 String              @id @default(uuid())
     sectorId           String
     sector             Sector              @relation(fields: [sectorId], references: [id])
+    doctorId           String?
+    doctor             Doctor?             @relation(fields: [doctorId], references: [id], onDelete: SetNull)
     accesses           Access[]
     name               String
     birthDate          DateTime
@@ -125,6 +127,7 @@ model User {
     address            String
     passwordResetCodes PasswordResetCode[]
 
+    @@index([doctorId])
     @@map("users")
 }
 
@@ -192,6 +195,7 @@ model Doctor {
     updatedAt         DateTime @updatedAt
 
     medicalRecords MedicalRecord[]
+    users          User[]
 
     @@unique([crm, crmState])
     @@index([branchId])
@@ -521,10 +525,20 @@ model PreAttendance {
     queue              String?
     queueType          String?
     agenda             String?
+    doctorId           String?
+    doctorName         String?
+    checklistStartedAt DateTime?
+    checklistCompletedAt DateTime?
+    finalFacialValidationAt DateTime?
+    finalFacialValidationStatus String?
+    finalFacialValidationTrust Float?
+    finalFacialValidationName String?
+    finalFacialValidationCpf String?
     createdAt          DateTime @default(now())
     updatedAt          DateTime @updatedAt
     isActive           Boolean  @default(true)
 
+    @@index([doctorId])
     @@index([branchId])
     @@map("pre_attendances")
 }
@@ -608,6 +622,8 @@ model Appointment {
 model Consultation {
     id               String   @id @default(uuid())
     branchId         String?
+    doctorId         String?
+    doctorName       String?
     patientName      String?
     convenio         String?
     convenioStatus   String?
@@ -636,6 +652,7 @@ model Consultation {
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
 
+    @@index([doctorId])
     @@index([branchId])
     @@map("consultations")
 }

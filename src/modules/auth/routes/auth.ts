@@ -578,6 +578,15 @@ export default async function authRoutes(app: FastifyInstance) {
             modules: true,
           },
         },
+        doctor: {
+          select: {
+            id: true,
+            name: true,
+            specialty: true,
+            specialties: true,
+            branchId: true,
+          },
+        },
       } as const;
 
       const candidateUsers: any[] = [];
@@ -635,6 +644,7 @@ export default async function authRoutes(app: FastifyInstance) {
         email: authenticatedUser.email,
         companyId: authenticatedUser.sector?.branch?.companyId || null,
         branchId: authenticatedUser.sector?.branch?.id || null,
+        doctorId: authenticatedUser.doctor?.id || null,
       });
 
       return {
@@ -648,8 +658,10 @@ export default async function authRoutes(app: FastifyInstance) {
           birthDate: authenticatedUser.birthDate,
           companyId: authenticatedUser.sector?.branch?.companyId || null,
           branchId: authenticatedUser.sector?.branch?.id || null,
+          doctorId: authenticatedUser.doctor?.id || null,
           branch: authenticatedUser.sector?.branch || null,
           sector: authenticatedUser.sector,
+          doctor: authenticatedUser.doctor || null,
           accesses: authenticatedUser.accesses,
         },
       };

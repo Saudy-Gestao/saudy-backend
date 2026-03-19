@@ -185,6 +185,7 @@ export const swaggerComponents = {
       properties: {
         id: { type: 'string' },
         sectorId: { type: 'string' },
+        doctorId: { type: 'string', nullable: true },
         name: { type: 'string' },
         birthDate: { type: 'string', format: 'date' },
         email: { type: 'string' },
@@ -193,6 +194,15 @@ export const swaggerComponents = {
         address: { type: 'string' },
         accesses: { type: 'array', items: { $ref: '#/components/schemas/Access' } },
         sector: { $ref: '#/components/schemas/Sector' },
+        doctor: {
+          type: 'object',
+          nullable: true,
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            specialty: { type: 'string' },
+          },
+        },
       },
       example: {
         id: 'user-123',
@@ -211,6 +221,7 @@ export const swaggerComponents = {
       properties: {
         branchId: { type: 'string' },
         sectorId: { type: 'string' },
+        doctorId: { type: 'string', nullable: true },
         accessIds: { type: 'array', items: { type: 'string' } },
         name: { type: 'string' },
         birthDate: { type: 'string', format: 'date' },
@@ -237,6 +248,7 @@ export const swaggerComponents = {
       properties: {
         branchId: { type: 'string' },
         sectorId: { type: 'string' },
+        doctorId: { type: 'string', nullable: true },
         accessIds: { type: 'array', items: { type: 'string' } },
         name: { type: 'string' },
         birthDate: { type: 'string', format: 'date' },
@@ -428,6 +440,7 @@ export const ajvSchemas: Record<string, any> = {
     properties: {
       id: { type: 'string' },
       sectorId: { type: 'string' },
+      doctorId: { type: 'string', nullable: true },
       name: { type: 'string' },
       birthDate: { type: 'string', format: 'date' },
       email: { type: 'string' },
@@ -436,6 +449,15 @@ export const ajvSchemas: Record<string, any> = {
       address: { type: 'string' },
       accesses: { type: 'array', items: { $ref: 'Access#' } },
       sector: { $ref: 'Sector#' },
+      doctor: {
+        type: 'object',
+        nullable: true,
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          specialty: { type: 'string' },
+        },
+      },
     },
   },
   UserCreate: {
@@ -443,6 +465,7 @@ export const ajvSchemas: Record<string, any> = {
     properties: {
       branchId: { type: 'string' },
       sectorId: { type: 'string' },
+      doctorId: { type: 'string', nullable: true },
       accessIds: { type: 'array', items: { type: 'string' } },
       name: { type: 'string' },
       birthDate: { type: 'string', format: 'date' },
@@ -458,6 +481,7 @@ export const ajvSchemas: Record<string, any> = {
     properties: {
       branchId: { type: 'string' },
       sectorId: { type: 'string' },
+      doctorId: { type: 'string', nullable: true },
       accessIds: { type: 'array', items: { type: 'string' } },
       name: { type: 'string' },
       birthDate: { type: 'string', format: 'date' },
