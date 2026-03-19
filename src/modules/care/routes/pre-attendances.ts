@@ -118,6 +118,8 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
           queue: { type: 'string' },
           queueType: { type: 'string' },
           agenda: { type: 'string' },
+          doctorId: { type: 'string' },
+          doctorName: { type: 'string' },
         },
       },
       response: {
@@ -168,6 +170,8 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
         queue: data.queue || null,
         queueType: data.queueType || null,
         agenda: data.agenda || null,
+        doctorId: data.doctorId || null,
+        doctorName: data.doctorName || null,
       } });
 
       return reply.code(201).send(item);
