@@ -15,6 +15,13 @@ export async function uploadDicomToGcs(objectName: string, buffer: Buffer) {
   // Optionally make public or set ACL here
 }
 
+export async function downloadDicomFromGcs(objectName: string): Promise<Buffer> {
+  if (!bucket) throw new Error('GCS bucket not configured');
+  const file = bucket.file(objectName);
+  const [buffer] = await file.download();
+  return buffer;
+}
+
 export function getDicomStreamFromGcs(objectName: string) {
   if (!bucket) throw new Error('GCS bucket not configured');
   return bucket.file(objectName).createReadStream();
