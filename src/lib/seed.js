@@ -30,6 +30,13 @@ const modules = [
     category: 'fluxo-paciente',
   },
   {
+    name: 'pre-agendamento',
+    label: 'Pré-agendamento',
+    description: 'Pré-autorização e documentos antes da recepção',
+    icon: 'CalendarCheck',
+    category: 'fluxo-paciente',
+  },
+  {
     name: 'anamnese',
     label: 'Anamnese',
     description: 'Histórico médico',

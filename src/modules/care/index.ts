@@ -14,9 +14,11 @@ import teaPreReservationsRoutes from './routes/tea-pre-reservations';
 import convenioAuthorizationRoutes from './routes/convenio-authorizations';
 import teaEvolutionTemplateRoutes from './routes/tea-evolution-templates';
 import publicCheckInRoutes from './routes/public-check-in';
+import preSchedulingRoutes from './routes/pre-scheduling';
 
 export default async function careModule(app: FastifyInstance) {
   app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
+  app.register(preSchedulingRoutes, { prefix: '/pre-scheduling' });
   app.register(preAttendanceRoutes, { prefix: '/pre-attendances' });
   app.register(appointmentRoutes, { prefix: '/appointments' });
   app.register(consultationRoutes, { prefix: '/consultations' });
