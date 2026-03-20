@@ -17,6 +17,12 @@ const toStatus = (value: unknown): AuthorizationStatus => {
   return 'PENDING';
 };
 
+const sanitizeAuthorizationNotes = (value?: string | null) => (
+  String(value || '')
+    .replace(/\[AUTH_DENIED\]\s*/g, '')
+    .trim()
+);
+
 export default async function convenioAuthorizationRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -185,7 +191,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
         time: String(first?.suggestedTime || ''),
         status: groupedStatus,
         rawStatus: entries.map((item: any) => String(item?.status || '')).join(','),
-        notes: entries.find((item: any) => item?.notes)?.notes || null,
+        notes: sanitizeAuthorizationNotes(entries.find((item: any) => item?.notes)?.notes),
         updatedAt: first?.updatedAt,
         sessionsCount: entries.length,
       };

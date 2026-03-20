@@ -133,14 +133,22 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           search: { type: 'string' },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
+          hasActivePit: { type: 'boolean' },
         },
       },
     },
   }, async (request) => {
     const branchId = (request as any).branchId as string;
-    const { search, limit = 50, offset = 0 } = request.query as any;
+    const { search, limit = 50, offset = 0, hasActivePit } = request.query as any;
 
     const where: any = { isActive: true, patient: { branchId } };
+    if (hasActivePit === true) {
+      where.pit = {
+        is: {
+          status: { not: 'Inativo' },
+        },
+      };
+    }
     if (search) {
       where.patient = {
         branchId,
@@ -973,7 +981,10 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     const pit = await prisma.teaPit.findFirst({
-      where: { teaProfileId },
+      where: {
+        teaProfileId,
+        status: { not: 'Inativo' },
+      },
       include: {
         therapies: {
           where: { isActive: true },
@@ -983,6 +994,87 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     });
 
     return { item: pit || null };
+  });
+
+  app.delete('/:teaProfileId/pit', {
+    schema: {
+      summary: 'Deactivate PIT for TEA profile',
+      tags: ['TeaProfiles'],
+      params: {
+        type: 'object',
+        properties: { teaProfileId: { type: 'string' } },
+        required: ['teaProfileId'],
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = (request as any).branchId as string;
+    const { teaProfileId } = request.params as { teaProfileId: string };
+    const actor = resolveActorFromRequest(request);
+
+    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
+    if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
+
+    const existingPit = await prisma.teaPit.findFirst({
+      where: {
+        teaProfileId,
+        status: { not: 'Inativo' },
+      },
+      include: {
+        therapies: {
+          where: { isActive: true },
+          select: { id: true },
+        },
+      },
+    });
+
+    if (!existingPit) {
+      return reply.code(404).send({ error: 'PIT not found' });
+    }
+
+    const therapyIds = (existingPit.therapies || []).map((therapy: any) => String(therapy.id)).filter(Boolean);
+
+    await prisma.$transaction(async (tx: any) => {
+      await tx.teaPit.update({
+        where: { id: existingPit.id },
+        data: { status: 'Inativo' },
+      });
+
+      if (therapyIds.length > 0) {
+        await tx.teaPitTherapy.updateMany({
+          where: { id: { in: therapyIds } },
+          data: { isActive: false },
+        });
+
+        const preReservationsToCancel = await tx.teaPreReservation.findMany({
+          where: {
+            pitTherapyId: { in: therapyIds },
+            status: { in: [...OPEN_PRE_RESERVATION_STATUSES] as any },
+          },
+          select: { id: true },
+        });
+
+        if (preReservationsToCancel.length > 0) {
+          const idsToCancel = preReservationsToCancel.map((item: any) => String(item.id));
+
+          await tx.teaPreReservation.updateMany({
+            where: { id: { in: idsToCancel } },
+            data: { status: 'CANCELED' },
+          });
+
+          await tx.teaPreReservationTimeline.createMany({
+            data: idsToCancel.map((preReservationId: string) => ({
+              preReservationId,
+              eventType: 'PIT_DEACTIVATED',
+              eventLabel: 'Pré-reserva cancelada por exclusão do PIT',
+              actor,
+              payload: { source: 'pit-delete' },
+            })),
+          });
+        }
+      }
+    });
+
+    return { message: 'PIT excluído com sucesso' };
   });
 
   app.post('/:teaProfileId/pit/upsert', {

@@ -60,13 +60,6 @@ const modules = [
     category: 'suporte-clinico',
   },
   {
-    name: 'envelopamento',
-    label: 'Envelopamento',
-    description: 'Preparação de documentos',
-    icon: 'Mail',
-    category: 'suporte-clinico',
-  },
-  {
     name: 'documentos',
     label: 'Documentos',
     description: 'Gestão documental',
@@ -167,6 +160,12 @@ async function main() {
       create: module,
     });
     console.log(`  ✓ ${module.label}`);
+  }
+
+  // Remove módulo legado de Envelopamento para não aparecer em permissões/acessos.
+  const removedCount = await prisma.module.deleteMany({ where: { name: 'envelopamento' } });
+  if (removedCount.count > 0) {
+    console.log('  ✓ Envelopamento removido do catálogo de módulos');
   }
 
   console.log('✅ Seed completed!');
