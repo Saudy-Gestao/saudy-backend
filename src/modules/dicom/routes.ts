@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import prisma from './lib/prisma';
 import { processDicomBuffer } from './processor';
 import { getDicomStreamFromGcs } from './gcs';
+import { ensureOrthancStudyFromGcs } from './orthanc';
 
 export default async function dicomRoutes(app: FastifyInstance) {
   // require authentication similar to other modules
@@ -66,6 +67,53 @@ export default async function dicomRoutes(app: FastifyInstance) {
     }
 
     return { items };
+  });
+
+  // ensure a DICOM study exists in Orthanc (cache hit or rehydrate from GCS)
+  app.post('/:key/ensure-orthanc', async (request, reply) => {
+    const { key } = request.params as any;
+
+    const item = await prisma.reportWorklistItem.findFirst({
+      where: {
+        OR: [{ id: key }, { dicomStudyUid: key }],
+      },
+      select: {
+        id: true,
+        dicomStudyUid: true,
+      },
+    });
+
+    if (!item) {
+      return reply.code(404).send({ error: 'Report worklist item not found' });
+    }
+
+    let studyInstanceUid = item.dicomStudyUid || null;
+    if (!studyInstanceUid) {
+      const file = await prisma.dicomFile.findFirst({
+        where: { worklistItemId: item.id },
+        orderBy: { createdAt: 'asc' },
+        select: { studyUid: true },
+      });
+      studyInstanceUid = file?.studyUid || null;
+    }
+
+    if (!studyInstanceUid) {
+      return reply.code(400).send({ error: 'This exam has no DICOM StudyInstanceUID' });
+    }
+
+    try {
+      const result = await ensureOrthancStudyFromGcs(studyInstanceUid);
+      return {
+        key,
+        ...result,
+      };
+    } catch (err: any) {
+      request.log.error({ err, key, studyInstanceUid }, 'failed to ensure Orthanc study');
+      return reply.code(500).send({
+        error: 'Failed to prepare study in Orthanc',
+        details: err?.message || 'Unknown error',
+      });
+    }
   });
 
   // serve the stored file by worklist id or by study uid
