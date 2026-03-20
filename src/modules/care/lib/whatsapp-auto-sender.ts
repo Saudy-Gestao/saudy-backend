@@ -1,5 +1,5 @@
 import prisma from './prisma';
-import TwilioService from './twilio';
+import GupshupService from './gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from './whatsapp-message-builder';
 
 type WhatsAppMessageType = 'APPOINTMENT_CREATED' | 'APPOINTMENT_CONFIRMATION' | 'APPOINTMENT_REMINDER' | 'APPOINTMENT_CANCELED';
@@ -116,14 +116,14 @@ export class WhatsAppAutoSender {
         },
       });
 
-      // Enviar mensagem via Twilio
-      const twilio = new TwilioService({
-        accountSid: whatsappConfig.accountSid,
-        authToken: whatsappConfig.authToken,
-        fromNumber: whatsappConfig.fromNumber,
+      // Enviar mensagem via Gupshup
+      const gupshup = new GupshupService({
+        apiKey: whatsappConfig.accountSid, // Usando o mesmo campo para API Key
+        appName: whatsappConfig.authToken, // Usando o mesmo campo para App Name
+        sourceNumber: whatsappConfig.fromNumber,
       });
 
-      const result = await twilio.sendTextMessage({
+      const result = await gupshup.sendTextMessage({
         to: patientPhone,
         message,
       });
@@ -134,7 +134,7 @@ export class WhatsAppAutoSender {
           where: { id: messageLog.id },
           data: {
             status: 'SENT',
-            twilioSid: result.messageId,
+            providerMessageId: result.messageId,
             sentAt: new Date(),
           },
         });

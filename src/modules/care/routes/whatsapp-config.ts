@@ -41,7 +41,8 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     const config = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
     
-    // Não retornar Auth Token completo por segurança
+    // Não retornar authToken (App Name Gupshup) completo por segurança
+    // Nota: accountSid = API Key, authToken = App Name, fromNumber = Source Number (Gupshup)
     if (config) {
       return {
         ...config,
@@ -60,9 +61,9 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         type: 'object',
         required: ['accountSid', 'fromNumber'],
         properties: {
-          accountSid: { type: 'string' },
-          authToken: { type: 'string' },
-          fromNumber: { type: 'string' },
+          accountSid: { type: 'string', description: 'Gupshup API Key' },
+          authToken: { type: 'string', description: 'Gupshup App Name' },
+          fromNumber: { type: 'string', description: 'Gupshup Source Number (ex: 5511999999999)' },
           isActive: { type: 'boolean' },
         },
       },
@@ -83,11 +84,11 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       where: { branchId },
     });
 
-    // Se authToken não foi enviado e já existe config, manter o anterior
+    // Se authToken (App Name Gupshup) não foi enviado e já existe config, manter o anterior
     const authTokenToUse = data.authToken || existingConfig?.authToken;
 
     if (!authTokenToUse) {
-      return reply.code(400).send({ error: 'Auth Token é obrigatório para primeira configuração' });
+      return reply.code(400).send({ error: 'App Name (authToken) é obrigatório para primeira configuração' });
     }
 
     const config = await prisma.whatsAppConfig.upsert({

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-import TwilioService from '../lib/twilio';
+import GupshupService from '../lib/gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from '../lib/whatsapp-message-builder';
 
 type WhatsAppMessageType = 'APPOINTMENT_CREATED' | 'APPOINTMENT_CONFIRMATION' | 'APPOINTMENT_REMINDER' | 'APPOINTMENT_CANCELED';
@@ -139,14 +139,14 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         },
       });
 
-      // Enviar mensagem via Twilio
-      const twilio = new TwilioService({
-        accountSid: whatsappConfig.accountSid,
-        authToken: whatsappConfig.authToken,
-        fromNumber: whatsappConfig.fromNumber,
+      // Enviar mensagem via Gupshup
+      const gupshup = new GupshupService({
+        apiKey: whatsappConfig.accountSid,
+        appName: whatsappConfig.authToken,
+        sourceNumber: whatsappConfig.fromNumber,
       });
 
-      const result = await twilio.sendTextMessage({
+      const result = await gupshup.sendTextMessage({
         to: patientPhone,
         message,
       });
@@ -157,7 +157,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
           where: { id: messageLog.id },
           data: {
             status: 'SENT',
-            gupshupId: result.messageId,
+            providerMessageId: result.messageId,
             sentAt: new Date(),
           },
         });
@@ -313,13 +313,13 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'WhatsApp está desativado para esta filial' });
       }
 
-      const twilio = new TwilioService({
-        accountSid: whatsappConfig.accountSid,
-        authToken: whatsappConfig.authToken,
-        fromNumber: whatsappConfig.fromNumber,
+      const gupshup = new GupshupService({
+        apiKey: whatsappConfig.accountSid,
+        appName: whatsappConfig.authToken,
+        sourceNumber: whatsappConfig.fromNumber,
       });
 
-      const result = await twilio.sendTextMessage({
+      const result = await gupshup.sendTextMessage({
         to: data.phone,
         message: data.message,
       });
@@ -334,20 +334,22 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         let hint = '';
         
         // Adicionar dicas baseadas no erro
-        if (result.error?.includes('63007') || result.error?.includes('could not find a Channel')) {
-          hint = ' | Dica: Verifique se o número do Sandbox está correto no Console do Twilio e se o sandbox está ativo.';
-        } else if (result.error?.includes('21610') || result.error?.includes('is not a valid phone number')) {
+        if (result.error?.includes('401')) {
+          hint = ' | Dica: Verifique se a API Key está correta.';
+        } else if (result.error?.includes('403') || result.error?.includes('Invalid source')) {
+          hint = ' | Dica: Verifique se o número de origem está aprovado no Gupshup.';
+        } else if (result.error?.includes('Invalid destination') || result.error?.includes('phone number')) {
           hint = ' | Dica: Verifique o formato do número de telefone.';
-        } else if (result.error?.includes('Authenticate')) {
-          hint = ' | Dica: Verifique se o Account SID e Auth Token estão corretos.';
+        } else if (result.error?.includes('RATE_LIMIT')) {
+          hint = ' | Limite de envio atingido. Tente novamente mais tarde.';
         }
         
         return reply.code(400).send({
           error: errorMessage + hint,
-          twilioError: result.error,
+          gupshupError: result.error,
           config: {
             fromNumber: whatsappConfig.fromNumber,
-            accountSid: whatsappConfig.accountSid,
+            apiKey: whatsappConfig.accountSid ? '***' + whatsappConfig.accountSid.slice(-4) : null,
           },
         });
       }
