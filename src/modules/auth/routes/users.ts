@@ -25,6 +25,15 @@ export default async function userRoutes(app: FastifyInstance) {
         modules: true,
       },
     },
+    doctor: {
+      select: {
+        id: true,
+        name: true,
+        specialty: true,
+        specialties: true,
+        branchId: true,
+      },
+    },
   };
 
   const getLoggedContext = async (requestUserId: string) => {
@@ -85,10 +94,11 @@ export default async function userRoutes(app: FastifyInstance) {
       // response: { 200: { $ref: 'User#' } },
     },
   }, async (request, reply) => {
-    const { branchId, sectorId, accessIds, name, birthDate, email, password, phone, address } = request.body as {
+    const { branchId, sectorId, accessIds, doctorId, name, birthDate, email, password, phone, address } = request.body as {
       branchId: string;
       sectorId: string;
       accessIds: string[];
+      doctorId?: string;
       name: string;
       birthDate: string;
       email: string;
@@ -134,10 +144,27 @@ export default async function userRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Não é permitido vincular usuário a uma sala' });
     }
 
+    let validatedDoctorId: string | undefined = undefined;
+    if (doctorId) {
+      const doctor = await prisma.doctor.findFirst({
+        where: {
+          id: doctorId,
+          branchId,
+        },
+      });
+
+      if (!doctor) {
+        return reply.code(400).send({ error: 'Médico inválido para a filial informada' });
+      }
+
+      validatedDoctorId = doctor.id;
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
       data: {
         sectorId,
+        doctorId: validatedDoctorId,
         accesses: { connect: accessIds.map((id) => ({ id })) },
         name,
         birthDate: new Date(birthDate),
@@ -197,10 +224,11 @@ export default async function userRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { branchId, sectorId, accessIds, name, birthDate, email, password, phone, address } = request.body as {
+    const { branchId, sectorId, accessIds, doctorId, name, birthDate, email, password, phone, address } = request.body as {
       branchId?: string;
       sectorId?: string;
       accessIds?: string[];
+      doctorId?: string | null;
       name?: string;
       birthDate?: string;
       email?: string;
@@ -263,8 +291,29 @@ export default async function userRoutes(app: FastifyInstance) {
         validatedSectorId = sector.id;
       }
 
+      const targetBranchId = branchId || existingUser.sector?.branch?.id;
+
+      let validatedDoctorId: string | null | undefined = undefined;
+      if (doctorId === null || doctorId === '') {
+        validatedDoctorId = null;
+      } else if (doctorId) {
+        const doctor = await prisma.doctor.findFirst({
+          where: {
+            id: doctorId,
+            branchId: targetBranchId,
+          },
+        });
+
+        if (!doctor) {
+          return reply.code(400).send({ error: 'Médico inválido para a filial informada' });
+        }
+
+        validatedDoctorId = doctor.id;
+      }
+
       const data: any = {
         sectorId: validatedSectorId,
+        doctorId: validatedDoctorId,
         accesses: accessIds ? { set: accessIds.map((accessId) => ({ id: accessId })) } : undefined,
         name,
         birthDate: birthDate ? new Date(birthDate) : undefined,
