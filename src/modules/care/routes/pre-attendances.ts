@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
+import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
 const normalizeStatusKey = (value?: string | null) => String(value || '')
   .normalize('NFD')
@@ -179,17 +181,26 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const data = request.body as any;
+    const normalizedCpf = normalizeCpf(data?.cpf);
+    const normalizedEmail = normalizeEmail(data?.email);
+    if (!isValidCpf(normalizedCpf)) {
+      return reply.code(400).send({ error: 'CPF inválido' });
+    }
+    if (data?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) {
+      return reply.code(400).send({ error: 'Email inválido' });
+    }
+
     try {
       const item = await prisma.preAttendance.create({ data: {
         branchId,
         fullName: data.fullName,
-        cpf: data.cpf,
+        cpf: normalizedCpf,
         patientId: data.patientId || null,
         appointmentId: data.appointmentId || null,
         birthDate: data.birthDate || null,
         gender: data.gender || null,
         phone: data.phone || null,
-        email: data.email || null,
+        email: normalizedEmail || null,
         address: data.address || null,
         convenio: data.convenio || null,
         convenioType: data.convenioType || null,
@@ -247,6 +258,7 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
     const data = request.body as any;
+    const normalizedEmail = normalizeEmail(data?.email);
     const userId = String((request.user as any)?.id || '');
 
     try {
@@ -261,8 +273,13 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
         });
       }
 
+      if (data?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) {
+        return reply.code(400).send({ error: 'Email inválido' });
+      }
+
       const nextData = {
         ...data,
+        ...(data?.email !== undefined ? { email: normalizedEmail || null } : {}),
         branchId,
         ...(hasStatusChange
           ? { notes: appendStatusAudit(data.notes ?? existing.notes, existing.status, data.status, userId || null) }

@@ -545,9 +545,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const procedureName = therapy.therapyType || latest?.procedureName || null;
       const professionalName = therapy.professional || latest?.professionalName || null;
 
-      const effectiveStatus = treatAsPendingScheduling
-        ? 'PENDING_SCHEDULING'
-        : (hasAnyReservation ? String(latest.status) : 'PENDING_SCHEDULING');
+      const effectiveStatus = hasWeeklyFrequencyDelta
+        ? 'PENDING_AUTHORIZATION'
+        : (treatAsPendingScheduling
+          ? 'PENDING_SCHEDULING'
+          : (hasAnyReservation ? String(latest.status) : 'PENDING_SCHEDULING'));
       const expiryMetadata = getExpiryMetadata(treatAsPendingScheduling ? null : (latest?.expiresAt || null), effectiveStatus);
 
       return {

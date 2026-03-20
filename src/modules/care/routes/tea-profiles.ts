@@ -1,9 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-
-function normalizeCpf(value?: string): string {
-  return String(value || '').replace(/\D/g, '');
-}
+import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
+import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
 function toGender(value?: string): 'MALE' | 'FEMALE' | 'OTHER' | undefined {
   if (!value) return undefined;
@@ -287,13 +285,15 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (!patient) {
       const cpf = normalizeCpf(patientPayload?.cpf);
       const gender = toGender(patientPayload?.gender);
+      const normalizedEmail = normalizeEmail(patientPayload?.email);
 
       const fieldErrors: Record<string, string> = {};
       if (!patientPayload?.name) fieldErrors.name = 'Nome é obrigatório para criar paciente base';
-      if (!cpf || cpf.length !== 11) fieldErrors.cpf = 'CPF deve conter 11 dígitos';
+      if (!isValidCpf(cpf)) fieldErrors.cpf = 'CPF inválido';
       if (!patientPayload?.birthDate || Number.isNaN(new Date(patientPayload.birthDate).getTime())) fieldErrors.birthDate = 'Data de nascimento válida é obrigatória';
       if (!gender) fieldErrors.gender = 'Gênero é obrigatório (MALE/FEMALE/OTHER)';
       if (!patientPayload?.cellphone) fieldErrors.cellphone = 'Celular é obrigatório';
+      if (patientPayload?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
 
       if (Object.keys(fieldErrors).length > 0) {
         return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
@@ -307,7 +307,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           birthDate: new Date(patientPayload.birthDate),
           gender,
           cellphone: String(patientPayload.cellphone),
-          email: patientPayload.email || null,
+          email: normalizedEmail || null,
           phone: patientPayload.phone || null,
           healthInsuranceName: patientPayload.healthInsuranceName || null,
           healthInsuranceNumber: patientPayload.healthInsuranceNumber || null,
@@ -317,11 +317,17 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       });
     } else {
       const updateData: any = {};
+      const normalizedEmail = normalizeEmail(patientPayload?.email);
       if (patientPayload?.name) updateData.name = String(patientPayload.name);
       if (patientPayload?.birthDate && !Number.isNaN(new Date(patientPayload.birthDate).getTime())) updateData.birthDate = new Date(patientPayload.birthDate);
       if (patientPayload?.gender && toGender(patientPayload.gender)) updateData.gender = toGender(patientPayload.gender);
       if (patientPayload?.cellphone) updateData.cellphone = String(patientPayload.cellphone);
-      if (patientPayload?.email !== undefined) updateData.email = patientPayload.email || null;
+      if (patientPayload?.email !== undefined) {
+        if (normalizedEmail && !isValidEmail(normalizedEmail)) {
+          return reply.code(400).send({ error: 'Validation failed', fields: { email: 'Email inválido' } });
+        }
+        updateData.email = normalizedEmail || null;
+      }
       if (patientPayload?.phone !== undefined) updateData.phone = patientPayload.phone || null;
       if (patientPayload?.healthInsuranceName !== undefined) {
         updateData.healthInsuranceName = patientPayload.healthInsuranceName || null;
