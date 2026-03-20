@@ -23,7 +23,8 @@ if (!jwtSecret) {
 app.register(cors, {
   origin: process.env.CORS_ORIGIN === 'true' ? true : (process.env.CORS_ORIGIN || true),
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With', 'Access-Control-Request-Headers', 'Access-Control-Request-Method'],
+  exposedHeaders: ['Access-Control-Allow-Origin', 'Access-Control-Allow-Headers', 'Access-Control-Allow-Methods'],
   credentials: true,
 });
 
