@@ -98,7 +98,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
         where: {
           professionalDoctorId: doctorIds.length > 0 ? { in: doctorIds } : undefined,
           OR: [
-            { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+            { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {
               AND: [
                 { status: 'CANCELED' as any },
@@ -290,7 +290,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
           pitTherapyId: id,
           professionalDoctorId: doctorIds.length > 0 ? { in: doctorIds } : undefined,
           OR: [
-            { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+            { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {
               AND: [
                 { status: 'CANCELED' as any },
@@ -322,7 +322,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
           where: {
             pitTherapyId: id,
             OR: [
-              { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+              { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
               {
                 AND: [
                   { status: 'CANCELED' as any },
