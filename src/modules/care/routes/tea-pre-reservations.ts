@@ -885,7 +885,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .filter(Boolean) as string[]
       : [];
 
-    const candidateDateStrings: string[] = [];
+    const preferredCandidateDateStrings: string[] = [];
+    const fallbackCandidateDateStrings: string[] = [];
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const monday = startOfWeekMonday(now);
@@ -899,14 +900,24 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
       const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[date.getDay()];
 
-      const matchesPreferredWeekday = preferredWeekdays.length === 0 || preferredWeekdays.includes(weekdayToken);
       const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
       const matchesDoctorWorkingDays = doctorWindows.length > 0;
 
-      if (!matchesPreferredWeekday || !matchesDoctorWorkingDays) continue;
+      if (!matchesDoctorWorkingDays) continue;
 
-      candidateDateStrings.push(formatDateAsIso(date));
+      const isoDate = formatDateAsIso(date);
+      const isPreferredWeekday = preferredWeekdays.length > 0 && preferredWeekdays.includes(weekdayToken);
+
+      if (isPreferredWeekday) {
+        preferredCandidateDateStrings.push(isoDate);
+      } else {
+        fallbackCandidateDateStrings.push(isoDate);
+      }
     }
+
+    const candidateDateStrings = preferredWeekdays.length > 0
+      ? [...preferredCandidateDateStrings, ...fallbackCandidateDateStrings]
+      : [...fallbackCandidateDateStrings];
 
     if (candidateDateStrings.length === 0) {
       return {
@@ -919,6 +930,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         },
       };
     }
+
+    const candidateDateRange = [...candidateDateStrings].sort((a, b) => a.localeCompare(b));
+    const rangeStart = candidateDateRange[0];
+    const rangeEnd = candidateDateRange[candidateDateRange.length - 1];
 
     const [doctorAppointments, patientAppointments, doctorReservations, patientReservations] = await Promise.all([
       prisma.appointment.findMany({
@@ -942,8 +957,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           professionalDoctorId: doctor.id,
           status: { in: [...OPEN_STATUSES] as any },
           suggestedDate: {
-            gte: new Date(`${candidateDateStrings[0]}T00:00:00`),
-            lte: new Date(`${candidateDateStrings[candidateDateStrings.length - 1]}T23:59:59`),
+            gte: new Date(`${rangeStart}T00:00:00`),
+            lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
         select: { suggestedDate: true, suggestedTime: true },
@@ -953,8 +968,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           patientId: therapy.pit.teaProfile.patient.id,
           status: { in: [...OPEN_STATUSES] as any },
           suggestedDate: {
-            gte: new Date(`${candidateDateStrings[0]}T00:00:00`),
-            lte: new Date(`${candidateDateStrings[candidateDateStrings.length - 1]}T23:59:59`),
+            gte: new Date(`${rangeStart}T00:00:00`),
+            lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
         select: { suggestedDate: true, suggestedTime: true },
@@ -1190,7 +1205,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const matchesPreferredWeekday = preferredWeekdays.length === 0 || preferredWeekdays.includes(weekdayToken);
       const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
       const matchesDoctorWorkingDays = doctorWindows.length > 0;
-      const isDayEnabled = matchesPreferredWeekday && matchesDoctorWorkingDays;
+      const isDayEnabled = matchesDoctorWorkingDays;
       const daySlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
         fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
       )));
@@ -1198,6 +1213,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       return {
         date,
         weekday: weekdayToken,
+        isPreferredWeekday: matchesPreferredWeekday,
         enabled: isDayEnabled,
         slots: daySlots.map((time) => ({
           time,
