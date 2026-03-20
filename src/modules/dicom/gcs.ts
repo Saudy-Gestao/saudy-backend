@@ -1,8 +1,8 @@
 import { Storage } from '@google-cloud/storage';
 
-const bucketName = process.env.GOOGLE_STORAGE_BUCKET;
+const bucketName = process.env.GOOGLE_STORAGE_BUCKET_DICOM || process.env.GOOGLE_STORAGE_BUCKET;
 if (!bucketName) {
-  console.warn('GCS bucket not configured (GOOGLE_STORAGE_BUCKET)');
+  console.warn('GCS bucket not configured (GOOGLE_STORAGE_BUCKET_DICOM or GOOGLE_STORAGE_BUCKET)');
 }
 
 const storage = new Storage();
@@ -13,6 +13,13 @@ export async function uploadDicomToGcs(objectName: string, buffer: Buffer) {
   const file = bucket.file(objectName);
   await file.save(buffer, { resumable: false });
   // Optionally make public or set ACL here
+}
+
+export async function downloadDicomFromGcs(objectName: string): Promise<Buffer> {
+  if (!bucket) throw new Error('GCS bucket not configured');
+  const file = bucket.file(objectName);
+  const [buffer] = await file.download();
+  return buffer;
 }
 
 export function getDicomStreamFromGcs(objectName: string) {

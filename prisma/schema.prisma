@@ -42,6 +42,16 @@ enum TeaPreReservationStatus {
     CANCELED
 }
 
+enum PreSchedulingStatus {
+    PENDING
+    PRE_AUTHORIZED
+    LINK_SENT
+    WAITING_PATIENT_DOCUMENTS
+    DOCUMENTS_RECEIVED
+    COMPLETED
+    CANCELED
+}
+
 model Company {
     id        String   @id @default(uuid())
     cnpj      String   @unique
@@ -115,6 +125,8 @@ model User {
     id                 String              @id @default(uuid())
     sectorId           String
     sector             Sector              @relation(fields: [sectorId], references: [id])
+    doctorId           String?
+    doctor             Doctor?             @relation(fields: [doctorId], references: [id], onDelete: SetNull)
     accesses           Access[]
     name               String
     birthDate          DateTime
@@ -125,6 +137,7 @@ model User {
     address            String
     passwordResetCodes PasswordResetCode[]
 
+    @@index([doctorId])
     @@map("users")
 }
 
@@ -187,10 +200,12 @@ model Doctor {
     workingDays       String[] @default([])
     workingHoursStart String?
     workingHoursEnd   String?
+    workingSchedules  String   @default("[]") @db.Text
     createdAt         DateTime @default(now())
     updatedAt         DateTime @updatedAt
 
     medicalRecords MedicalRecord[]
+    users          User[]
 
     @@unique([crm, crmState])
     @@index([branchId])
@@ -489,6 +504,7 @@ model PreAttendance {
     fullName           String
     cpf                String
     patientId          String?
+    appointmentId      String?
     birthDate          String?
     gender             String?
     phone              String?
@@ -520,11 +536,22 @@ model PreAttendance {
     queue              String?
     queueType          String?
     agenda             String?
+    doctorId           String?
+    doctorName         String?
+    checklistStartedAt DateTime?
+    checklistCompletedAt DateTime?
+    finalFacialValidationAt DateTime?
+    finalFacialValidationStatus String?
+    finalFacialValidationTrust Float?
+    finalFacialValidationName String?
+    finalFacialValidationCpf String?
     createdAt          DateTime @default(now())
     updatedAt          DateTime @updatedAt
     isActive           Boolean  @default(true)
 
+    @@index([doctorId])
     @@index([branchId])
+    @@index([appointmentId])
     @@map("pre_attendances")
 }
 
@@ -594,6 +621,7 @@ model Appointment {
     inventoryConsumedAt DateTime?
     observations    String?
     totem           Int?
+    preSchedulingFlow PreSchedulingFlow?
     createdAt       DateTime @default(now())
     updatedAt       DateTime @updatedAt
     isActive        Boolean  @default(true)
@@ -604,9 +632,63 @@ model Appointment {
     @@map("appointments")
 }
 
+model PreSchedulingFlow {
+    id                    String              @id @default(uuid())
+    branchId              String?
+    appointmentId         String              @unique
+    appointment           Appointment         @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+    patientId             String?
+    patientName           String?
+    patientCpf            String?
+    patientPhone          String?
+    status                PreSchedulingStatus @default(PENDING)
+    preAuthorizedAt       DateTime?
+    guideNumber           String?
+    preAuthorizationNotes String?             @db.Text
+    publicToken           String              @unique
+    linkSentAt            DateTime?
+    linkSentByUserId      String?
+    linkMockMessage       String?             @db.Text
+    patientVerifiedAt     DateTime?
+    patientVerifiedCpf    String?
+    patientVerifiedName   String?
+    patientVerifiedTrust  Float?
+    patientSubmittedAt    DateTime?
+    completedAt           DateTime?
+    createdAt             DateTime            @default(now())
+    updatedAt             DateTime            @updatedAt
+    documents             PreSchedulingDocument[]
+
+    @@index([branchId])
+    @@index([status])
+    @@index([patientCpf])
+    @@map("pre_scheduling_flows")
+}
+
+model PreSchedulingDocument {
+    id                String           @id @default(uuid())
+    flowId            String
+    flow              PreSchedulingFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+    documentType      String
+    fileName          String
+    mimeType          String?
+    sizeBytes         Int?
+    gcsObjectName     String
+    uploadedByType    String           @default("PATIENT")
+    uploadedByCpf     String?
+    uploadedAt        DateTime         @default(now())
+    createdAt         DateTime         @default(now())
+
+    @@index([flowId, uploadedAt])
+    @@map("pre_scheduling_documents")
+}
+
 model Consultation {
     id               String   @id @default(uuid())
     branchId         String?
+    doctorId         String?
+    appointmentId    String?
+    doctorName       String?
     patientName      String?
     convenio         String?
     convenioStatus   String?
@@ -635,7 +717,9 @@ model Consultation {
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
 
+    @@index([doctorId])
     @@index([branchId])
+    @@index([appointmentId])
     @@map("consultations")
 }
 

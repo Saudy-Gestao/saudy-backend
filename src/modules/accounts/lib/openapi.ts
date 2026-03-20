@@ -34,6 +34,18 @@ export const swaggerComponents = {
         workingDays: { type: 'array', items: { type: 'string' } },
         workingHoursStart: { type: 'string', nullable: true },
         workingHoursEnd: { type: 'string', nullable: true },
+        workingSchedules: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              days: { type: 'array', items: { type: 'string' } },
+              hoursStart: { type: 'string' },
+              hoursEnd: { type: 'string' },
+            },
+            required: ['days', 'hoursStart', 'hoursEnd'],
+          },
+        },
         createdAt: { type: 'string', format: 'date-time' },
         updatedAt: { type: 'string', format: 'date-time' },
       },
@@ -55,6 +67,10 @@ export const swaggerComponents = {
         workingDays: ['MONDAY', 'WEDNESDAY', 'FRIDAY'],
         workingHoursStart: '08:00',
         workingHoursEnd: '18:00',
+        workingSchedules: [
+          { days: ['MONDAY', 'WEDNESDAY'], hoursStart: '08:00', hoursEnd: '12:00' },
+          { days: ['THURSDAY', 'FRIDAY'], hoursStart: '14:00', hoursEnd: '18:00' },
+        ],
         createdAt: '2026-01-30T12:00:00Z',
         updatedAt: '2026-01-30T12:00:00Z',
       },
@@ -87,6 +103,18 @@ export const swaggerComponents = {
         workingDays: { type: 'array', items: { type: 'string' } },
         workingHoursStart: { type: 'string' },
         workingHoursEnd: { type: 'string' },
+        workingSchedules: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              days: { type: 'array', items: { type: 'string' } },
+              hoursStart: { type: 'string' },
+              hoursEnd: { type: 'string' },
+            },
+            required: ['days', 'hoursStart', 'hoursEnd'],
+          },
+        },
       },
       required: ['crm', 'crmState', 'name', 'email', 'cellphone', 'birthDate', 'gender', 'cpf', 'specialty'],
       example: {
@@ -104,6 +132,10 @@ export const swaggerComponents = {
         workingDays: ['MONDAY', 'WEDNESDAY', 'FRIDAY'],
         workingHoursStart: '08:00',
         workingHoursEnd: '18:00',
+        workingSchedules: [
+          { days: ['MONDAY', 'WEDNESDAY'], hoursStart: '08:00', hoursEnd: '12:00' },
+          { days: ['THURSDAY', 'FRIDAY'], hoursStart: '14:00', hoursEnd: '18:00' },
+        ],
       },
     },
     DoctorUpdate: {
@@ -129,11 +161,27 @@ export const swaggerComponents = {
         workingDays: { type: 'array', items: { type: 'string' } },
         workingHoursStart: { type: 'string' },
         workingHoursEnd: { type: 'string' },
+        workingSchedules: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              days: { type: 'array', items: { type: 'string' } },
+              hoursStart: { type: 'string' },
+              hoursEnd: { type: 'string' },
+            },
+            required: ['days', 'hoursStart', 'hoursEnd'],
+          },
+        },
       },
       example: {
         specialty: 'Cardiologia Intervencionista',
         consultationFee: 400.00,
         workingDays: ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'],
+        workingSchedules: [
+          { days: ['MONDAY', 'WEDNESDAY'], hoursStart: '08:00', hoursEnd: '12:00' },
+          { days: ['THURSDAY', 'FRIDAY'], hoursStart: '14:00', hoursEnd: '18:00' },
+        ],
       },
     },
 

@@ -8,7 +8,6 @@ import reportTemplateRoutes from './routes/report-templates';
 import reportPhraseRoutes from './routes/report-phrases';
 import reportConfigRoutes from './routes/report-config';
 import reportAddendumRoutes from './routes/report-addendums';
-import envelopmentRoutes from './routes/envelopments';
 import documentRoutes from './routes/documents';
 import teaProfilesRoutes from './routes/tea-profiles';
 import teaPreReservationsRoutes from './routes/tea-pre-reservations';
@@ -17,8 +16,12 @@ import teaEvolutionTemplateRoutes from './routes/tea-evolution-templates';
 import whatsappConfigRoutes from './routes/whatsapp-config';
 import whatsappMessagesRoutes from './routes/whatsapp-messages';
 import whatsappJobsRoutes from './routes/whatsapp-jobs';
+import publicCheckInRoutes from './routes/public-check-in';
+import preSchedulingRoutes from './routes/pre-scheduling';
 
 export default async function careModule(app: FastifyInstance) {
+  app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
+  app.register(preSchedulingRoutes, { prefix: '/pre-scheduling' });
   app.register(preAttendanceRoutes, { prefix: '/pre-attendances' });
   app.register(appointmentRoutes, { prefix: '/appointments' });
   app.register(consultationRoutes, { prefix: '/consultations' });
@@ -28,7 +31,6 @@ export default async function careModule(app: FastifyInstance) {
   app.register(reportPhraseRoutes, { prefix: '/report-phrases' });
   app.register(reportConfigRoutes, { prefix: '/report-config' });
   app.register(reportAddendumRoutes, { prefix: '/report-addendums' });
-  app.register(envelopmentRoutes, { prefix: '/envelopments' });
   app.register(documentRoutes, { prefix: '/documents' });
   app.register(teaProfilesRoutes, { prefix: '/tea-profiles' });
   app.register(teaPreReservationsRoutes, { prefix: '/tea-pre-reservations' });

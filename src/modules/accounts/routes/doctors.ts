@@ -79,7 +79,10 @@ export default async function doctorRoutes(app: FastifyInstance) {
       orderBy: { name: 'asc' },
     });
 
-    return doctors;
+    return doctors.map((doctor: any) => ({
+       ...doctor,
+       workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
+     }));
   });
 
   // Get doctor by ID
@@ -118,7 +121,10 @@ export default async function doctorRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Doctor not found' });
     }
 
-    return doctor;
+    return {
+      ...doctor,
+      workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
+    };
   });
 
   // Get doctor by CRM
@@ -158,7 +164,10 @@ export default async function doctorRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Doctor not found' });
     }
 
-    return doctor;
+     return {
+       ...doctor,
+       workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
+     };
   });
 
   // Create new doctor
@@ -222,6 +231,21 @@ export default async function doctorRoutes(app: FastifyInstance) {
     }
 
     try {
+      let workingSchedulesData = null;
+      // If workingSchedules is provided, use it; otherwise try to construct from legacy fields
+      if (Array.isArray(data.workingSchedules) && data.workingSchedules.length > 0) {
+        workingSchedulesData = JSON.stringify(data.workingSchedules);
+      } else if (Array.isArray(data.workingDays) && data.workingDays.length > 0 && data.workingHoursStart && data.workingHoursEnd) {
+        // Backward compatibility: construct from legacy fields
+        workingSchedulesData = JSON.stringify([
+          {
+            days: data.workingDays,
+            hoursStart: data.workingHoursStart,
+            hoursEnd: data.workingHoursEnd,
+          }
+        ]);
+      }
+
       const doctor = await prisma.doctor.create({
         data: {
           ...data,
@@ -229,10 +253,17 @@ export default async function doctorRoutes(app: FastifyInstance) {
           birthDate: new Date(data.birthDate),
           specialties: data.specialties || [],
           workingDays: data.workingDays || [],
+          workingSchedules: workingSchedulesData || '[]',
         },
       });
 
-      return reply.code(201).send(doctor);
+      // Parse workingSchedules back to object for response
+      const doctorResponse = {
+        ...doctor,
+        workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
+      };
+
+      return reply.code(201).send(doctorResponse);
     } catch (error: any) {
       request.log.error({ err: error }, 'Failed to create doctor');
       if (error.code === 'P2002') {
@@ -256,7 +287,8 @@ export default async function doctorRoutes(app: FastifyInstance) {
         },
         required: ['id'],
       },
-      body: { $ref: 'DoctorUpdate#' },
+      // Accept full payload from edit form (including workingSchedules and legacy fields)
+      body: { type: 'object', additionalProperties: true },
       response: {
         200: { $ref: 'Doctor#' },
         400: {
@@ -311,15 +343,39 @@ export default async function doctorRoutes(app: FastifyInstance) {
     }
 
     try {
+      let workingSchedulesData = undefined;
+      // If workingSchedules is provided, use it; otherwise try to construct from legacy fields
+      if (Array.isArray(data.workingSchedules) && data.workingSchedules.length > 0) {
+        workingSchedulesData = JSON.stringify(data.workingSchedules);
+      } else if (Array.isArray(data.workingDays) && data.workingDays.length > 0 && data.workingHoursStart && data.workingHoursEnd) {
+        // Backward compatibility: construct from legacy fields
+        workingSchedulesData = JSON.stringify([
+          {
+            days: data.workingDays,
+            hoursStart: data.workingHoursStart,
+            hoursEnd: data.workingHoursEnd,
+          }
+        ]);
+      }
+
+      const updateData: any = { ...data, branchId };
+      delete updateData.workingSchedules;
+      if (workingSchedulesData !== undefined) {
+        updateData.workingSchedules = workingSchedulesData;
+      } else if (Array.isArray(data.workingSchedules) && data.workingSchedules.length === 0) {
+        updateData.workingSchedules = '[]';
+      }
+
       const doctor = await prisma.doctor.update({
         where: { id },
-        data: {
-          ...data,
-          branchId,
-        },
+        data: updateData,
       });
 
-      return doctor;
+      // Parse workingSchedules back to object for response
+      return {
+        ...doctor,
+        workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
+      };
     } catch (error: any) {
       if (error.code === 'P2002') {
         const field = error.meta?.target?.[0];

@@ -30,6 +30,13 @@ const modules = [
     category: 'fluxo-paciente',
   },
   {
+    name: 'pre-agendamento',
+    label: 'Pré-agendamento',
+    description: 'Pré-autorização e documentos antes da recepção',
+    icon: 'CalendarCheck',
+    category: 'fluxo-paciente',
+  },
+  {
     name: 'anamnese',
     label: 'Anamnese',
     description: 'Histórico médico',
@@ -57,13 +64,6 @@ const modules = [
     label: 'Laudo',
     description: 'Emissão de laudos',
     icon: 'FileText',
-    category: 'suporte-clinico',
-  },
-  {
-    name: 'envelopamento',
-    label: 'Envelopamento',
-    description: 'Preparação de documentos',
-    icon: 'Mail',
     category: 'suporte-clinico',
   },
   {
@@ -174,6 +174,12 @@ async function main() {
       create: module,
     });
     console.log(`  ✓ ${module.label}`);
+  }
+
+  // Remove módulo legado de Envelopamento para não aparecer em permissões/acessos.
+  const removedCount = await prisma.module.deleteMany({ where: { name: 'envelopamento' } });
+  if (removedCount.count > 0) {
+    console.log('  ✓ Envelopamento removido do catálogo de módulos');
   }
 
   console.log('✅ Seed completed!');
