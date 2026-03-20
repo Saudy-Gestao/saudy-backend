@@ -606,6 +606,22 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const weeklyCounts = Array.from(slotsByWeek.values()).map((weekSlots) => weekSlots.size).filter((count) => count > 0);
       const activeWeeklyReference = resolveModeWeeklyCount(weeklyCounts);
       const weeklyTarget = Math.max(1, Number(therapy?.weeklyFrequency) || 1);
+      const openReservations = therapyReservations.filter((item: any) => OPEN_STATUSES.includes(String(item?.status || '') as any));
+      const openSlotsByWeek = new Map<string, Set<string>>();
+      openReservations.forEach((item: any) => {
+        const dateIso = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : null;
+        const time = item?.suggestedTime ? String(item.suggestedTime) : null;
+        if (!dateIso || !time) return;
+        const weekStart = startOfWeekMonday(new Date(`${dateIso}T00:00:00`));
+        const weekKey = formatDateAsIso(weekStart);
+        if (!openSlotsByWeek.has(weekKey)) openSlotsByWeek.set(weekKey, new Set<string>());
+        openSlotsByWeek.get(weekKey)!.add(`${dateIso}#${time}`);
+      });
+      const openWeeklyCounts = Array.from(openSlotsByWeek.values())
+        .map((weekSlots) => weekSlots.size)
+        .filter((count) => count > 0);
+      const openWeeklyReference = resolveModeWeeklyCount(openWeeklyCounts);
+      const isWeeklyReservationComplete = openWeeklyReference >= weeklyTarget;
       const lastConvertedAt = convertedReservations.reduce((latestDate: Date | null, item: any) => {
         const convertedAt = item?.convertedAt ? new Date(item.convertedAt) : null;
         if (!convertedAt || Number.isNaN(convertedAt.getTime())) return latestDate;
@@ -663,6 +679,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           weekdays: therapy.preferredWeekdays,
           shift: therapy.preferredShift,
         },
+        weeklyReservationCount: openWeeklyReference,
+        isWeeklyReservationComplete,
         slotSuggestion: {
           suggestedDate: !treatAsPendingScheduling && hasAnyReservation ? latest?.suggestedDate : null,
           suggestedTime: !treatAsPendingScheduling && hasAnyReservation ? latest?.suggestedTime : null,
@@ -1692,7 +1710,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           }
         }
 
-        const baseDate = new Date(suggestedDate);
+        // Parse date-only values in local time to avoid timezone day shift.
+        const baseDate = new Date(`${suggestedDate}T00:00:00`);
         if (Number.isNaN(baseDate.getTime())) continue;
 
         const maxIterations = recurring ? (hasUntilDate ? 120 : recurrenceWeeks) : 1;
