@@ -6,7 +6,7 @@ const ORTHANC_URL = process.env.ORTHANC_URL || 'http://localhost:8042';
 const ORTHANC_AUTH = process.env.ORTHANC_AUTH || 'orthanc:orthanc';
 const POLL_INTERVAL = Number(process.env.ORTHANC_POLL_INTERVAL || '10000'); // ms
 const RETENTION_DAYS = Number(process.env.ORTHANC_RETENTION_DAYS || '15');
-const CLEANUP_INTERVAL = Number(process.env.ORTHANC_CLEANUP_INTERVAL || String(60 * 60 * 1000)); // 1h
+const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; // 1 day (fixed)
 const LOG_SKIPPED_INSTANCES = process.env.ORTHANC_LOG_SKIPPED_INSTANCES === 'true';
 
 function authHeader() {
