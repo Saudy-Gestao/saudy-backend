@@ -1,8 +1,8 @@
 import { Storage } from '@google-cloud/storage';
 
-const bucketName = process.env.GOOGLE_STORAGE_BUCKET;
+const bucketName = process.env.GOOGLE_STORAGE_BUCKET_DICOM || process.env.GOOGLE_STORAGE_BUCKET;
 if (!bucketName) {
-  console.warn('GCS bucket not configured (GOOGLE_STORAGE_BUCKET)');
+  console.warn('GCS bucket not configured (GOOGLE_STORAGE_BUCKET_DICOM or GOOGLE_STORAGE_BUCKET)');
 }
 
 const storage = new Storage();
