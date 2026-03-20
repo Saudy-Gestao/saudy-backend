@@ -4,7 +4,9 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
-const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_PRE_SCHEDULING || process.env.GOOGLE_STORAGE_BUCKET;
+const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
+  || process.env.GOOGLE_STORAGE_BUCKET_PRE_SCHEDULING
+  || process.env.GOOGLE_STORAGE_BUCKET;
 
 const storage = GCS_BUCKET ? new Storage() : null;
 const bucket = (storage && GCS_BUCKET) ? storage.bucket(GCS_BUCKET) : null;
@@ -421,7 +423,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     if (!document) return reply.code(404).send({ error: 'Documento não encontrado' });
 
     if (!bucket) {
-      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_PRE_SCHEDULING ou GOOGLE_STORAGE_BUCKET)' });
+      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
     }
 
     const file = bucket.file(document.gcsObjectName);
@@ -641,7 +643,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     if (!flow) return reply.code(404).send({ error: 'Link inválido ou expirado' });
 
     if (!bucket) {
-      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_PRE_SCHEDULING ou GOOGLE_STORAGE_BUCKET)' });
+      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
     }
 
     const normalizedCpf = normalizeCpf(payload.cpf || flow.patientVerifiedCpf || '');

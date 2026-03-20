@@ -425,6 +425,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       })
       : [];
 
+    const authorizationAttachments = (therapyIds.length > 0 || removedTherapyIds.length > 0)
+      ? await prisma.convenioAuthorizationAttachment.findMany({
+        where: {
+          branchId: (request as any).branchId as string,
+          isActive: true,
+          sourceType: 'TEA',
+          pitTherapyId: { in: [...therapyIds, ...removedTherapyIds] },
+        },
+        orderBy: { uploadedAt: 'desc' },
+      })
+      : [];
+    const attachmentsByTherapyId = new Map<string, any[]>();
+    authorizationAttachments.forEach((item: any) => {
+      const key = String(item?.pitTherapyId || '');
+      if (!key) return;
+      if (!attachmentsByTherapyId.has(key)) attachmentsByTherapyId.set(key, []);
+      attachmentsByTherapyId.get(key)!.push(item);
+    });
+
     const reservationsByTherapyId: Record<string, any[]> = {};
     for (const reservation of reservations) {
       const key = String(reservation.pitTherapyId || '');
@@ -544,6 +563,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const patientCpf = therapy.pit?.teaProfile?.patient?.cpf || null;
       const procedureName = therapy.therapyType || latest?.procedureName || null;
       const professionalName = therapy.professional || latest?.professionalName || null;
+      const authorizationDocs = attachmentsByTherapyId.get(String(therapy.id)) || [];
 
       const effectiveStatus = treatAsPendingScheduling
         ? 'PENDING_SCHEDULING'
@@ -580,6 +600,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           suggestedTime: !treatAsPendingScheduling && hasAnyReservation ? latest?.suggestedTime : null,
         },
         notes: !treatAsPendingScheduling && hasAnyReservation ? latest?.notes : null,
+        authorizationAttachmentsCount: authorizationDocs.length,
+        authorizationAttachments: authorizationDocs.slice(0, 5).map((doc: any) => ({
+          id: doc.id,
+          fileName: doc.fileName,
+          uploadedAt: doc.uploadedAt,
+        })),
         source: hasWeeklyFrequencyDelta
           ? 'PIT_PENDING_FREQUENCY_CHANGE'
           : (!treatAsPendingScheduling && hasAnyReservation ? 'PRE_RESERVATION' : 'PIT_PENDING'),
@@ -622,6 +648,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
         const patientName = therapy.pit?.teaProfile?.patient?.name || 'Paciente sem nome';
         const patientCpf = therapy.pit?.teaProfile?.patient?.cpf || null;
+        const authorizationDocs = attachmentsByTherapyId.get(String(therapy.id)) || [];
 
         return {
           preReservationId: null,
@@ -653,6 +680,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             suggestedTime: null,
           },
           notes: null,
+          authorizationAttachmentsCount: authorizationDocs.length,
+          authorizationAttachments: authorizationDocs.slice(0, 5).map((doc: any) => ({
+            id: doc.id,
+            fileName: doc.fileName,
+            uploadedAt: doc.uploadedAt,
+          })),
           source: 'PIT_REMOVED_THERAPY',
           removedFromPit: true,
           requiresUnschedule: true,
@@ -2606,6 +2639,40 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       prisma.teaPreReservation.count({ where }),
     ]);
 
-    return { items, total };
+    const pitTherapyIds = Array.from(new Set(items.map((item: any) => String(item?.pitTherapyId || '')).filter(Boolean)));
+    const attachments = pitTherapyIds.length > 0
+      ? await prisma.convenioAuthorizationAttachment.findMany({
+        where: {
+          branchId: (request as any).branchId as string,
+          isActive: true,
+          sourceType: 'TEA',
+          pitTherapyId: { in: pitTherapyIds },
+        },
+        orderBy: { uploadedAt: 'desc' },
+      })
+      : [];
+
+    const attachmentsByTherapyId = new Map<string, any[]>();
+    attachments.forEach((item: any) => {
+      const key = String(item?.pitTherapyId || '');
+      if (!key) return;
+      if (!attachmentsByTherapyId.has(key)) attachmentsByTherapyId.set(key, []);
+      attachmentsByTherapyId.get(key)!.push(item);
+    });
+
+    const itemsWithAttachments = items.map((item: any) => {
+      const docs = attachmentsByTherapyId.get(String(item?.pitTherapyId || '')) || [];
+      return {
+        ...item,
+        authorizationAttachmentsCount: docs.length,
+        authorizationAttachments: docs.slice(0, 5).map((doc: any) => ({
+          id: doc.id,
+          fileName: doc.fileName,
+          uploadedAt: doc.uploadedAt,
+        })),
+      };
+    });
+
+    return { items: itemsWithAttachments, total };
   });
 }
