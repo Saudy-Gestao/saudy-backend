@@ -30,6 +30,8 @@ export default async function reportRoutes(app: FastifyInstance) {
           search: { type: 'string' },
           status: { type: 'string' },
           exam: { type: 'string' },
+          worklistItemId: { type: 'string' },
+          appointmentId: { type: 'string' },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
@@ -39,11 +41,13 @@ export default async function reportRoutes(app: FastifyInstance) {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
-    const { search, status, exam, limit = 50, offset = 0 } = request.query as any;
+    const { search, status, exam, worklistItemId, appointmentId, limit = 50, offset = 0 } = request.query as any;
 
     const where: any = { isActive: true, branchId };
     if (status) where.status = status;
     if (exam) where.exam = exam;
+    if (worklistItemId) where.worklistItemId = worklistItemId;
+    if (appointmentId) where.appointmentId = appointmentId;
     if (search) {
       where.OR = [
         { patientName: { contains: search, mode: 'insensitive' } },
@@ -53,7 +57,16 @@ export default async function reportRoutes(app: FastifyInstance) {
     }
 
     const [items, total] = await Promise.all([
-      prisma.report.findMany({ where, take: limit, skip: offset, orderBy: { createdAt: 'desc' } }),
+      prisma.report.findMany({
+        where,
+        take: limit,
+        skip: offset,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          appointment: { select: { id: true, patientName: true, patientCpf: true, specialty: true, date: true, time: true, doctorName: true, convenio: true } },
+          worklistItem: { select: { id: true, dicomStudyUid: true, dicomUrl: true, dicomReceivedAt: true } },
+        },
+      }),
       prisma.report.count({ where }),
     ]);
 
@@ -71,7 +84,14 @@ export default async function reportRoutes(app: FastifyInstance) {
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
-    const item = await prisma.report.findFirst({ where: { id, branchId } });
+    const item = await prisma.report.findFirst({
+      where: { id, branchId },
+      include: {
+        appointment: { select: { id: true, patientName: true, patientCpf: true, specialty: true, date: true, time: true, doctorName: true, status: true } },
+        worklistItem: { select: { id: true, dicomStudyUid: true, dicomUrl: true, dicomReceivedAt: true, accessionNumber: true } },
+        addendums: { where: { isActive: true }, orderBy: { updatedAt: 'desc' } },
+      },
+    });
     if (!item) return reply.code(404).send({ error: 'Report not found' });
     return item;
   });
@@ -82,8 +102,9 @@ export default async function reportRoutes(app: FastifyInstance) {
       tags: ['Reports'],
       body: {
         type: 'object',
-        required: ['patientName'],
         properties: {
+          worklistItemId: { type: 'string' },
+          appointmentId: { type: 'string' },
           patientName: { type: 'string', minLength: 1 },
           cpf: { type: 'string', pattern: '^\\d{11}$' },
           birthDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -98,6 +119,8 @@ export default async function reportRoutes(app: FastifyInstance) {
           scheduledFor: { type: 'string' },
           responsibleDoctor: { type: 'string' },
           observation: { type: 'string' },
+          issuerSignedAt: { type: 'string' },
+          reviewerSignedAt: { type: 'string' },
         },
       },
       response: {
@@ -111,9 +134,11 @@ export default async function reportRoutes(app: FastifyInstance) {
 
     const data = request.body as any;
 
-    // runtime validations (complement AJV schema): trim checks and clearer error messages
-    if (!data.patientName || !String(data.patientName).trim()) {
-      return reply.code(400).send({ error: 'patientName is required' });
+    // patientName is optional when worklistItemId or appointmentId is provided
+    if (!data.worklistItemId && !data.appointmentId) {
+      if (!data.patientName || !String(data.patientName).trim()) {
+        return reply.code(400).send({ error: 'patientName is required when worklistItemId or appointmentId is not provided' });
+      }
     }
 
     if (data.cpf) {
@@ -131,7 +156,9 @@ export default async function reportRoutes(app: FastifyInstance) {
     try {
       const item = await prisma.report.create({ data: {
         branchId,
-        patientName: data.patientName,
+        worklistItemId: data.worklistItemId || null,
+        appointmentId: data.appointmentId || null,
+        patientName: data.patientName || null,
         cpf: data.cpf || null,
         birthDate: data.birthDate || null,
         requestingDoctor: data.requestingDoctor || null,
@@ -140,11 +167,13 @@ export default async function reportRoutes(app: FastifyInstance) {
         description: data.description || null,
         conclusion: data.conclusion || null,
         notes: data.notes || null,
-        status: data.status || null,
+        status: data.status || 'rascunho',
         exam: data.exam || null,
         scheduledFor: data.scheduledFor || null,
         responsibleDoctor: data.responsibleDoctor || null,
         observation: data.observation || null,
+        issuerSignedAt: data.issuerSignedAt || null,
+        reviewerSignedAt: data.reviewerSignedAt || null,
       } });
 
       return reply.code(201).send(item);
@@ -162,6 +191,8 @@ export default async function reportRoutes(app: FastifyInstance) {
       body: {
         type: 'object',
         properties: {
+          worklistItemId: { type: 'string' },
+          appointmentId: { type: 'string' },
           patientName: { type: 'string', minLength: 1 },
           cpf: { type: 'string', pattern: '^\\d{11}$' },
           birthDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -176,6 +207,8 @@ export default async function reportRoutes(app: FastifyInstance) {
           scheduledFor: { type: 'string' },
           responsibleDoctor: { type: 'string' },
           observation: { type: 'string' },
+          issuerSignedAt: { type: 'string' },
+          reviewerSignedAt: { type: 'string' },
         },
       },
       response: {

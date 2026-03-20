@@ -28,6 +28,7 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
         type: 'object',
         properties: {
           worklistItemId: { type: 'string' },
+          reportId: { type: 'string' },
           status: { type: 'string' },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
@@ -38,18 +39,19 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
-    const { worklistItemId, status, limit = 50, offset = 0 } = request.query as any;
+    const { worklistItemId, reportId, status, limit = 50, offset = 0 } = request.query as any;
 
-    if (!worklistItemId) {
-      return reply.code(400).send({ error: 'worklistItemId is required' });
+    if (!worklistItemId && !reportId) {
+      return reply.code(400).send({ error: 'worklistItemId or reportId is required' });
     }
 
     const where: any = {
-      worklistItemId,
       branchId,
       isActive: true,
     };
 
+    if (worklistItemId) where.worklistItemId = worklistItemId;
+    if (reportId) where.reportId = reportId;
     if (status) where.status = status;
 
     const [items, total] = await Promise.all([
@@ -74,6 +76,7 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
         required: ['worklistItemId'],
         properties: {
           worklistItemId: { type: 'string', minLength: 1 },
+          reportId: { type: 'string', minLength: 1 },
           content: { type: 'string' },
           status: { type: 'string' },
           issuerSignedAt: { type: 'string' },
@@ -89,16 +92,30 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
 
     const data = request.body as any;
 
+    if (!data.worklistItemId && !data.reportId) {
+      return reply.code(400).send({ error: 'worklistItemId or reportId is required' });
+    }
+
     try {
-      const worklistItem = await prisma.reportWorklistItem.findFirst({ where: { id: data.worklistItemId, branchId } });
-      if (!worklistItem) {
-        return reply.code(404).send({ error: 'Report worklist item not found' });
+      if (data.worklistItemId) {
+        const worklistItem = await prisma.reportWorklistItem.findFirst({ where: { id: data.worklistItemId, branchId } });
+        if (!worklistItem) {
+          return reply.code(404).send({ error: 'Report worklist item not found' });
+        }
+      }
+
+      if (data.reportId) {
+        const report = await prisma.report.findFirst({ where: { id: data.reportId, branchId } });
+        if (!report) {
+          return reply.code(404).send({ error: 'Report (laudo) not found' });
+        }
       }
 
       const item = await prisma.reportAddendum.create({
         data: {
           branchId,
-          worklistItemId: data.worklistItemId,
+          worklistItemId: data.worklistItemId || null,
+          reportId: data.reportId || null,
           content: data.content || '',
           status: data.status || 'draft',
           issuerSignedAt: data.issuerSignedAt || null,

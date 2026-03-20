@@ -1,6 +1,37 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
+const APPOINTMENT_SELECT = {
+  id: true,
+  patientName: true,
+  patientCpf: true,
+  specialty: true,
+  date: true,
+  time: true,
+  convenio: true,
+  doctorName: true,
+  status: true,
+  branchId: true,
+  isActive: true,
+};
+
+const composeScheduledAtFromAppointment = (appointment: any) => {
+  if (!appointment?.date) return null;
+  return appointment.time ? `${appointment.date} ${appointment.time}` : String(appointment.date);
+};
+
+const toWorklistView = (item: any, appointment: any | null) => ({
+  ...item,
+  appointmentId: item.appointmentId || appointment?.id || null,
+  patientName: appointment?.patientName || item.patientName,
+  patientCpf: appointment?.patientCpf || item.patientCpf,
+  examType: appointment?.specialty || item.examType,
+  scheduledAt: composeScheduledAtFromAppointment(appointment) || item.scheduledAt,
+  convenio: appointment?.convenio || item.convenio,
+  requestingDoctor: appointment?.doctorName || item.requestingDoctor,
+  appointment: appointment || null,
+});
+
 export default async function reportWorklistRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -62,6 +93,20 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
       prisma.reportWorklistItem.count({ where }),
     ]);
 
+    const appointmentIds = Array.from(
+      new Set((items as any[]).map((item: any) => item.appointmentId).filter(Boolean)),
+    );
+    const appointments = appointmentIds.length
+      ? await prisma.appointment.findMany({
+          where: {
+            id: { in: appointmentIds as string[] },
+            isActive: true,
+          },
+          select: APPOINTMENT_SELECT,
+        })
+      : [];
+    const appointmentById = new Map<string, any>((appointments as any[]).map((it: any) => [it.id, it]));
+
     const itemIds = (items as any[]).map((item: any) => item.id);
     const addendumCounts = itemIds.length
       ? await prisma.reportAddendum.groupBy({
@@ -79,8 +124,9 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
     const addendumCountByItemId = new Map<string, number>(
       (addendumCounts as any[]).map((row: any) => [String(row.worklistItemId), Number(row._count?._all || 0)]),
     );
+
     const itemsWithFlags = (items as any[]).map((item: any) => ({
-      ...item,
+      ...toWorklistView(item, item.appointmentId ? appointmentById.get(item.appointmentId) || null : null),
       hasFinalizedAddendum: Boolean((addendumCountByItemId.get(item.id) || 0) > 0),
     }));
 
@@ -101,6 +147,16 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
     const item = await prisma.reportWorklistItem.findFirst({ where: { id, OR: [{ branchId }, { branchId: null }] } });
     if (!item) return reply.code(404).send({ error: 'Report worklist item not found' });
 
+    const appointment = item.appointmentId
+      ? await prisma.appointment.findFirst({
+          where: {
+            id: item.appointmentId,
+            isActive: true,
+          },
+          select: APPOINTMENT_SELECT,
+        })
+      : null;
+
     const finalizedAddendumCount = await prisma.reportAddendum.count({
       where: {
         branchId,
@@ -111,7 +167,7 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
     });
 
     return {
-      ...item,
+      ...toWorklistView(item, appointment),
       hasFinalizedAddendum: finalizedAddendumCount > 0,
     };
   });
@@ -122,20 +178,12 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
       tags: ['Report Worklist'],
       body: {
         type: 'object',
-        required: ['patientName', 'examType'],
         properties: {
+          appointmentId: { type: 'string' },
           externalStudyId: { type: 'string' },
           accessionNumber: { type: 'string' },
-          patientName: { type: 'string', minLength: 1 },
           patientCpf: { type: 'string' },
           patientBirthDate: { type: 'string' },
-          examType: { type: 'string', minLength: 1 },
-          scheduledAt: { type: 'string' },
-          convenio: { type: 'string' },
-          requestingDoctor: { type: 'string' },
-          assignedTo: { type: 'string' },
-          priority: { type: 'string' },
-          status: { type: 'string' },
           reportText: { type: 'string' },
           issuerSignedAt: { type: 'string' },
           reviewerSignedAt: { type: 'string' },
@@ -158,42 +206,79 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
 
     const data = request.body as any;
 
-    if (!data.patientName || !String(data.patientName).trim()) {
-      return reply.code(400).send({ error: 'patientName is required' });
-    }
-    if (!data.examType || !String(data.examType).trim()) {
-      return reply.code(400).send({ error: 'examType is required' });
-    }
-
     try {
-      const item = await prisma.reportWorklistItem.create({
-        data: {
-          branchId,
-          externalStudyId: data.externalStudyId || null,
-          accessionNumber: data.accessionNumber || null,
-          patientName: data.patientName,
-          patientCpf: data.patientCpf || null,
-          patientBirthDate: data.patientBirthDate || null,
-          examType: data.examType,
-          scheduledAt: data.scheduledAt || null,
-          convenio: data.convenio || null,
-          requestingDoctor: data.requestingDoctor || null,
-          assignedTo: data.assignedTo || null,
-          priority: data.priority || 'normal',
-          status: data.status || 'pendente',
-          reportText: data.reportText || null,
-          issuerSignedAt: data.issuerSignedAt || null,
-          reviewerSignedAt: data.reviewerSignedAt || null,
-          dicomStudyUid: data.dicomStudyUid || null,
-          dicomSeriesUid: data.dicomSeriesUid || null,
-          dicomPath: data.dicomPath || null,
-          dicomUrl: data.dicomUrl || null,
-          dicomReceivedAt: data.dicomReceivedAt || null,
-          metadata: data.metadata || null,
-        },
-      });
+      const appointmentId = data.appointmentId ? String(data.appointmentId) : null;
+      const appointment = appointmentId
+        ? await prisma.appointment.findFirst({
+            where: {
+              id: appointmentId,
+              branchId,
+              isActive: true,
+            },
+            select: APPOINTMENT_SELECT,
+          })
+        : null;
 
-      return reply.code(201).send(item);
+      if (appointmentId && !appointment) {
+        return reply.code(400).send({ error: 'Invalid appointmentId for this branch' });
+      }
+
+      const patientName = String(appointment?.patientName || data.patientName || '').trim();
+      const examType = String(appointment?.specialty || data.examType || '').trim();
+
+      if (!appointment && !data.patientCpf) {
+        return reply.code(400).send({ error: 'patientCpf is required when no appointmentId provided' });
+      }
+
+      if (!appointment && !patientName) {
+        return reply.code(400).send({ error: 'patientName is required when no appointmentId provided' });
+      }
+
+      if (!appointment && !examType) {
+        return reply.code(400).send({ error: 'examType is required when no appointmentId provided' });
+      }
+
+      const baseData: any = {
+        branchId,
+        appointmentId,
+        externalStudyId: data.externalStudyId || null,
+        accessionNumber: data.accessionNumber || null,
+        patientCpf: appointment?.patientCpf || data.patientCpf || null,
+        patientBirthDate: data.patientBirthDate || null,
+        reportText: data.reportText || null,
+        issuerSignedAt: data.issuerSignedAt || null,
+        reviewerSignedAt: data.reviewerSignedAt || null,
+        dicomStudyUid: data.dicomStudyUid || null,
+        dicomSeriesUid: data.dicomSeriesUid || null,
+        dicomPath: data.dicomPath || null,
+        dicomUrl: data.dicomUrl || null,
+        dicomReceivedAt: data.dicomReceivedAt || null,
+        metadata: data.metadata || null,
+      };
+
+      const existingByAppointment = appointmentId
+        ? await prisma.reportWorklistItem.findFirst({
+            where: {
+              appointmentId,
+              OR: [{ branchId }, { branchId: null }],
+            },
+          })
+        : null;
+
+      const item = existingByAppointment
+        ? await prisma.reportWorklistItem.update({
+            where: { id: existingByAppointment.id },
+            data: baseData,
+          })
+        : await prisma.reportWorklistItem.create({
+            data: baseData,
+          });
+
+      const linkedAppointment = item.appointmentId
+        ? await prisma.appointment.findUnique({ where: { id: item.appointmentId }, select: APPOINTMENT_SELECT })
+        : null;
+
+      return reply.code(201).send(toWorklistView(item, linkedAppointment));
     } catch (err: any) {
       request.log.error({ err }, 'Failed to create report worklist item');
       return reply.code(400).send({ error: 'Failed to create report worklist item', details: err.message });
@@ -243,8 +328,46 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
         }
       }
 
-      const item = await prisma.reportWorklistItem.update({ where: { id }, data: { ...data, branchId } });
-      return item;
+      const nextAppointmentId = typeof data.appointmentId !== 'undefined'
+        ? (data.appointmentId ? String(data.appointmentId) : null)
+        : existing.appointmentId;
+
+      const appointment = nextAppointmentId
+        ? await prisma.appointment.findFirst({
+            where: {
+              id: nextAppointmentId,
+              branchId,
+              isActive: true,
+            },
+            select: APPOINTMENT_SELECT,
+          })
+        : null;
+
+      if (nextAppointmentId && !appointment) {
+        return reply.code(400).send({ error: 'Invalid appointmentId for this branch' });
+      }
+
+      const updateData: any = {
+        ...data,
+        branchId,
+        appointmentId: nextAppointmentId,
+      };
+
+      if (appointment) {
+        updateData.patientName = appointment.patientName || existing.patientName;
+        updateData.patientCpf = appointment.patientCpf || existing.patientCpf;
+        updateData.examType = appointment.specialty || existing.examType;
+        updateData.scheduledAt = composeScheduledAtFromAppointment(appointment) || existing.scheduledAt;
+        updateData.convenio = appointment.convenio || existing.convenio;
+        updateData.requestingDoctor = appointment.doctorName || existing.requestingDoctor;
+      }
+
+      const item = await prisma.reportWorklistItem.update({ where: { id }, data: updateData });
+      const linkedAppointment = item.appointmentId
+        ? await prisma.appointment.findUnique({ where: { id: item.appointmentId }, select: APPOINTMENT_SELECT })
+        : null;
+
+      return toWorklistView(item, linkedAppointment);
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update report worklist item');
       return reply.code(400).send({ error: 'Failed to update report worklist item', details: err.message });
