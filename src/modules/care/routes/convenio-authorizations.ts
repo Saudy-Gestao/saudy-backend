@@ -1,7 +1,16 @@
+import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
+import { Storage } from '@google-cloud/storage';
 import prisma from '../lib/prisma';
 
 type AuthorizationStatus = 'PENDING' | 'AUTHORIZED' | 'DENIED';
+type SourceType = 'APPOINTMENT' | 'TEA';
+
+const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
+  || process.env.GOOGLE_STORAGE_BUCKET_CONVENIO_AUTH
+  || process.env.GOOGLE_STORAGE_BUCKET;
+const storage = GCS_BUCKET ? new Storage() : null;
+const bucket = (storage && GCS_BUCKET) ? storage.bucket(GCS_BUCKET) : null;
 
 const parseCsv = (value: unknown): string[] => (
   String(value || '')
@@ -16,6 +25,19 @@ const toStatus = (value: unknown): AuthorizationStatus => {
   if (normalized === 'DENIED') return 'DENIED';
   return 'PENDING';
 };
+
+const sanitizeFileName = (value: string) => String(value || 'arquivo')
+  .replace(/[^a-zA-Z0-9._-]/g, '_')
+  .replace(/_+/g, '_')
+  .slice(0, 120);
+
+const decodeBase64 = (raw: string): Buffer => {
+  const trimmed = String(raw || '').trim();
+  const normalized = trimmed.includes(',') ? trimmed.split(',').pop() || '' : trimmed;
+  return Buffer.from(normalized, 'base64');
+};
+
+const makeObjectSuffix = () => randomBytes(8).toString('hex');
 
 const sanitizeAuthorizationNotes = (value?: string | null) => (
   String(value || '')
@@ -197,7 +219,49 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       };
     });
 
+    const appointmentIds = mappedAppointments.map((item: any) => String(item.id));
+    const teaTherapyIds = mappedTeaReservations.map((item: any) => String(item.id));
+    const attachments = (appointmentIds.length > 0 || teaTherapyIds.length > 0)
+      ? await prisma.convenioAuthorizationAttachment.findMany({
+          where: {
+            branchId,
+            isActive: true,
+            OR: [
+              ...(appointmentIds.length > 0 ? [{ sourceType: 'APPOINTMENT', appointmentId: { in: appointmentIds } }] : []),
+              ...(teaTherapyIds.length > 0 ? [{ sourceType: 'TEA', pitTherapyId: { in: teaTherapyIds } }] : []),
+            ],
+          },
+          orderBy: { uploadedAt: 'desc' },
+        })
+      : [];
+
+    const attachmentMap = new Map<string, any[]>();
+    attachments.forEach((item: any) => {
+      const sourceType = String(item?.sourceType || '').toUpperCase();
+      const sourceId = sourceType === 'TEA' ? String(item?.pitTherapyId || '') : String(item?.appointmentId || '');
+      if (!sourceType || !sourceId) return;
+      const key = `${sourceType}:${sourceId}`;
+      if (!attachmentMap.has(key)) attachmentMap.set(key, []);
+      attachmentMap.get(key)!.push(item);
+    });
+
+    const withAttachmentSummary = (item: any) => {
+      const key = `${String(item.sourceType || '').toUpperCase()}:${String(item.id || '')}`;
+      const docs = attachmentMap.get(key) || [];
+      return {
+        ...item,
+        attachmentsCount: docs.length,
+        attachments: docs.slice(0, 5).map((doc: any) => ({
+          id: doc.id,
+          fileName: doc.fileName,
+          mimeType: doc.mimeType || null,
+          uploadedAt: doc.uploadedAt,
+        })),
+      };
+    };
+
     const combined = [...mappedAppointments, ...mappedTeaReservations]
+      .map(withAttachmentSummary)
       .filter((item) => (sourceFilter.size === 0 || sourceFilter.has(String(item.sourceType).toUpperCase())))
       .filter((item) => (statusFilter.size === 0 || statusFilter.has(String(item.status).toUpperCase())))
       .filter((item) => {
@@ -222,6 +286,180 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       total: combined.length,
       items: combined,
     };
+  });
+
+  app.get('/:sourceType/:id/attachments', {
+    schema: {
+      summary: 'List authorization attachments by source',
+      tags: ['ConvenioAuthorization'],
+      params: {
+        type: 'object',
+        required: ['sourceType', 'id'],
+        properties: {
+          sourceType: { type: 'string' },
+          id: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { sourceType, id } = request.params as { sourceType: string; id: string };
+    const source = String(sourceType || '').toUpperCase() as SourceType;
+    if (source !== 'APPOINTMENT' && source !== 'TEA') {
+      return reply.code(400).send({ error: 'Invalid sourceType. Use APPOINTMENT or TEA.' });
+    }
+
+    const where = source === 'TEA'
+      ? { branchId, sourceType: source, pitTherapyId: id, isActive: true }
+      : { branchId, sourceType: source, appointmentId: id, isActive: true };
+
+    const items = await prisma.convenioAuthorizationAttachment.findMany({
+      where,
+      orderBy: { uploadedAt: 'desc' },
+    });
+
+    return {
+      total: items.length,
+      items: items.map((item: any) => ({
+        id: item.id,
+        fileName: item.fileName,
+        mimeType: item.mimeType || null,
+        sizeBytes: item.sizeBytes || null,
+        uploadedAt: item.uploadedAt,
+      })),
+    };
+  });
+
+  app.get('/attachments/:attachmentId/view', {
+    schema: {
+      summary: 'View authorization attachment',
+      tags: ['ConvenioAuthorization'],
+      params: {
+        type: 'object',
+        required: ['attachmentId'],
+        properties: {
+          attachmentId: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { attachmentId } = request.params as { attachmentId: string };
+    const attachment = await prisma.convenioAuthorizationAttachment.findFirst({
+      where: { id: attachmentId, branchId, isActive: true },
+    });
+    if (!attachment) return reply.code(404).send({ error: 'Attachment not found' });
+    if (!bucket) return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
+
+    const file = bucket.file(attachment.gcsObjectName);
+    const [exists] = await file.exists();
+    if (!exists) return reply.code(404).send({ error: 'Arquivo não encontrado no storage' });
+
+    reply.header('Content-Type', attachment.mimeType || 'application/octet-stream');
+    reply.header('Content-Disposition', `inline; filename="${attachment.fileName || 'anexo'}"`);
+    return reply.send(file.createReadStream());
+  });
+
+  app.post('/:sourceType/:id/attachments', {
+    schema: {
+      summary: 'Upload attachment for authorization item',
+      tags: ['ConvenioAuthorization'],
+      params: {
+        type: 'object',
+        required: ['sourceType', 'id'],
+        properties: {
+          sourceType: { type: 'string' },
+          id: { type: 'string' },
+        },
+      },
+      body: {
+        type: 'object',
+        required: ['fileName', 'fileBase64'],
+        properties: {
+          fileName: { type: 'string' },
+          fileBase64: { type: 'string' },
+          mimeType: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    if (!bucket) {
+      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
+    }
+
+    const userId = String((request.user as any)?.id || '');
+    const { sourceType, id } = request.params as { sourceType: string; id: string };
+    const payload = request.body as { fileName: string; fileBase64: string; mimeType?: string };
+    const source = String(sourceType || '').toUpperCase() as SourceType;
+
+    if (source !== 'APPOINTMENT' && source !== 'TEA') {
+      return reply.code(400).send({ error: 'Invalid sourceType. Use APPOINTMENT or TEA.' });
+    }
+
+    if (source === 'APPOINTMENT') {
+      const existing = await prisma.appointment.findFirst({ where: { id, branchId, isActive: true } });
+      if (!existing) return reply.code(404).send({ error: 'Appointment authorization item not found' });
+    } else {
+      const existingTea = await prisma.teaPreReservation.findFirst({
+        where: { pitTherapyId: id },
+        select: { id: true },
+      });
+      if (!existingTea) return reply.code(404).send({ error: 'TEA authorization series not found' });
+    }
+
+    const safeFileName = sanitizeFileName(payload.fileName || 'anexo');
+    const buffer = decodeBase64(payload.fileBase64);
+    if (!buffer || buffer.length === 0) {
+      return reply.code(400).send({ error: 'Arquivo inválido' });
+    }
+
+    const objectName = `convenio-authorizations/${branchId}/${source.toLowerCase()}/${id}/${Date.now()}_${makeObjectSuffix()}_${safeFileName}`;
+    const file = bucket.file(objectName);
+    await file.save(buffer, {
+      resumable: false,
+      contentType: payload.mimeType || 'application/octet-stream',
+      metadata: {
+        contentType: payload.mimeType || 'application/octet-stream',
+        metadata: {
+          branchId,
+          sourceType: source,
+          sourceId: id,
+          uploadedByUserId: userId || '',
+        },
+      },
+    });
+
+    const created = await prisma.convenioAuthorizationAttachment.create({
+      data: {
+        branchId,
+        sourceType: source,
+        appointmentId: source === 'APPOINTMENT' ? id : null,
+        pitTherapyId: source === 'TEA' ? id : null,
+        fileName: safeFileName,
+        mimeType: payload.mimeType || null,
+        sizeBytes: buffer.length,
+        gcsObjectName: objectName,
+        uploadedByUserId: userId || null,
+      },
+    });
+
+    return reply.code(201).send({
+      message: 'Anexo enviado com sucesso',
+      item: {
+        id: created.id,
+        fileName: created.fileName,
+        mimeType: created.mimeType,
+        sizeBytes: created.sizeBytes,
+        uploadedAt: created.uploadedAt,
+      },
+    });
   });
 
   app.patch('/:sourceType/:id', {
