@@ -14,6 +14,9 @@ import teaProfilesRoutes from './routes/tea-profiles';
 import teaPreReservationsRoutes from './routes/tea-pre-reservations';
 import convenioAuthorizationRoutes from './routes/convenio-authorizations';
 import teaEvolutionTemplateRoutes from './routes/tea-evolution-templates';
+import whatsappConfigRoutes from './routes/whatsapp-config';
+import whatsappMessagesRoutes from './routes/whatsapp-messages';
+import whatsappJobsRoutes from './routes/whatsapp-jobs';
 
 export default async function careModule(app: FastifyInstance) {
   app.register(preAttendanceRoutes, { prefix: '/pre-attendances' });
@@ -31,4 +34,7 @@ export default async function careModule(app: FastifyInstance) {
   app.register(teaPreReservationsRoutes, { prefix: '/tea-pre-reservations' });
   app.register(teaEvolutionTemplateRoutes, { prefix: '/tea-evolution-templates' });
   app.register(convenioAuthorizationRoutes, { prefix: '/convenio-authorizations' });
+  app.register(whatsappConfigRoutes, { prefix: '/' });
+  app.register(whatsappJobsRoutes, { prefix: '/' });
+  app.register(whatsappMessagesRoutes, { prefix: '/' });
 }
