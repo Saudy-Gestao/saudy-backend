@@ -1599,6 +1599,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             recurringUntilDate: { type: 'string' },
             expiresAt: { type: 'string' },
             status: { type: 'string' },
+            replaceExistingByTherapy: { type: 'boolean' },
             items: {
               type: 'array',
               items: {
@@ -1629,12 +1630,14 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const recurringUntilDate = body?.recurringUntilDate ? new Date(body.recurringUntilDate) : null;
       const hasUntilDate = Boolean(recurringUntilDate && !Number.isNaN(recurringUntilDate.getTime()));
       const expiresAt = body?.expiresAt ? new Date(body.expiresAt) : null;
+      const replaceExistingByTherapy = Boolean(body?.replaceExistingByTherapy);
       const requestedStatus = normalizeStatus(body?.status);
       const acceptedStatus = requestedStatus && ['RESERVED', 'PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'].includes(requestedStatus)
         ? requestedStatus
         : 'PENDING_AUTHORIZATION';
       const shouldInferStatusFromHistory = !requestedStatus;
       const hasAuthorizedHistoryByTherapyId = new Map<string, boolean>();
+      const replacedTherapyIds = new Set<string>();
 
       const created: any[] = [];
       let skippedConflicts = 0;
@@ -1663,6 +1666,46 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         });
 
         if (!therapy || !therapy.isActive) continue;
+
+        if (replaceExistingByTherapy && !replacedTherapyIds.has(therapy.id)) {
+          const existingOpenSeries = await prisma.teaPreReservation.findMany({
+            where: {
+              pitId: therapy.pitId,
+              pitTherapyId: therapy.id,
+              status: {
+                in: ['PENDING_SCHEDULING', 'RESERVED', 'PROPOSED', 'PENDING_AUTHORIZATION'] as any,
+              },
+            },
+            select: { id: true },
+          });
+
+          if (existingOpenSeries.length > 0) {
+            await prisma.teaPreReservation.updateMany({
+              where: {
+                id: { in: existingOpenSeries.map((row: { id: string }) => row.id) },
+              },
+              data: {
+                status: 'CANCELED' as any,
+                notes: 'Série substituída por nova proposta manual (Reservado parcial)',
+              },
+            });
+
+            await Promise.all(
+              existingOpenSeries.map((row: { id: string }) => appendTimelineEvent(
+                row.id,
+                'STATUS_CHANGED',
+                'Pré-reserva substituída por nova proposta manual (Reservado parcial)',
+                actor,
+                {
+                  status: 'CANCELED',
+                  source: 'MANUAL_REPLACEMENT',
+                },
+              )),
+            );
+          }
+
+          replacedTherapyIds.add(therapy.id);
+        }
 
         const assignedDoctor = therapy.professionalDoctorId
           ? await prisma.doctor.findFirst({
