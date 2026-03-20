@@ -18,6 +18,7 @@ import whatsappMessagesRoutes from './routes/whatsapp-messages';
 import whatsappJobsRoutes from './routes/whatsapp-jobs';
 import publicCheckInRoutes from './routes/public-check-in';
 import preSchedulingRoutes from './routes/pre-scheduling';
+import spellCheckRoutes from './routes/spell-check';
 
 export default async function careModule(app: FastifyInstance) {
   app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
@@ -39,4 +40,5 @@ export default async function careModule(app: FastifyInstance) {
   app.register(whatsappConfigRoutes, { prefix: '/' });
   app.register(whatsappJobsRoutes, { prefix: '/' });
   app.register(whatsappMessagesRoutes, { prefix: '/' });
+  app.register(spellCheckRoutes, { prefix: '/spell-check' });
 }
