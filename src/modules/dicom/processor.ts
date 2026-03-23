@@ -11,6 +11,7 @@ export interface ParsedDicomData {
   patientId: string;
   modality: string;
   studyDate: string;
+  accessionNumber: string;
 }
 
 // images are stored exclusively in a GCS bucket; no local directory used
@@ -28,6 +29,7 @@ export async function processDicomBuffer(
   const patientName = (dataSet.string('x00100010') || '').replace(/\^/g, ' ');
   const patientId = dataSet.string('x00100020') || '';
   const modality = dataSet.string('x00080060') || '';
+  const accessionNumber = dataSet.string('x00080050') || '';
   const studyDateRaw = dataSet.string('x00080020') || '';
   const studyDate = studyDateRaw
     ? `${studyDateRaw.slice(6, 8)}/${studyDateRaw.slice(4, 6)}/${studyDateRaw.slice(0, 4)}`
@@ -41,59 +43,78 @@ export async function processDicomBuffer(
   // compute url for retrieval (we serve through our own route)
   const dicomUrl = `/dicom/${studyInstanceUid || fullPath}/file`;
 
-  // find existing worklist item
-  let item = null;
+  // --- Step 1: correlate with MwlEntry (the appointment-driven worklist) ---
+  let mwlEntry: any = null;
+
+  if (accessionNumber) {
+    mwlEntry = await prisma.mwlEntry.findFirst({
+      where: { accessionNumber, isActive: true },
+    });
+  }
+
+  if (!mwlEntry && patientId) {
+    mwlEntry = await prisma.mwlEntry.findFirst({
+      where: {
+        patientCpf: patientId,
+        isActive: true,
+        status: { not: 'cancelado' },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  if (mwlEntry) {
+    await prisma.mwlEntry.update({
+      where: { id: mwlEntry.id },
+      data: { status: 'adquirido' },
+    });
+  }
+
+  // Orthanc poller calls this with null branchId.
+  // In this case, inherit branch from the matched MWL entry.
+  const effectiveBranchId = branchId || mwlEntry?.branchId || null;
+
+  // --- Step 2: find or create ReportWorklistItem (DICOM index) ---
+  let item: any = null;
+
   if (studyInstanceUid) {
     item = await prisma.reportWorklistItem.findFirst({
-      where: {
-        branchId,
-        dicomStudyUid: studyInstanceUid,
-      },
+      where: { dicomStudyUid: studyInstanceUid },
     });
   }
 
   if (!item && studyInstanceUid) {
     item = await prisma.reportWorklistItem.findFirst({
-      where: {
-        branchId,
-        externalStudyId: studyInstanceUid,
-      },
+      where: { externalStudyId: studyInstanceUid },
     });
   }
 
-  // fallback by patient id + modality maybe
-  if (!item && patientId) {
+  if (!item && mwlEntry) {
     item = await prisma.reportWorklistItem.findFirst({
-      where: {
-        branchId,
-        patientCpf: patientId,
-      },
+      where: { mwlEntryId: mwlEntry.id },
     });
   }
 
   const now = new Date();
   if (item) {
-    // update worklist item only if we haven't stored a path yet;
-    // keep the existing path/URL for backward compatibility
-    const updateData: any = {};
+    const updateData: any = { dicomReceivedAt: now };
     if (!item.dicomPath) updateData.dicomPath = fullPath;
     if (!item.dicomUrl) updateData.dicomUrl = dicomUrl;
     if (!item.dicomStudyUid && studyInstanceUid) updateData.dicomStudyUid = studyInstanceUid;
     if (!item.dicomSeriesUid && seriesInstanceUid) updateData.dicomSeriesUid = seriesInstanceUid;
-    updateData.dicomReceivedAt = now;
+    if (!item.mwlEntryId && mwlEntry) updateData.mwlEntryId = mwlEntry.id;
+    if (!item.appointmentId && mwlEntry?.appointmentId) updateData.appointmentId = mwlEntry.appointmentId;
+    if (!item.branchId && effectiveBranchId) updateData.branchId = effectiveBranchId;
 
-    item = await prisma.reportWorklistItem.update({
-      where: { id: item.id },
-      data: updateData,
-    });
+    item = await prisma.reportWorklistItem.update({ where: { id: item.id }, data: updateData });
   } else {
-    // create a bare minimal new worklist item
     item = await prisma.reportWorklistItem.create({
       data: {
-        branchId,
-        patientName: patientName || 'N/A',
-        patientCpf: patientId || null,
-        examType: modality || 'unknown',
+        branchId: effectiveBranchId,
+        mwlEntryId: mwlEntry?.id || null,
+        appointmentId: mwlEntry?.appointmentId || null,
+        patientCpf: patientId || mwlEntry?.patientCpf || null,
+        accessionNumber: accessionNumber || null,
         dicomStudyUid: studyInstanceUid || undefined,
         dicomSeriesUid: seriesInstanceUid || undefined,
         dicomPath: fullPath,
@@ -103,7 +124,7 @@ export async function processDicomBuffer(
     });
   }
 
-  // create a record for this file so we can store a series
+  // --- Step 3: index the DICOM file ---
   try {
     await prisma.dicomFile.create({
       data: {
@@ -115,9 +136,81 @@ export async function processDicomBuffer(
       },
     });
   } catch (err) {
-    // log but don't fail the whole request if index exists etc.
     console.warn('failed to insert dicom file record', err);
   }
 
+  // --- Step 4: ensure a Report (laudo) draft exists ---
+  await upsertReportFromWorklist(item, mwlEntry, { patientName, patientId, modality, studyDate });
+
   return item;
 }
+
+/**
+ * Ensures a Report (laudo) draft exists for the given worklist item.
+ * Called automatically whenever a DICOM is ingested.
+ * Patient data priority: mwlEntry.appointment > mwlEntry > DICOM tags
+ */
+async function upsertReportFromWorklist(
+  worklistItem: { id: string; branchId: string | null; appointmentId?: string | null },
+  mwlEntry: { branchId?: string | null; patientName?: string | null; patientCpf?: string | null; examType?: string | null; requestingDoctor?: string | null; appointmentId?: string | null } | null,
+  dicomMeta: { patientName: string; patientId: string; modality: string; studyDate: string },
+): Promise<void> {
+  try {
+    const existing = await prisma.report.findFirst({
+      where: { worklistItemId: worklistItem.id },
+    });
+
+    if (existing) {
+      const updateData: any = {};
+      const resolvedBranchId = worklistItem.branchId || mwlEntry?.branchId || null;
+      if (!existing.branchId && resolvedBranchId) updateData.branchId = resolvedBranchId;
+      if (!existing.exam && dicomMeta.modality) updateData.exam = dicomMeta.modality;
+      if (!existing.scheduledFor && dicomMeta.studyDate) updateData.scheduledFor = dicomMeta.studyDate;
+      if (Object.keys(updateData).length > 0) {
+        await prisma.report.update({ where: { id: existing.id }, data: updateData });
+      }
+      return;
+    }
+
+    // resolve patient info: appointment > mwl_entry > DICOM tags
+    let resolvedPatientName: string | null = dicomMeta.patientName || null;
+    let resolvedCpf: string | null = dicomMeta.patientId || null;
+    let resolvedRequestingDoctor: string | null = null;
+
+    if (mwlEntry) {
+      resolvedPatientName = mwlEntry.patientName || resolvedPatientName;
+      resolvedCpf = mwlEntry.patientCpf || resolvedCpf;
+      resolvedRequestingDoctor = mwlEntry.requestingDoctor || null;
+    }
+
+    const appointmentId = worklistItem.appointmentId || mwlEntry?.appointmentId || null;
+    if (appointmentId) {
+      const appt = await prisma.appointment.findUnique({
+        where: { id: appointmentId },
+        select: { patientName: true, patientCpf: true, doctorName: true },
+      });
+      if (appt) {
+        resolvedPatientName = appt.patientName || resolvedPatientName;
+        resolvedCpf = appt.patientCpf || resolvedCpf;
+        resolvedRequestingDoctor = appt.doctorName || resolvedRequestingDoctor;
+      }
+    }
+
+    await prisma.report.create({
+      data: {
+        branchId: worklistItem.branchId || mwlEntry?.branchId || null,
+        worklistItemId: worklistItem.id,
+        appointmentId,
+        patientName: resolvedPatientName,
+        cpf: resolvedCpf,
+        exam: mwlEntry?.examType || dicomMeta.modality || null,
+        scheduledFor: dicomMeta.studyDate || null,
+        requestingDoctor: resolvedRequestingDoctor,
+        status: 'rascunho',
+      },
+    });
+  } catch (err) {
+    console.warn('failed to upsert report from worklist item', err);
+  }
+}
+

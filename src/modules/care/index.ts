@@ -17,11 +17,13 @@ import whatsappConfigRoutes from './routes/whatsapp-config';
 import whatsappMessagesRoutes from './routes/whatsapp-messages';
 import whatsappJobsRoutes from './routes/whatsapp-jobs';
 import publicCheckInRoutes from './routes/public-check-in';
+import mwlRoutes from './routes/mwl';
 import preSchedulingRoutes from './routes/pre-scheduling';
 import spellCheckRoutes from './routes/spell-check';
 
 export default async function careModule(app: FastifyInstance) {
   app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
+  app.register(mwlRoutes, { prefix: '/mwl' });
   app.register(preSchedulingRoutes, { prefix: '/pre-scheduling' });
   app.register(preAttendanceRoutes, { prefix: '/pre-attendances' });
   app.register(appointmentRoutes, { prefix: '/appointments' });
