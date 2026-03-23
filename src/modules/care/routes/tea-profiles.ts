@@ -1,9 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-
-function normalizeCpf(value?: string): string {
-  return String(value || '').replace(/\D/g, '');
-}
+import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
+import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
 function toGender(value?: string): 'MALE' | 'FEMALE' | 'OTHER' | undefined {
   if (!value) return undefined;
@@ -287,13 +285,15 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (!patient) {
       const cpf = normalizeCpf(patientPayload?.cpf);
       const gender = toGender(patientPayload?.gender);
+      const normalizedEmail = normalizeEmail(patientPayload?.email);
 
       const fieldErrors: Record<string, string> = {};
       if (!patientPayload?.name) fieldErrors.name = 'Nome é obrigatório para criar paciente base';
-      if (!cpf || cpf.length !== 11) fieldErrors.cpf = 'CPF deve conter 11 dígitos';
+      if (!isValidCpf(cpf)) fieldErrors.cpf = 'CPF inválido';
       if (!patientPayload?.birthDate || Number.isNaN(new Date(patientPayload.birthDate).getTime())) fieldErrors.birthDate = 'Data de nascimento válida é obrigatória';
       if (!gender) fieldErrors.gender = 'Gênero é obrigatório (MALE/FEMALE/OTHER)';
       if (!patientPayload?.cellphone) fieldErrors.cellphone = 'Celular é obrigatório';
+      if (patientPayload?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
 
       if (Object.keys(fieldErrors).length > 0) {
         return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
@@ -307,7 +307,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           birthDate: new Date(patientPayload.birthDate),
           gender,
           cellphone: String(patientPayload.cellphone),
-          email: patientPayload.email || null,
+          email: normalizedEmail || null,
           phone: patientPayload.phone || null,
           healthInsuranceName: patientPayload.healthInsuranceName || null,
           healthInsuranceNumber: patientPayload.healthInsuranceNumber || null,
@@ -317,11 +317,17 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       });
     } else {
       const updateData: any = {};
+      const normalizedEmail = normalizeEmail(patientPayload?.email);
       if (patientPayload?.name) updateData.name = String(patientPayload.name);
       if (patientPayload?.birthDate && !Number.isNaN(new Date(patientPayload.birthDate).getTime())) updateData.birthDate = new Date(patientPayload.birthDate);
       if (patientPayload?.gender && toGender(patientPayload.gender)) updateData.gender = toGender(patientPayload.gender);
       if (patientPayload?.cellphone) updateData.cellphone = String(patientPayload.cellphone);
-      if (patientPayload?.email !== undefined) updateData.email = patientPayload.email || null;
+      if (patientPayload?.email !== undefined) {
+        if (normalizedEmail && !isValidEmail(normalizedEmail)) {
+          return reply.code(400).send({ error: 'Validation failed', fields: { email: 'Email inválido' } });
+        }
+        updateData.email = normalizedEmail || null;
+      }
       if (patientPayload?.phone !== undefined) updateData.phone = patientPayload.phone || null;
       if (patientPayload?.healthInsuranceName !== undefined) {
         updateData.healthInsuranceName = patientPayload.healthInsuranceName || null;
@@ -1008,30 +1014,67 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const branchId = (request as any).branchId as string;
-    const { teaProfileId } = request.params as { teaProfileId: string };
+    const { teaProfileId: teaProfileIdOrPitId } = request.params as { teaProfileId: string };
     const actor = resolveActorFromRequest(request);
 
-    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
-    if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
+    const teaProfile = await prisma.teaProfile.findFirst({
+      where: { id: teaProfileIdOrPitId, patient: { branchId } },
+      select: { id: true },
+    });
+
+    let resolvedTeaProfileId = teaProfile?.id || null;
+    let resolvedPitId = null as string | null;
+
+    if (!resolvedTeaProfileId) {
+      const pitById = await prisma.teaPit.findFirst({
+        where: {
+          id: teaProfileIdOrPitId,
+          teaProfile: { patient: { branchId } },
+        },
+        select: {
+          id: true,
+          teaProfileId: true,
+        },
+      });
+
+      if (pitById) {
+        resolvedTeaProfileId = String(pitById.teaProfileId);
+        resolvedPitId = String(pitById.id);
+      }
+    }
+
+    if (!resolvedTeaProfileId) return reply.code(404).send({ error: 'TEA profile or PIT not found' });
 
     const existingPit = await prisma.teaPit.findFirst({
       where: {
-        teaProfileId,
+        ...(resolvedPitId ? { id: resolvedPitId } : { teaProfileId: resolvedTeaProfileId }),
         status: { not: 'Inativo' },
       },
       include: {
         therapies: {
-          where: { isActive: true },
           select: { id: true },
         },
       },
     });
 
     if (!existingPit) {
+      const alreadyInactivePit = await prisma.teaPit.findFirst({
+        where: {
+          ...(resolvedPitId ? { id: resolvedPitId } : { teaProfileId: resolvedTeaProfileId }),
+        },
+        select: { id: true, status: true },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (alreadyInactivePit) {
+        return { message: 'PIT já estava inativo' };
+      }
+
       return reply.code(404).send({ error: 'PIT not found' });
     }
 
     const therapyIds = (existingPit.therapies || []).map((therapy: any) => String(therapy.id)).filter(Boolean);
+    const todayIso = formatDateToIso(new Date());
 
     await prisma.$transaction(async (tx: any) => {
       await tx.teaPit.update({
@@ -1044,33 +1087,79 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           where: { id: { in: therapyIds } },
           data: { isActive: false },
         });
+      }
 
-        const preReservationsToCancel = await tx.teaPreReservation.findMany({
-          where: {
-            pitTherapyId: { in: therapyIds },
-            status: { in: [...OPEN_PRE_RESERVATION_STATUSES] as any },
-          },
-          select: { id: true },
+      const preReservationsToCancel = await tx.teaPreReservation.findMany({
+        where: {
+          pitId: existingPit.id,
+          status: { in: [...OPEN_PRE_RESERVATION_STATUSES] as any },
+        },
+        select: { id: true },
+      });
+
+      if (preReservationsToCancel.length > 0) {
+        const idsToCancel = preReservationsToCancel.map((item: any) => String(item.id));
+
+        await tx.teaPreReservation.updateMany({
+          where: { id: { in: idsToCancel } },
+          data: { status: 'CANCELED' },
         });
 
-        if (preReservationsToCancel.length > 0) {
-          const idsToCancel = preReservationsToCancel.map((item: any) => String(item.id));
+        await tx.teaPreReservationTimeline.createMany({
+          data: idsToCancel.map((preReservationId: string) => ({
+            preReservationId,
+            eventType: 'PIT_DEACTIVATED',
+            eventLabel: 'Pré-reserva cancelada por exclusão do PIT',
+            actor,
+            payload: { source: 'pit-delete' },
+          })),
+        });
+      }
 
-          await tx.teaPreReservation.updateMany({
-            where: { id: { in: idsToCancel } },
-            data: { status: 'CANCELED' },
-          });
+      const convertedFutureReservations = await tx.teaPreReservation.findMany({
+        where: {
+          pitId: existingPit.id,
+          status: 'CONVERTED' as any,
+          suggestedDate: { gte: new Date(`${todayIso}T00:00:00`) },
+        },
+        select: {
+          patientId: true,
+          suggestedDate: true,
+          suggestedTime: true,
+          professionalName: true,
+          procedureName: true,
+        },
+      });
 
-          await tx.teaPreReservationTimeline.createMany({
-            data: idsToCancel.map((preReservationId: string) => ({
-              preReservationId,
-              eventType: 'PIT_DEACTIVATED',
-              eventLabel: 'Pré-reserva cancelada por exclusão do PIT',
-              actor,
-              payload: { source: 'pit-delete' },
-            })),
-          });
+      for (const reservation of convertedFutureReservations) {
+        if (!reservation?.suggestedDate || !reservation?.suggestedTime) continue;
+        const appointmentDate = formatDateToIso(new Date(reservation.suggestedDate));
+        const conflictClauses: any[] = [
+          { patientId: reservation.patientId },
+        ];
+        if (reservation.professionalName) {
+          conflictClauses.push({ doctorName: reservation.professionalName });
         }
+
+        await tx.appointment.updateMany({
+          where: {
+            isActive: true,
+            date: appointmentDate,
+            time: reservation.suggestedTime,
+            type: 'RETORNO TEA',
+            OR: conflictClauses,
+            NOT: [
+              { status: 'CANCELED' },
+              { status: 'CANCELADO' },
+              { status: 'COMPLETED' },
+              { status: 'CONCLUIDO' },
+            ],
+          },
+          data: {
+            status: 'CANCELED',
+            isActive: false,
+          },
+        });
       }
     });
 
@@ -1297,6 +1386,45 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     const therapiesToCreate: any[] = [];
     const therapiesToDeactivate = new Set<string>();
 
+    const normalizeWeekdays = (value: unknown): string[] => {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((item) => String(item || '').trim().toUpperCase())
+        .filter(Boolean)
+        .sort();
+    };
+
+    const hasSchedulingChange = (incoming: any, existing: any): boolean => {
+      const incomingWeekly = Math.max(1, Number(incoming?.weeklyFrequency || 1));
+      const existingWeekly = Math.max(1, Number(existing?.weeklyFrequency || 1));
+      if (incomingWeekly !== existingWeekly) return true;
+
+      const incomingShift = String(incoming?.preferredShift || '').trim().toUpperCase();
+      const existingShift = String(existing?.preferredShift || '').trim().toUpperCase();
+      if (incomingShift !== existingShift) return true;
+
+      const incomingDuration = Number(incoming?.durationMinutes || 0) || 0;
+      const existingDuration = Number(existing?.durationMinutes || 0) || 0;
+      if (incomingDuration !== existingDuration) return true;
+
+      const incomingProcedure = String(incoming?.procedureId || incoming?.therapyType || '').trim();
+      const existingProcedure = String(existing?.procedureId || existing?.therapyType || '').trim();
+      if (incomingProcedure !== existingProcedure) return true;
+
+      const incomingProfessional = String(incoming?.professionalDoctorId || incoming?.professional || '').trim();
+      const existingProfessional = String(existing?.professionalDoctorId || existing?.professional || '').trim();
+      if (incomingProfessional !== existingProfessional) return true;
+
+      const incomingWeekdays = normalizeWeekdays(incoming?.preferredWeekdays);
+      const existingWeekdays = normalizeWeekdays(existing?.preferredWeekdays);
+      if (incomingWeekdays.length !== existingWeekdays.length) return true;
+      for (let i = 0; i < incomingWeekdays.length; i += 1) {
+        if (incomingWeekdays[i] !== existingWeekdays[i]) return true;
+      }
+
+      return false;
+    };
+
     safeTherapies
       .filter((therapy: any) => !therapy?.id)
       .forEach((therapy: any) => {
@@ -1313,6 +1441,17 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
 
         therapiesToCreate.push(therapy);
       });
+
+    therapiesToUpdate.forEach((entry) => {
+      const existing = existingById.get(entry.id);
+      if (!existing) return;
+      const isExistingInactive = existing?.isActive === false;
+      if (!isExistingInactive) return;
+      if (hasSchedulingChange(entry.data, existing)) {
+        // If schedule-defining fields changed on an inactive therapy, reactivate it for pre-reservation.
+        entry.data.isActive = true;
+      }
+    });
 
     therapiesToUpdate.forEach((entry) => {
       if (entry.data?.isActive === false) {
@@ -1425,19 +1564,25 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           for (const reservation of convertedFutureReservations) {
             if (!reservation?.suggestedDate || !reservation?.suggestedTime) continue;
             const appointmentDate = formatDateToIso(new Date(reservation.suggestedDate));
+            const conflictClauses: any[] = [
+              { patientId: reservation.patientId },
+            ];
+            if (reservation.professionalName) {
+              conflictClauses.push({ doctorName: reservation.professionalName });
+            }
 
             await tx.appointment.updateMany({
               where: {
                 isActive: true,
-                patientId: reservation.patientId,
                 date: appointmentDate,
                 time: reservation.suggestedTime,
-                doctorName: reservation.professionalName || undefined,
-                specialty: reservation.procedureName || undefined,
                 type: 'RETORNO TEA',
+                OR: conflictClauses,
                 NOT: [
                   { status: 'CANCELED' },
+                  { status: 'CANCELADO' },
                   { status: 'COMPLETED' },
+                  { status: 'CONCLUIDO' },
                 ],
               },
               data: {

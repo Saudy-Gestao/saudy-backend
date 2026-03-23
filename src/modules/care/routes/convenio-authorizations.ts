@@ -119,8 +119,14 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       prisma.teaPreReservation.findMany({
         where: {
           professionalDoctorId: doctorIds.length > 0 ? { in: doctorIds } : undefined,
+          pit: {
+            status: { notIn: ['Inativo', 'CONCLUIDO', 'Concluído'] },
+          },
+          pitTherapy: {
+            isActive: true,
+          },
           OR: [
-            { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+            { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {
               AND: [
                 { status: 'CANCELED' as any },
@@ -130,7 +136,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
           ],
         },
         include: {
-          patient: { select: { name: true, cpf: true } },
+          patient: { select: { name: true, cpf: true, hasHealthInsurance: true, healthInsuranceName: true } },
         },
         orderBy: { createdAt: 'desc' },
         take: Number(limit),
@@ -152,22 +158,27 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
         const doctorName = String(item?.doctorName || '').trim();
         return doctorName ? doctorNames.includes(doctorName) : true;
       })
-      .map((item: any) => ({
-      id: String(item.id),
-      sourceType: 'APPOINTMENT',
-      sourceLabel: 'Agendamento',
-      patientName: String(item.patientName || ''),
-      patientCpf: String(item.patientCpf || ''),
-      procedureName: String(item.specialty || item.type || ''),
-      doctorName: String(item.doctorName || ''),
-      roomName: roomByDoctorName.get(String(item.doctorName || '').trim().toLowerCase()) || null,
-      date: String(item.date || ''),
-      time: String(item.time || ''),
-      status: toStatus(item.authorizationStatus),
-      rawStatus: String(item.authorizationStatus || 'PENDING'),
-      notes: item.authorizationNotes || null,
-      updatedAt: item.updatedAt,
-      }));
+      .map((item: any) => {
+        const convenioName = String(item?.convenio || '').trim();
+        return {
+          id: String(item.id),
+          sourceType: 'APPOINTMENT',
+          sourceLabel: 'Agendamento',
+          patientName: String(item.patientName || ''),
+          patientCpf: String(item.patientCpf || ''),
+          procedureName: String(item.specialty || item.type || ''),
+          doctorName: String(item.doctorName || ''),
+          roomName: roomByDoctorName.get(String(item.doctorName || '').trim().toLowerCase()) || null,
+          date: String(item.date || ''),
+          time: String(item.time || ''),
+          insuranceType: convenioName ? 'CONVENIO' : 'PARTICULAR',
+          insuranceName: convenioName || 'Particular',
+          status: toStatus(item.authorizationStatus),
+          rawStatus: String(item.authorizationStatus || 'PENDING'),
+          notes: item.authorizationNotes || null,
+          updatedAt: item.updatedAt,
+        };
+      });
 
     const teaByTherapy = new Map<string, any[]>();
     teaReservations.forEach((item: any) => {
@@ -211,6 +222,8 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
         roomName: roomByDoctorName.get(String(first?.professionalName || '').trim().toLowerCase()) || null,
         date: first?.suggestedDate ? new Date(first.suggestedDate).toISOString().slice(0, 10) : '',
         time: String(first?.suggestedTime || ''),
+        insuranceType: String(first?.patient?.healthInsuranceName || '').trim() ? 'CONVENIO' : 'PARTICULAR',
+        insuranceName: String(first?.patient?.healthInsuranceName || '').trim() || 'Particular',
         status: groupedStatus,
         rawStatus: entries.map((item: any) => String(item?.status || '')).join(','),
         notes: sanitizeAuthorizationNotes(entries.find((item: any) => item?.notes)?.notes),
@@ -528,7 +541,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
           pitTherapyId: id,
           professionalDoctorId: doctorIds.length > 0 ? { in: doctorIds } : undefined,
           OR: [
-            { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+            { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {
               AND: [
                 { status: 'CANCELED' as any },
@@ -560,7 +573,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
           where: {
             pitTherapyId: id,
             OR: [
-              { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+              { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
               {
                 AND: [
                   { status: 'CANCELED' as any },

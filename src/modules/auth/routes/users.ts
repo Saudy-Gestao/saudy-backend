@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import bcrypt from 'bcryptjs';
+import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
 export default async function userRoutes(app: FastifyInstance) {
   const isRoomSector = (sector: { name?: string | null; description?: string | null }) => {
@@ -109,6 +110,7 @@ export default async function userRoutes(app: FastifyInstance) {
 
     const requestUserId = (request.user as any).id as string;
     const loggedContext = await getLoggedContext(requestUserId);
+    const normalizedEmail = normalizeEmail(email);
 
     if (!loggedContext?.companyId) {
       return reply.code(403).send({ error: 'User not associated with a company' });
@@ -127,6 +129,10 @@ export default async function userRoutes(app: FastifyInstance) {
 
     if (!branch) {
       return reply.code(403).send({ error: 'Filial inválida para sua empresa' });
+    }
+
+    if (!isValidEmail(normalizedEmail)) {
+      return reply.code(400).send({ error: 'Email inválido' });
     }
 
     const sector = await prisma.sector.findFirst({
@@ -168,7 +174,7 @@ export default async function userRoutes(app: FastifyInstance) {
         accesses: { connect: accessIds.map((id) => ({ id })) },
         name,
         birthDate: new Date(birthDate),
-        email,
+        email: normalizedEmail,
         password: hashedPassword,
         phone,
         address,
@@ -236,7 +242,7 @@ export default async function userRoutes(app: FastifyInstance) {
       phone?: string;
       address?: string;
     };
-    const normalizedEmail = email ? String(email).trim().toLowerCase() : undefined;
+    const normalizedEmail = email !== undefined ? normalizeEmail(email) : undefined;
 
     const requestUserId = (request.user as any).id as string;
     const loggedContext = await getLoggedContext(requestUserId);
@@ -321,6 +327,9 @@ export default async function userRoutes(app: FastifyInstance) {
         phone,
         address,
       };
+      if (email !== undefined && !isValidEmail(normalizedEmail)) {
+        return reply.code(400).send({ error: 'Email inválido' });
+      }
       if (password) {
         data.password = await bcrypt.hash(password, 10);
       }
