@@ -2159,6 +2159,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       select: {
         id: true,
         patientId: true,
+        pitTherapyId: true,
         suggestedDate: true,
         suggestedTime: true,
       },
@@ -2181,6 +2182,13 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     }
 
     let canceledAppointments = 0;
+    const targetPitTherapyIds = Array.from(
+      new Set(
+        reservations
+          .map((reservation: any) => String(reservation?.pitTherapyId || ''))
+          .filter(Boolean),
+      ),
+    );
     const slotSignatures = new Set<string>();
     reservations.forEach((reservation: any) => {
       const dateIso = reservation?.suggestedDate ? formatDateAsIso(new Date(reservation.suggestedDate)) : null;
@@ -2233,11 +2241,43 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           },
         })),
       });
+
+      // Remove canceled therapies from active PIT flow so they do not return to pre-reservation.
+      if (targetPitTherapyIds.length > 0) {
+        await tx.teaPitTherapy.updateMany({
+          where: {
+            id: { in: targetPitTherapyIds },
+            pit: {
+              teaProfileId: String(body.teaProfileId),
+            },
+          },
+          data: {
+            isActive: false,
+          },
+        });
+
+        await tx.teaPreReservation.updateMany({
+          where: {
+            teaProfileId: String(body.teaProfileId),
+            pitTherapyId: { in: targetPitTherapyIds },
+            status: {
+              in: ['PENDING_SCHEDULING', 'RESERVED', 'PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any,
+            },
+          },
+          data: {
+            status: 'CANCELED' as any,
+            notes: body?.reason
+              ? `Terapia removida do PIT por desmarcação em lote: ${String(body.reason)}`
+              : 'Terapia removida do PIT por desmarcação em lote',
+          },
+        });
+      }
     });
 
     return {
       canceledAppointments,
       affectedReservations: reservations.length,
+      deactivatedTherapies: targetPitTherapyIds.length,
     };
   });
 
