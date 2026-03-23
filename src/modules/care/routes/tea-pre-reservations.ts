@@ -2002,7 +2002,6 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       where: {
         teaProfileId: String(teaProfileId),
         status: 'CONVERTED' as any,
-        suggestedDate: { gte: fromDateStart },
         suggestedTime: { not: null },
       },
       include: {

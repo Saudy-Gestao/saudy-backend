@@ -1014,15 +1014,40 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const branchId = (request as any).branchId as string;
-    const { teaProfileId } = request.params as { teaProfileId: string };
+    const { teaProfileId: teaProfileIdOrPitId } = request.params as { teaProfileId: string };
     const actor = resolveActorFromRequest(request);
 
-    const teaProfile = await prisma.teaProfile.findFirst({ where: { id: teaProfileId, patient: { branchId } } });
-    if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
+    const teaProfile = await prisma.teaProfile.findFirst({
+      where: { id: teaProfileIdOrPitId, patient: { branchId } },
+      select: { id: true },
+    });
+
+    let resolvedTeaProfileId = teaProfile?.id || null;
+    let resolvedPitId = null as string | null;
+
+    if (!resolvedTeaProfileId) {
+      const pitById = await prisma.teaPit.findFirst({
+        where: {
+          id: teaProfileIdOrPitId,
+          teaProfile: { patient: { branchId } },
+        },
+        select: {
+          id: true,
+          teaProfileId: true,
+        },
+      });
+
+      if (pitById) {
+        resolvedTeaProfileId = String(pitById.teaProfileId);
+        resolvedPitId = String(pitById.id);
+      }
+    }
+
+    if (!resolvedTeaProfileId) return reply.code(404).send({ error: 'TEA profile or PIT not found' });
 
     const existingPit = await prisma.teaPit.findFirst({
       where: {
-        teaProfileId,
+        ...(resolvedPitId ? { id: resolvedPitId } : { teaProfileId: resolvedTeaProfileId }),
         status: { not: 'Inativo' },
       },
       include: {
@@ -1034,6 +1059,18 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     });
 
     if (!existingPit) {
+      const alreadyInactivePit = await prisma.teaPit.findFirst({
+        where: {
+          ...(resolvedPitId ? { id: resolvedPitId } : { teaProfileId: resolvedTeaProfileId }),
+        },
+        select: { id: true, status: true },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      if (alreadyInactivePit) {
+        return { message: 'PIT já estava inativo' };
+      }
+
       return reply.code(404).send({ error: 'PIT not found' });
     }
 
