@@ -1386,6 +1386,45 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     const therapiesToCreate: any[] = [];
     const therapiesToDeactivate = new Set<string>();
 
+    const normalizeWeekdays = (value: unknown): string[] => {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((item) => String(item || '').trim().toUpperCase())
+        .filter(Boolean)
+        .sort();
+    };
+
+    const hasSchedulingChange = (incoming: any, existing: any): boolean => {
+      const incomingWeekly = Math.max(1, Number(incoming?.weeklyFrequency || 1));
+      const existingWeekly = Math.max(1, Number(existing?.weeklyFrequency || 1));
+      if (incomingWeekly !== existingWeekly) return true;
+
+      const incomingShift = String(incoming?.preferredShift || '').trim().toUpperCase();
+      const existingShift = String(existing?.preferredShift || '').trim().toUpperCase();
+      if (incomingShift !== existingShift) return true;
+
+      const incomingDuration = Number(incoming?.durationMinutes || 0) || 0;
+      const existingDuration = Number(existing?.durationMinutes || 0) || 0;
+      if (incomingDuration !== existingDuration) return true;
+
+      const incomingProcedure = String(incoming?.procedureId || incoming?.therapyType || '').trim();
+      const existingProcedure = String(existing?.procedureId || existing?.therapyType || '').trim();
+      if (incomingProcedure !== existingProcedure) return true;
+
+      const incomingProfessional = String(incoming?.professionalDoctorId || incoming?.professional || '').trim();
+      const existingProfessional = String(existing?.professionalDoctorId || existing?.professional || '').trim();
+      if (incomingProfessional !== existingProfessional) return true;
+
+      const incomingWeekdays = normalizeWeekdays(incoming?.preferredWeekdays);
+      const existingWeekdays = normalizeWeekdays(existing?.preferredWeekdays);
+      if (incomingWeekdays.length !== existingWeekdays.length) return true;
+      for (let i = 0; i < incomingWeekdays.length; i += 1) {
+        if (incomingWeekdays[i] !== existingWeekdays[i]) return true;
+      }
+
+      return false;
+    };
+
     safeTherapies
       .filter((therapy: any) => !therapy?.id)
       .forEach((therapy: any) => {
@@ -1402,6 +1441,17 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
 
         therapiesToCreate.push(therapy);
       });
+
+    therapiesToUpdate.forEach((entry) => {
+      const existing = existingById.get(entry.id);
+      if (!existing) return;
+      const isExistingInactive = existing?.isActive === false;
+      if (!isExistingInactive) return;
+      if (hasSchedulingChange(entry.data, existing)) {
+        // If schedule-defining fields changed on an inactive therapy, reactivate it for pre-reservation.
+        entry.data.isActive = true;
+      }
+    });
 
     therapiesToUpdate.forEach((entry) => {
       if (entry.data?.isActive === false) {

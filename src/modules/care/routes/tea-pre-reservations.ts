@@ -710,6 +710,41 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const activeWeeklyReference = resolveWeeklyCoverageCount(weeklyCounts);
       const weeklyTarget = Math.max(1, Number(therapy?.weeklyFrequency) || 1);
       const openReservations = therapyReservations.filter((item: any) => OPEN_STATUSES.includes(String(item?.status || '') as any));
+      const weeklyPatternBySignature = new Map<string, { date: string; time: string }>();
+      const upsertWeeklyPatternSlot = (dateIso: string | null, time: string | null) => {
+        if (!dateIso || !time) return;
+        const rawDate = new Date(`${dateIso}T00:00:00`);
+        if (Number.isNaN(rawDate.getTime())) return;
+        const weekday = rawDate.getDay();
+        const signature = `${weekday}#${time}`;
+        const existing = weeklyPatternBySignature.get(signature);
+        if (!existing || dateIso < existing.date) {
+          weeklyPatternBySignature.set(signature, { date: dateIso, time });
+        }
+      };
+
+      openReservations.forEach((item: any) => {
+        const rawDate = item?.suggestedDate ? new Date(item.suggestedDate) : null;
+        const dateIso = rawDate && !Number.isNaN(rawDate.getTime()) ? formatDateAsIso(rawDate) : null;
+        const time = item?.suggestedTime ? String(item.suggestedTime) : null;
+        upsertWeeklyPatternSlot(dateIso, time);
+      });
+
+      // Frequency-change flow may have no open pre-reservations. In this case,
+      // derive weekly anchors from converted sessions that still exist as active appointments.
+      if (weeklyPatternBySignature.size === 0) {
+        activeConvertedSlotSignatures.forEach((slotSignature) => {
+          const [dateIso, time] = String(slotSignature).split('#');
+          upsertWeeklyPatternSlot(dateIso || null, time || null);
+        });
+      }
+
+      const weeklySlotPattern = Array.from(weeklyPatternBySignature.values()).sort((a, b) => {
+        const weekdayA = new Date(`${a.date}T00:00:00`).getDay();
+        const weekdayB = new Date(`${b.date}T00:00:00`).getDay();
+        if (weekdayA !== weekdayB) return weekdayA - weekdayB;
+        return parseTimeToSortableValue(a.time) - parseTimeToSortableValue(b.time);
+      });
       const openSlotsByWeek = new Map<string, Set<string>>();
       openReservations.forEach((item: any) => {
         const dateIso = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : null;
@@ -790,6 +825,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           suggestedDate: !treatAsPendingScheduling && hasAnyReservation ? latest?.suggestedDate : null,
           suggestedTime: !treatAsPendingScheduling && hasAnyReservation ? latest?.suggestedTime : null,
         },
+        weeklySlotPattern,
         notes: !treatAsPendingScheduling && hasAnyReservation ? latest?.notes : null,
         source: hasWeeklyFrequencyDelta
           ? 'PIT_PENDING_FREQUENCY_CHANGE'
