@@ -97,6 +97,12 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       prisma.teaPreReservation.findMany({
         where: {
           professionalDoctorId: doctorIds.length > 0 ? { in: doctorIds } : undefined,
+          pit: {
+            status: { notIn: ['Inativo', 'CONCLUIDO', 'Concluído'] },
+          },
+          pitTherapy: {
+            isActive: true,
+          },
           OR: [
             { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {
@@ -108,7 +114,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
           ],
         },
         include: {
-          patient: { select: { name: true, cpf: true } },
+          patient: { select: { name: true, cpf: true, hasHealthInsurance: true, healthInsuranceName: true } },
         },
         orderBy: { createdAt: 'desc' },
         take: Number(limit),
@@ -141,6 +147,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       roomName: roomByDoctorName.get(String(item.doctorName || '').trim().toLowerCase()) || null,
       date: String(item.date || ''),
       time: String(item.time || ''),
+      insuranceType: String(item.convenio || '').trim() ? 'CONVENIO' : 'PARTICULAR',
       status: toStatus(item.authorizationStatus),
       rawStatus: String(item.authorizationStatus || 'PENDING'),
       notes: item.authorizationNotes || null,
@@ -189,6 +196,9 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
         roomName: roomByDoctorName.get(String(first?.professionalName || '').trim().toLowerCase()) || null,
         date: first?.suggestedDate ? new Date(first.suggestedDate).toISOString().slice(0, 10) : '',
         time: String(first?.suggestedTime || ''),
+        insuranceType: (Boolean(first?.patient?.hasHealthInsurance) || String(first?.patient?.healthInsuranceName || '').trim())
+          ? 'CONVENIO'
+          : 'PARTICULAR',
         status: groupedStatus,
         rawStatus: entries.map((item: any) => String(item?.status || '')).join(','),
         notes: sanitizeAuthorizationNotes(entries.find((item: any) => item?.notes)?.notes),
