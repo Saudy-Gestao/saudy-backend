@@ -1356,7 +1356,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     }
 
     const existingTherapies = Array.isArray(existingPit.therapies) ? existingPit.therapies : [];
-    const existingById = new Map(existingTherapies.map((therapy: any) => [String(therapy.id), therapy]));
+    const existingById = new Map<string, any>(existingTherapies.map((therapy: any) => [String(therapy.id), therapy]));
 
     const incomingWithId = safeTherapies.filter((therapy: any) => !!therapy?.id);
     const invalidIncomingId = incomingWithId.find((therapy: any) => !existingById.has(String(therapy.id)));

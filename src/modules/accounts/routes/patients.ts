@@ -159,6 +159,7 @@ export default async function patientRoutes(app: FastifyInstance) {
       response: {
         200: { $ref: 'Patient#' },
         403: { type: 'object' },
+        400: { type: 'object' },
         404: {
           type: 'object',
           properties: { error: { type: 'string' } },
