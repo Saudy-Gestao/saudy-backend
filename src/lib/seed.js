@@ -117,6 +117,13 @@ const modules = [
     icon: 'Receipt',
     category: 'administrativo',
   },
+  {
+    name: 'whatsapp-config',
+    label: 'WhatsApp',
+    description: 'Configurações de WhatsApp e notificações',
+    icon: 'MessageCircle',
+    category: 'administrativo',
+  },
   // Cadastros
   {
     name: 'cadastro-medico',

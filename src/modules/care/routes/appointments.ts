@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import type { Prisma } from '@prisma/client';
+import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 
 const COMPLETED_STATUSES = new Set(['REALIZADO', 'COMPLETED', 'FINALIZADO', 'ATENDIDO']);
 const CANCELED_STATUSES = new Set(['CANCELADO', 'CANCELED']);
@@ -252,6 +253,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         observations: data.observations || null,
         totem: data.totem ?? null,
       } });
+
+      // Enviar mensagem WhatsApp automaticamente (fire and forget)
+      WhatsAppAutoSender.sendAppointmentCreatedMessage(branchId, item.id);
 
       return reply.code(201).send(item);
     } catch (err: any) {
