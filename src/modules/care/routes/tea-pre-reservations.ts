@@ -334,6 +334,100 @@ function pickPendingRepresentativeReservation(reservations: any[]): any | null {
   return orderedFallback[0];
 }
 
+async function hasPendingFrequencyIncreaseForTherapy(pitTherapyId: string, branchId: string): Promise<boolean> {
+  const therapy = await prisma.teaPitTherapy.findFirst({
+    where: {
+      id: pitTherapyId,
+      isActive: true,
+      pit: { teaProfile: { patient: { branchId } } },
+    },
+    include: {
+      pit: {
+        include: {
+          teaProfile: {
+            include: {
+              patient: { select: { id: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!therapy) return false;
+
+  const patientId = String(therapy?.pit?.teaProfile?.patient?.id || '');
+  if (!patientId) return false;
+
+  const todayIso = formatDateAsIso(new Date());
+  const [convertedReservations, activeTeaAppointments] = await Promise.all([
+    prisma.teaPreReservation.findMany({
+      where: {
+        pitTherapyId,
+        status: 'CONVERTED' as any,
+      },
+      select: {
+        suggestedDate: true,
+        suggestedTime: true,
+      },
+    }),
+    prisma.appointment.findMany({
+      where: {
+        isActive: true,
+        type: 'RETORNO TEA',
+        patientId,
+        date: { gte: todayIso },
+        NOT: [
+          { status: 'CANCELED' },
+          { status: 'CANCELADO' },
+          { status: 'COMPLETED' },
+          { status: 'CONCLUIDO' },
+        ],
+      },
+      select: {
+        date: true,
+        time: true,
+      },
+    }),
+  ]);
+
+  const appointmentSignature = new Set(
+    activeTeaAppointments
+      .filter((item: any) => item?.date && item?.time)
+      .map((item: any) => `${String(item.date)}#${String(item.time)}`),
+  );
+
+  const activeConvertedSlotSignatures = new Set<string>();
+  convertedReservations.forEach((item: any) => {
+    const dateIso = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : null;
+    const time = item?.suggestedTime ? String(item.suggestedTime) : null;
+    if (!dateIso || !time) return;
+    const slotSignature = `${dateIso}#${time}`;
+    if (appointmentSignature.has(slotSignature)) {
+      activeConvertedSlotSignatures.add(slotSignature);
+    }
+  });
+
+  if (activeConvertedSlotSignatures.size === 0) return false;
+
+  const slotsByWeek = new Map<string, Set<string>>();
+  activeConvertedSlotSignatures.forEach((slotSignature) => {
+    const [dateIso] = slotSignature.split('#');
+    if (!dateIso) return;
+    const weekStart = startOfWeekMonday(new Date(`${dateIso}T00:00:00`));
+    const weekKey = formatDateAsIso(weekStart);
+    if (!slotsByWeek.has(weekKey)) slotsByWeek.set(weekKey, new Set<string>());
+    slotsByWeek.get(weekKey)!.add(slotSignature);
+  });
+
+  const activeWeeklyReference = Array.from(slotsByWeek.values())
+    .map((weekSlots) => weekSlots.size)
+    .reduce((max, count) => Math.max(max, Math.max(0, Number(count) || 0)), 0);
+  const weeklyTarget = Math.max(1, Number(therapy?.weeklyFrequency) || 1);
+
+  return activeWeeklyReference > 0 && activeWeeklyReference < weeklyTarget;
+}
+
 export default async function teaPreReservationsRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -1662,6 +1756,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         : 'PENDING_AUTHORIZATION';
       const shouldInferStatusFromHistory = !requestedStatus;
       const hasAuthorizedHistoryByTherapyId = new Map<string, boolean>();
+      const hasPendingFrequencyIncreaseByTherapyId = new Map<string, boolean>();
       const replacedTherapyIds = new Set<string>();
 
       const created: any[] = [];
@@ -1762,6 +1857,15 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
         let acceptedStatusForTherapy = acceptedStatus;
         if (shouldInferStatusFromHistory) {
+          if (!hasPendingFrequencyIncreaseByTherapyId.has(therapy.id)) {
+            const hasPendingIncrease = await hasPendingFrequencyIncreaseForTherapy(therapy.id, (request as any).branchId as string);
+            hasPendingFrequencyIncreaseByTherapyId.set(therapy.id, hasPendingIncrease);
+          }
+
+          if (hasPendingFrequencyIncreaseByTherapyId.get(therapy.id)) {
+            acceptedStatusForTherapy = 'PENDING_AUTHORIZATION';
+          }
+
           if (!hasAuthorizedHistoryByTherapyId.has(therapy.id)) {
             const authorizedHistory = await prisma.teaPreReservation.findFirst({
               where: {
@@ -1773,7 +1877,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             hasAuthorizedHistoryByTherapyId.set(therapy.id, Boolean(authorizedHistory));
           }
 
-          if (hasAuthorizedHistoryByTherapyId.get(therapy.id)) {
+          if (
+            acceptedStatusForTherapy !== 'PENDING_AUTHORIZATION'
+            && hasAuthorizedHistoryByTherapyId.get(therapy.id)
+          ) {
             acceptedStatusForTherapy = 'AUTHORIZED';
           }
         }
@@ -1918,7 +2025,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const existing = await prisma.teaPreReservation.findFirst({ where: { id, patient: { branchId: (request as any).branchId as string } } });
     if (!existing) return reply.code(404).send({ error: 'Pre-reservation not found' });
 
-    const shouldBypassAuthorizationStep = status === 'PENDING_AUTHORIZATION'
+    const hasPendingFrequencyIncrease = status === 'PENDING_AUTHORIZATION'
+      ? await hasPendingFrequencyIncreaseForTherapy(existing.pitTherapyId, (request as any).branchId as string)
+      : false;
+    const shouldBypassAuthorizationStep = status === 'PENDING_AUTHORIZATION' && !hasPendingFrequencyIncrease
       ? Boolean(await prisma.teaPreReservation.findFirst({
         where: {
           pitTherapyId: existing.pitTherapyId,
