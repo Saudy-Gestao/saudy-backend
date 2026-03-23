@@ -2303,14 +2303,17 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           pitTherapyId: { type: 'string' },
           cancelAll: { type: 'boolean' },
           fromDate: { type: 'string' },
+          weekdayIndex: { type: 'number' },
           reason: { type: 'string' },
         },
       },
     },
   }, async (request, reply) => {
-    const body = request.body as { teaProfileId?: string; pitTherapyId?: string; cancelAll?: boolean; fromDate?: string; reason?: string };
+    const body = request.body as { teaProfileId?: string; pitTherapyId?: string; cancelAll?: boolean; fromDate?: string; weekdayIndex?: number; reason?: string };
     const actor = resolveActorFromRequest(request);
     const cancelAll = Boolean(body?.cancelAll);
+    const hasWeekdayFilter = Number.isInteger(body?.weekdayIndex);
+    const weekdayIndex = hasWeekdayFilter ? Number(body?.weekdayIndex) : null;
 
     if (!body?.teaProfileId || (!cancelAll && !body?.pitTherapyId)) {
       return reply.code(400).send({
@@ -2322,13 +2325,22 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
     }
 
+    if (hasWeekdayFilter && (weekdayIndex === null || weekdayIndex < 0 || weekdayIndex > 6)) {
+      return reply.code(400).send({
+        error: 'Validation failed',
+        fields: {
+          weekdayIndex: 'weekdayIndex deve ser um número entre 0 e 6',
+        },
+      });
+    }
+
     const fromIso = String(body?.fromDate || formatDateAsIso(new Date()));
     const fromDateStart = new Date(`${fromIso}T00:00:00`);
     if (Number.isNaN(fromDateStart.getTime())) {
       return reply.code(400).send({ error: 'Validation failed', fields: { fromDate: 'Data inválida' } });
     }
 
-    const reservations = await prisma.teaPreReservation.findMany({
+    const candidateReservations = await prisma.teaPreReservation.findMany({
       where: {
         teaProfileId: String(body.teaProfileId),
         ...(cancelAll ? {} : { pitTherapyId: String(body.pitTherapyId) }),
@@ -2345,6 +2357,14 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       },
       orderBy: [{ suggestedDate: 'asc' }, { suggestedTime: 'asc' }],
     });
+
+    const reservations = hasWeekdayFilter
+      ? candidateReservations.filter((reservation: any) => {
+        const dateIso = reservation?.suggestedDate ? formatDateAsIso(new Date(reservation.suggestedDate)) : null;
+        if (!dateIso) return false;
+        return new Date(`${dateIso}T00:00:00`).getDay() === weekdayIndex;
+      })
+      : candidateReservations;
 
     if (reservations.length === 0) {
       return {
@@ -2411,19 +2431,24 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       await tx.teaPreReservationTimeline.createMany({
         data: reservations.map((reservation: any) => ({
           preReservationId: reservation.id,
-          eventType: cancelAll ? 'APPOINTMENT_CANCELED_BATCH_ALL' : 'APPOINTMENT_CANCELED_BATCH',
-          eventLabel: cancelAll ? 'Agendamento cancelado em lote (todas as terapias)' : 'Agendamento cancelado em lote',
+          eventType: hasWeekdayFilter
+            ? 'APPOINTMENT_CANCELED_BATCH_WEEKDAY'
+            : (cancelAll ? 'APPOINTMENT_CANCELED_BATCH_ALL' : 'APPOINTMENT_CANCELED_BATCH'),
+          eventLabel: hasWeekdayFilter
+            ? 'Agendamento cancelado em lote por dia da semana'
+            : (cancelAll ? 'Agendamento cancelado em lote (todas as terapias)' : 'Agendamento cancelado em lote'),
           actor,
           payload: {
             reason: body?.reason || null,
             fromDate: fromIso,
             cancelAll,
+            weekdayIndex,
           },
         })),
       });
 
       // Remove canceled therapies from active PIT flow so they do not return to pre-reservation.
-      if (targetPitTherapyIds.length > 0) {
+      if (!hasWeekdayFilter && targetPitTherapyIds.length > 0) {
         await tx.teaPitTherapy.updateMany({
           where: {
             id: { in: targetPitTherapyIds },
@@ -2457,7 +2482,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     return {
       canceledAppointments,
       affectedReservations: reservations.length,
-      deactivatedTherapies: targetPitTherapyIds.length,
+      deactivatedTherapies: hasWeekdayFilter ? 0 : targetPitTherapyIds.length,
     };
   });
 
