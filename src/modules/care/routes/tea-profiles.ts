@@ -1052,7 +1052,6 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       },
       include: {
         therapies: {
-          where: { isActive: true },
           select: { id: true },
         },
       },
@@ -1075,6 +1074,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     }
 
     const therapyIds = (existingPit.therapies || []).map((therapy: any) => String(therapy.id)).filter(Boolean);
+    const todayIso = formatDateToIso(new Date());
 
     await prisma.$transaction(async (tx: any) => {
       await tx.teaPit.update({
@@ -1087,33 +1087,79 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           where: { id: { in: therapyIds } },
           data: { isActive: false },
         });
+      }
 
-        const preReservationsToCancel = await tx.teaPreReservation.findMany({
-          where: {
-            pitTherapyId: { in: therapyIds },
-            status: { in: [...OPEN_PRE_RESERVATION_STATUSES] as any },
-          },
-          select: { id: true },
+      const preReservationsToCancel = await tx.teaPreReservation.findMany({
+        where: {
+          pitId: existingPit.id,
+          status: { in: [...OPEN_PRE_RESERVATION_STATUSES] as any },
+        },
+        select: { id: true },
+      });
+
+      if (preReservationsToCancel.length > 0) {
+        const idsToCancel = preReservationsToCancel.map((item: any) => String(item.id));
+
+        await tx.teaPreReservation.updateMany({
+          where: { id: { in: idsToCancel } },
+          data: { status: 'CANCELED' },
         });
 
-        if (preReservationsToCancel.length > 0) {
-          const idsToCancel = preReservationsToCancel.map((item: any) => String(item.id));
+        await tx.teaPreReservationTimeline.createMany({
+          data: idsToCancel.map((preReservationId: string) => ({
+            preReservationId,
+            eventType: 'PIT_DEACTIVATED',
+            eventLabel: 'Pré-reserva cancelada por exclusão do PIT',
+            actor,
+            payload: { source: 'pit-delete' },
+          })),
+        });
+      }
 
-          await tx.teaPreReservation.updateMany({
-            where: { id: { in: idsToCancel } },
-            data: { status: 'CANCELED' },
-          });
+      const convertedFutureReservations = await tx.teaPreReservation.findMany({
+        where: {
+          pitId: existingPit.id,
+          status: 'CONVERTED' as any,
+          suggestedDate: { gte: new Date(`${todayIso}T00:00:00`) },
+        },
+        select: {
+          patientId: true,
+          suggestedDate: true,
+          suggestedTime: true,
+          professionalName: true,
+          procedureName: true,
+        },
+      });
 
-          await tx.teaPreReservationTimeline.createMany({
-            data: idsToCancel.map((preReservationId: string) => ({
-              preReservationId,
-              eventType: 'PIT_DEACTIVATED',
-              eventLabel: 'Pré-reserva cancelada por exclusão do PIT',
-              actor,
-              payload: { source: 'pit-delete' },
-            })),
-          });
+      for (const reservation of convertedFutureReservations) {
+        if (!reservation?.suggestedDate || !reservation?.suggestedTime) continue;
+        const appointmentDate = formatDateToIso(new Date(reservation.suggestedDate));
+        const conflictClauses: any[] = [
+          { patientId: reservation.patientId },
+        ];
+        if (reservation.professionalName) {
+          conflictClauses.push({ doctorName: reservation.professionalName });
         }
+
+        await tx.appointment.updateMany({
+          where: {
+            isActive: true,
+            date: appointmentDate,
+            time: reservation.suggestedTime,
+            type: 'RETORNO TEA',
+            OR: conflictClauses,
+            NOT: [
+              { status: 'CANCELED' },
+              { status: 'CANCELADO' },
+              { status: 'COMPLETED' },
+              { status: 'CONCLUIDO' },
+            ],
+          },
+          data: {
+            status: 'CANCELED',
+            isActive: false,
+          },
+        });
       }
     });
 
@@ -1468,19 +1514,25 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           for (const reservation of convertedFutureReservations) {
             if (!reservation?.suggestedDate || !reservation?.suggestedTime) continue;
             const appointmentDate = formatDateToIso(new Date(reservation.suggestedDate));
+            const conflictClauses: any[] = [
+              { patientId: reservation.patientId },
+            ];
+            if (reservation.professionalName) {
+              conflictClauses.push({ doctorName: reservation.professionalName });
+            }
 
             await tx.appointment.updateMany({
               where: {
                 isActive: true,
-                patientId: reservation.patientId,
                 date: appointmentDate,
                 time: reservation.suggestedTime,
-                doctorName: reservation.professionalName || undefined,
-                specialty: reservation.procedureName || undefined,
                 type: 'RETORNO TEA',
+                OR: conflictClauses,
                 NOT: [
                   { status: 'CANCELED' },
+                  { status: 'CANCELADO' },
                   { status: 'COMPLETED' },
+                  { status: 'CONCLUIDO' },
                 ],
               },
               data: {

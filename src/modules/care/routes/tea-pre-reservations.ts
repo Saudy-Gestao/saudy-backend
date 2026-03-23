@@ -1078,6 +1078,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           isActive: true,
           doctorName: doctor.name,
           date: { in: candidateDateStrings },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -1086,6 +1092,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           isActive: true,
           patientId: therapy.pit.teaProfile.patient.id,
           date: { in: candidateDateStrings },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -1093,6 +1105,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           professionalDoctorId: doctor.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
             gte: new Date(`${rangeStart}T00:00:00`),
             lte: new Date(`${rangeEnd}T23:59:59`),
@@ -1104,6 +1118,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           patientId: therapy.pit.teaProfile.patient.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
             gte: new Date(`${rangeStart}T00:00:00`),
             lte: new Date(`${rangeEnd}T23:59:59`),
@@ -1282,6 +1298,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           isActive: true,
           doctorName: doctor.name,
           date: { in: weekDates },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -1290,6 +1312,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           isActive: true,
           patientId: therapy.pit.teaProfile.patient.id,
           date: { in: weekDates },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -1297,6 +1325,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           professionalDoctorId: doctor.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
             gte: new Date(`${weekDates[0]}T00:00:00`),
             lte: new Date(`${weekDates[6]}T23:59:59`),
@@ -1308,6 +1338,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           patientId: therapy.pit.teaProfile.patient.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
             gte: new Date(`${weekDates[0]}T00:00:00`),
             lte: new Date(`${weekDates[6]}T23:59:59`),
