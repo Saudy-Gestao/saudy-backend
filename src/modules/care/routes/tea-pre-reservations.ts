@@ -655,11 +655,9 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const procedureName = therapy.therapyType || latest?.procedureName || null;
       const professionalName = therapy.professional || latest?.professionalName || null;
 
-      const effectiveStatus = hasWeeklyFrequencyDelta
-        ? 'RESERVED'
-        : (treatAsPendingScheduling
-          ? 'PENDING_SCHEDULING'
-          : (hasAnyReservation ? String(latest.status) : 'PENDING_SCHEDULING'));
+      const effectiveStatus = treatAsPendingScheduling
+        ? (hasWeeklyFrequencyDelta ? 'RESERVED' : 'PENDING_SCHEDULING')
+        : (hasAnyReservation ? String(latest.status) : 'PENDING_SCHEDULING');
       const expiryMetadata = getExpiryMetadata(treatAsPendingScheduling ? null : (latest?.expiresAt || null), effectiveStatus);
 
       return {
@@ -717,11 +715,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       };
     });
 
+    const activeTherapySignatureSet = new Set(
+      items.map((item: any) => {
+        const pitId = String(item?.pitId || '');
+        const procedureId = String(item?.procedure?.id || item?.procedure?.name || '').trim().toLowerCase();
+        const professionalId = String(item?.professional?.id || item?.professional?.name || '').trim().toLowerCase();
+        return `${pitId}#${procedureId}#${professionalId}`;
+      }),
+    );
+
     const removedTherapyPendingItems = removedTherapies
       .map((therapy: any) => {
         const therapyReservations = reservationsByTherapyId[therapy.id] || [];
         const convertedReservations = therapyReservations.filter((item: any) => String(item?.status || '') === 'CONVERTED');
         if (convertedReservations.length === 0) return null;
+
+        const removedTherapySignature = `${String(therapy?.pitId || '')}#${String(therapy?.procedureId || therapy?.therapyType || '').trim().toLowerCase()}#${String(therapy?.professionalDoctorId || therapy?.professional || '').trim().toLowerCase()}`;
+        if (activeTherapySignatureSet.has(removedTherapySignature)) {
+          return null;
+        }
 
         const patientId = String(therapy?.pit?.teaProfile?.patient?.id || '');
         const hasFutureActiveConvertedSessions = convertedReservations.some((item: any) => {
@@ -1901,6 +1913,17 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const existing = await prisma.teaPreReservation.findFirst({ where: { id, patient: { branchId: (request as any).branchId as string } } });
     if (!existing) return reply.code(404).send({ error: 'Pre-reservation not found' });
 
+    const shouldBypassAuthorizationStep = status === 'PENDING_AUTHORIZATION'
+      ? Boolean(await prisma.teaPreReservation.findFirst({
+        where: {
+          pitTherapyId: existing.pitTherapyId,
+          status: { in: ['AUTHORIZED', 'CONVERTED'] as any },
+        },
+        select: { id: true },
+      }))
+      : false;
+    const resolvedStatus = shouldBypassAuthorizationStep ? 'AUTHORIZED' : status;
+
     const applySeries = Boolean(body?.applySeries);
 
     if (applySeries) {
@@ -1918,30 +1941,32 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const updatedItems: any[] = [];
 
       for (const target of targets) {
-        const statusIsProposed = status === 'PROPOSED';
+        const statusIsProposed = resolvedStatus === 'PROPOSED';
         const expiresAtValue = body?.expiresAt
           ? new Date(body.expiresAt)
           : (statusIsProposed ? new Date(Date.now() + (48 * 60 * 60 * 1000)) : undefined);
         const updated = await prisma.teaPreReservation.update({
           where: { id: target.id },
           data: {
-            status,
+            status: resolvedStatus,
             notes: body?.notes !== undefined ? (body.notes || null) : undefined,
             expiresAt: expiresAtValue,
-            authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (status === 'AUTHORIZED' ? new Date() : undefined),
-            convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (status === 'CONVERTED' ? new Date() : undefined),
+            authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (resolvedStatus === 'AUTHORIZED' ? new Date() : undefined),
+            convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (resolvedStatus === 'CONVERTED' ? new Date() : undefined),
           },
         });
 
         await appendTimelineEvent(
           updated.id,
           'STATUS_CHANGED',
-          `Status alterado para ${status}`,
+          `Status alterado para ${resolvedStatus}`,
           actor,
           {
             previousStatus: target.status,
-            nextStatus: status,
+            requestedStatus: status,
+            nextStatus: resolvedStatus,
             applySeries: true,
+            bypassedAuthorizationStep: shouldBypassAuthorizationStep,
           },
         );
 
@@ -1957,24 +1982,26 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const updated = await prisma.teaPreReservation.update({
       where: { id },
       data: {
-        status,
+        status: resolvedStatus,
         notes: body?.notes !== undefined ? (body.notes || null) : undefined,
         expiresAt: body?.expiresAt
           ? new Date(body.expiresAt)
-          : (status === 'PROPOSED' ? new Date(Date.now() + (48 * 60 * 60 * 1000)) : undefined),
-        authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (status === 'AUTHORIZED' ? new Date() : undefined),
-        convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (status === 'CONVERTED' ? new Date() : undefined),
+          : (resolvedStatus === 'PROPOSED' ? new Date(Date.now() + (48 * 60 * 60 * 1000)) : undefined),
+        authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (resolvedStatus === 'AUTHORIZED' ? new Date() : undefined),
+        convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (resolvedStatus === 'CONVERTED' ? new Date() : undefined),
       },
     });
 
     await appendTimelineEvent(
       updated.id,
       'STATUS_CHANGED',
-      `Status alterado para ${status}`,
+      `Status alterado para ${resolvedStatus}`,
       actor,
       {
         previousStatus: existing.status,
-        nextStatus: status,
+        requestedStatus: status,
+        nextStatus: resolvedStatus,
+        bypassedAuthorizationStep: shouldBypassAuthorizationStep,
       },
     );
 
