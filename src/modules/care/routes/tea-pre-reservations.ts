@@ -439,6 +439,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       where: {
         isActive: true,
         pit: {
+          status: { not: 'Inativo' },
           teaProfile: {
             isActive: true,
           },
@@ -473,6 +474,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       where: {
         isActive: false,
         pit: {
+          status: { not: 'Inativo' },
           teaProfile: {
             isActive: true,
           },
