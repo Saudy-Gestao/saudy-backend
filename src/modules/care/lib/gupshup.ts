@@ -11,6 +11,12 @@ export interface SendMessageParams {
   message: string;
 }
 
+export interface SendTemplateParams {
+  to: string;
+  templateName: string;
+  params: string[]; // Ordered values matching {{1}}, {{2}}, ... in the HSM template
+}
+
 export interface SendMessageResponse {
   status: 'success' | 'error';
   messageId?: string;
@@ -31,7 +37,7 @@ export class GupshupService {
     this.sourceNumber = this.normalizePhoneNumber(config.sourceNumber);
     
     this.client = axios.create({
-      baseURL: 'https://api.gupshup.io/sm/api/v1',
+      baseURL: 'https://api.gupshup.io/wa/api/v1',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'apikey': config.apiKey,
@@ -47,15 +53,18 @@ export class GupshupService {
       // Normalizar número de telefone (Gupshup espera apenas números: 5511999999999)
       const destinationNumber = this.normalizePhoneNumber(params.to);
 
+      // Gupshup requires the message field to be a JSON-encoded object
       const data = new URLSearchParams({
         channel: 'whatsapp',
         source: this.sourceNumber,
         destination: destinationNumber,
         'src.name': this.appName,
-        message: params.message,
+        message: JSON.stringify({ type: 'text', text: params.message }),
       });
 
       const response = await this.client.post('/msg', data.toString());
+
+      console.log('[gupshup] response', response.status, JSON.stringify(response.data));
 
       // Resposta bem-sucedida da Gupshup tem formato: { status: "submitted", messageId: "..." }
       if (response.data.status === 'submitted' || response.data.status === 'success') {
@@ -67,10 +76,13 @@ export class GupshupService {
 
       return {
         status: 'error',
-        error: response.data.message || 'Erro desconhecido ao enviar mensagem',
+        error: response.data.message || JSON.stringify(response.data) || 'Erro desconhecido ao enviar mensagem',
       };
     } catch (error: any) {
-      const errorMessage = error.response?.data?.message || error.message || 'Erro ao enviar mensagem';
+      const rawData = error.response?.data;
+      console.error('[gupshup] error', error.response?.status, JSON.stringify(rawData));
+
+      const errorMessage = rawData?.message || rawData?.error || JSON.stringify(rawData) || error.message || 'Erro ao enviar mensagem';
       
       // Adicionar dicas específicas baseadas no erro
       let hint = '';
@@ -108,6 +120,52 @@ export class GupshupService {
 
     // Retorna apenas os números (sem + ou outros símbolos)
     return digits;
+  }
+
+  /**
+   * Envia uma mensagem via template HSM aprovado pela Meta.
+   * Funciona mesmo sem sessão ativa (proactive outreach).
+   * O template deve estar aprovado no painel do Gupshup.
+   * Os params devem corresponder às variáveis {{1}}, {{2}}, ... do template aprovado.
+   */
+  async sendTemplateMessage(params: SendTemplateParams): Promise<SendMessageResponse> {
+    try {
+      const destinationNumber = this.normalizePhoneNumber(params.to);
+
+      const data = new URLSearchParams({
+        channel: 'whatsapp',
+        source: this.sourceNumber,
+        destination: destinationNumber,
+        'src.name': this.appName,
+        message: JSON.stringify({
+          type: 'template',
+          template: {
+            id: params.templateName,
+            params: params.params,
+          },
+        }),
+      });
+
+      const response = await this.client.post('/msg', data.toString());
+
+      console.log('[gupshup] template response', response.status, JSON.stringify(response.data));
+
+      if (response.data.status === 'submitted' || response.data.status === 'success') {
+        return { status: 'success', messageId: response.data.messageId };
+      }
+
+      return {
+        status: 'error',
+        error: response.data.message || JSON.stringify(response.data),
+      };
+    } catch (error: any) {
+      const rawData = error.response?.data;
+      console.error('[gupshup] template error', error.response?.status, JSON.stringify(rawData));
+      return {
+        status: 'error',
+        error: rawData?.message || rawData?.error || JSON.stringify(rawData) || error.message,
+      };
+    }
   }
 
   /**

@@ -168,6 +168,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
           },
           name: { type: 'string' },
           message: { type: 'string' },
+          hsmTemplateName: { type: 'string', description: 'Nome do template HSM aprovado no Gupshup (ex: confirmacao_agendamento)' },
           isActive: { type: 'boolean' },
         },
       },
@@ -205,11 +206,13 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         type: data.type,
         name: data.name,
         message: data.message,
+        hsmTemplateName: data.hsmTemplateName || null,
         isActive: data.isActive ?? true,
       },
       update: {
         name: data.name,
         message: data.message,
+        hsmTemplateName: data.hsmTemplateName !== undefined ? (data.hsmTemplateName || null) : undefined,
         isActive: data.isActive,
       },
     });
@@ -358,4 +361,5 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     return WhatsAppMessageBuilder.getAvailableVariables();
   });
+
 }

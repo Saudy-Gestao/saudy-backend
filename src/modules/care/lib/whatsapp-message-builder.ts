@@ -50,7 +50,7 @@ export class WhatsAppMessageBuilder {
   /**
    * Formata CPF: 12345678900 -> 123.456.789-00
    */
-  private static formatCPF(cpf?: string | null): string {
+  static formatCPF(cpf?: string | null): string {
     if (!cpf) return '';
     const digits = cpf.replace(/\D/g, '');
     if (digits.length !== 11) return cpf;
@@ -60,7 +60,7 @@ export class WhatsAppMessageBuilder {
   /**
    * Formata data: 2026-03-18 -> 18/03/2026 (Terça-feira)
    */
-  private static formatDate(date?: string | null): string {
+  static formatDate(date?: string | null): string {
     if (!date) return '';
     try {
       const d = dayjs(date);
@@ -86,6 +86,32 @@ export class WhatsAppMessageBuilder {
       { key: '{{convenio}}', description: 'Convênio' },
       { key: '{{observacoes}}', description: 'Observações adicionais' },
     ];
+  }
+
+  /**
+   * Extrai os valores das variáveis do template na ordem em que aparecem.
+   * Usado para montar os params do HSM template ({{1}}, {{2}}, ...).
+   */
+  static extractTemplateParams(template: string, data: AppointmentData): string[] {
+    const regex = /\{\{([^}]+)\}\}/gi;
+    const params: string[] = [];
+    let match;
+    while ((match = regex.exec(template)) !== null) {
+      const key = match[1].toLowerCase().trim();
+      let value = '';
+      switch (key) {
+        case 'paciente_nome': value = data.patientName || ''; break;
+        case 'paciente_cpf': value = data.patientCpf || ''; break;
+        case 'medico_nome': value = data.doctorName || ''; break;
+        case 'especialidade': value = data.specialty || ''; break;
+        case 'data': value = WhatsAppMessageBuilder.formatDate(data.date) || ''; break;
+        case 'hora': value = data.time || ''; break;
+        case 'convenio': value = data.convenio || ''; break;
+        case 'observacoes': value = data.observations || ''; break;
+      }
+      params.push(value);
+    }
+    return params;
   }
 
   /**

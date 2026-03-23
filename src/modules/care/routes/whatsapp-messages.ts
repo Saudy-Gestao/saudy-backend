@@ -91,6 +91,10 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'WhatsApp não está configurado para esta filial' });
       }
 
+      const apiKey     = whatsappConfig.accountSid;
+      const appName    = whatsappConfig.authToken;
+      const fromNumber = whatsappConfig.fromNumber;
+
       // Buscar template de mensagem ou usar mensagem customizada
       let message: string;
       if (data.customMessage) {
@@ -141,15 +145,41 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
 
       // Enviar mensagem via Gupshup
       const gupshup = new GupshupService({
-        apiKey: whatsappConfig.accountSid,
-        appName: whatsappConfig.authToken,
-        sourceNumber: whatsappConfig.fromNumber,
+        apiKey: apiKey,
+        appName: appName,
+        sourceNumber: fromNumber,
       });
 
-      const result = await gupshup.sendTextMessage({
-        to: patientPhone,
-        message,
+      // Tenta HSM template se configurado (funciona sem sessão ativa)
+      // Se HSM falhar, cai para session text message
+      let result;
+      const templateRecord = data.customMessage ? null : await prisma.whatsAppMessageTemplate.findFirst({
+        where: { branchId, type: data.messageType, isActive: true },
       });
+
+      if (templateRecord?.hsmTemplateName && !data.customMessage) {
+        const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
+          patientName: appointment.patientName,
+          patientCpf: appointment.patientCpf,
+          doctorName: appointment.doctorName,
+          specialty: appointment.specialty,
+          date: appointment.date,
+          time: appointment.time,
+          convenio: appointment.convenio,
+          observations: appointment.observations,
+        });
+        result = await gupshup.sendTemplateMessage({
+          to: patientPhone,
+          templateName: templateRecord.hsmTemplateName,
+          params: hsmParams,
+        });
+        if (result.status === 'error') {
+          console.warn('[whatsapp-send] HSM template falhou, tentando session text:', result.error);
+          result = await gupshup.sendTextMessage({ to: patientPhone, message });
+        }
+      } else {
+        result = await gupshup.sendTextMessage({ to: patientPhone, message });
+      }
 
       // Atualizar log com resultado
       if (result.status === 'success') {
@@ -305,19 +335,22 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         where: { branchId },
       });
 
-      if (!whatsappConfig) {
-        return reply.code(400).send({ error: 'WhatsApp não está configurado para esta filial' });
+      // Fall back to env vars if no DB config saved yet
+      const apiKey     = whatsappConfig?.accountSid  || process.env.GUPSHUP_API_KEY       || '';
+      const appName    = whatsappConfig?.authToken   || process.env.GUPSHUP_APP_NAME      || '';
+      const fromNumber = whatsappConfig?.fromNumber  || process.env.GUPSHUP_SOURCE_NUMBER || '';
+
+      if (!apiKey || !appName || !fromNumber) {
+        return reply.code(400).send({
+          error: 'Gupshup não configurado. Configure em Configurações > WhatsApp ou defina as variáveis de ambiente GUPSHUP_API_KEY, GUPSHUP_APP_NAME e GUPSHUP_SOURCE_NUMBER.',
+        });
       }
 
-      if (!whatsappConfig.isActive) {
+      if (whatsappConfig && !whatsappConfig.isActive) {
         return reply.code(400).send({ error: 'WhatsApp está desativado para esta filial' });
       }
 
-      const gupshup = new GupshupService({
-        apiKey: whatsappConfig.accountSid,
-        appName: whatsappConfig.authToken,
-        sourceNumber: whatsappConfig.fromNumber,
-      });
+      const gupshup = new GupshupService({ apiKey, appName, sourceNumber: fromNumber });
 
       const result = await gupshup.sendTextMessage({
         to: data.phone,
@@ -348,8 +381,8 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
           error: errorMessage + hint,
           gupshupError: result.error,
           config: {
-            fromNumber: whatsappConfig.fromNumber,
-            apiKey: whatsappConfig.accountSid ? '***' + whatsappConfig.accountSid.slice(-4) : null,
+            fromNumber: fromNumber ? '***' + fromNumber.slice(-4) : null,
+            apiKey: apiKey ? '***' + apiKey.slice(-4) : null,
           },
         });
       }
