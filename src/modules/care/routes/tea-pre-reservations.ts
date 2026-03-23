@@ -457,6 +457,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                     id: true,
                     name: true,
                     cpf: true,
+                    hasHealthInsurance: true,
+                    healthInsuranceName: true,
                   },
                 },
               },
@@ -489,6 +491,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                     id: true,
                     name: true,
                     cpf: true,
+                    hasHealthInsurance: true,
+                    healthInsuranceName: true,
                   },
                 },
               },
@@ -644,11 +648,15 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
       const patientName = therapy.pit?.teaProfile?.patient?.name || 'Paciente sem nome';
       const patientCpf = therapy.pit?.teaProfile?.patient?.cpf || null;
+      const hasConvenio = Boolean(
+        therapy?.pit?.teaProfile?.patient?.hasHealthInsurance
+        || String(therapy?.pit?.teaProfile?.patient?.healthInsuranceName || '').trim(),
+      );
       const procedureName = therapy.therapyType || latest?.procedureName || null;
       const professionalName = therapy.professional || latest?.professionalName || null;
 
       const effectiveStatus = hasWeeklyFrequencyDelta
-        ? 'PENDING_AUTHORIZATION'
+        ? 'RESERVED'
         : (treatAsPendingScheduling
           ? 'PENDING_SCHEDULING'
           : (hasAnyReservation ? String(latest.status) : 'PENDING_SCHEDULING'));
