@@ -578,23 +578,9 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     );
 
     const items = therapies.map((therapy: any) => {
-      const resolveModeWeeklyCount = (counts: number[]) => {
+      const resolveWeeklyCoverageCount = (counts: number[]) => {
         if (!counts.length) return 0;
-        const frequency = new Map<number, number>();
-        counts.forEach((count) => {
-          const safe = Math.max(0, Number(count) || 0);
-          frequency.set(safe, (frequency.get(safe) || 0) + 1);
-        });
-
-        let selectedCount = 0;
-        let selectedOccurrences = -1;
-        frequency.forEach((occurrences, count) => {
-          if (occurrences > selectedOccurrences || (occurrences === selectedOccurrences && count > selectedCount)) {
-            selectedCount = count;
-            selectedOccurrences = occurrences;
-          }
-        });
-        return selectedCount;
+        return counts.reduce((max, count) => Math.max(max, Math.max(0, Number(count) || 0)), 0);
       };
 
       const therapyReservations = reservationsByTherapyId[therapy.id] || [];
@@ -627,7 +613,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
 
       const weeklyCounts = Array.from(slotsByWeek.values()).map((weekSlots) => weekSlots.size).filter((count) => count > 0);
-      const activeWeeklyReference = resolveModeWeeklyCount(weeklyCounts);
+      const activeWeeklyReference = resolveWeeklyCoverageCount(weeklyCounts);
       const weeklyTarget = Math.max(1, Number(therapy?.weeklyFrequency) || 1);
       const openReservations = therapyReservations.filter((item: any) => OPEN_STATUSES.includes(String(item?.status || '') as any));
       const openSlotsByWeek = new Map<string, Set<string>>();
@@ -643,7 +629,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const openWeeklyCounts = Array.from(openSlotsByWeek.values())
         .map((weekSlots) => weekSlots.size)
         .filter((count) => count > 0);
-      const openWeeklyReference = resolveModeWeeklyCount(openWeeklyCounts);
+      const openWeeklyReference = resolveWeeklyCoverageCount(openWeeklyCounts);
       const isWeeklyReservationComplete = openWeeklyReference >= weeklyTarget;
       const lastConvertedAt = convertedReservations.reduce((latestDate: Date | null, item: any) => {
         const convertedAt = item?.convertedAt ? new Date(item.convertedAt) : null;
