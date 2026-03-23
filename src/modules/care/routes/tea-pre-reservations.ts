@@ -506,8 +506,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       take: 1000,
     });
 
+    const removedTherapyBySignature = new Map<string, any>();
+    removedTherapies.forEach((therapy: any) => {
+      const signature = `${String(therapy?.pitId || '')}#${String(therapy?.procedureId || therapy?.therapyType || '').trim().toLowerCase()}#${String(therapy?.professionalDoctorId || therapy?.professional || '').trim().toLowerCase()}`;
+      const current = removedTherapyBySignature.get(signature);
+      if (!current) {
+        removedTherapyBySignature.set(signature, therapy);
+        return;
+      }
+
+      const currentUpdatedAt = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+      const nextUpdatedAt = therapy?.updatedAt ? new Date(therapy.updatedAt).getTime() : 0;
+      if (nextUpdatedAt >= currentUpdatedAt) {
+        removedTherapyBySignature.set(signature, therapy);
+      }
+    });
+    const dedupedRemovedTherapies = Array.from(removedTherapyBySignature.values());
+
     const therapyIds = therapies.map((item: any) => item.id);
-    const removedTherapyIds = removedTherapies.map((item: any) => item.id);
+    const removedTherapyIds = dedupedRemovedTherapies.map((item: any) => item.id);
 
     const reservations = (therapyIds.length > 0 || removedTherapyIds.length > 0)
       ? await prisma.teaPreReservation.findMany({
@@ -726,7 +743,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       }),
     );
 
-    const removedTherapyPendingItems = removedTherapies
+    const removedTherapyPendingItems = dedupedRemovedTherapies
       .map((therapy: any) => {
         const therapyReservations = reservationsByTherapyId[therapy.id] || [];
         const convertedReservations = therapyReservations.filter((item: any) => String(item?.status || '') === 'CONVERTED');
@@ -2045,8 +2062,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         pitTherapy: {
           select: {
             id: true,
+            isActive: true,
             therapyType: true,
             professional: true,
+            procedureId: true,
+            professionalDoctorId: true,
+            pitId: true,
             weeklyFrequency: true,
             preferredWeekdays: true,
             preferredShift: true,
@@ -2094,6 +2115,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const grouped = new Map<string, any>();
 
     convertedReservations.forEach((reservation: any) => {
+      if (!reservation?.pitTherapy?.isActive) return;
+
       const dateIso = reservation?.suggestedDate ? formatDateAsIso(new Date(reservation.suggestedDate)) : null;
       const time = reservation?.suggestedTime ? String(reservation.suggestedTime) : null;
       if (!dateIso || !time) return;
