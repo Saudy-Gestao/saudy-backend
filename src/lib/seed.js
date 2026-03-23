@@ -30,6 +30,13 @@ const modules = [
     category: 'fluxo-paciente',
   },
   {
+    name: 'pre-agendamento',
+    label: 'Pré-agendamento',
+    description: 'Pré-autorização e documentos antes da recepção',
+    icon: 'CalendarCheck',
+    category: 'fluxo-paciente',
+  },
+  {
     name: 'anamnese',
     label: 'Anamnese',
     description: 'Histórico médico',
@@ -108,6 +115,13 @@ const modules = [
     label: 'Faturamento',
     description: 'Cobranças e NFs',
     icon: 'Receipt',
+    category: 'administrativo',
+  },
+  {
+    name: 'whatsapp-config',
+    label: 'WhatsApp',
+    description: 'Configurações de WhatsApp e notificações',
+    icon: 'MessageCircle',
     category: 'administrativo',
   },
   // Cadastros

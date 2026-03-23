@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
 export default async function reportRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
@@ -142,9 +143,9 @@ export default async function reportRoutes(app: FastifyInstance) {
     }
 
     if (data.cpf) {
-      const digits = String(data.cpf).replace(/\D/g, '');
-      if (digits.length !== 11) {
-        return reply.code(400).send({ error: 'cpf must contain 11 digits' });
+      const digits = normalizeCpf(data.cpf);
+      if (!isValidCpf(digits)) {
+        return reply.code(400).send({ error: 'cpf must be valid' });
       }
       data.cpf = digits; // normalize
     }
@@ -234,9 +235,9 @@ export default async function reportRoutes(app: FastifyInstance) {
       }
 
       if (data.cpf) {
-        const digits = String(data.cpf).replace(/\D/g, '');
-        if (digits.length !== 11) {
-          return reply.code(400).send({ error: 'cpf must contain 11 digits' });
+        const digits = normalizeCpf(data.cpf);
+        if (!isValidCpf(digits)) {
+          return reply.code(400).send({ error: 'cpf must be valid' });
         }
         data.cpf = digits;
       }

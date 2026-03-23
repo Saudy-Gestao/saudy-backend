@@ -186,6 +186,33 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
     const queueType = 'Autorização e Recepção';
     const agenda = confirmedAppointments.map(formatAppointmentSummary).filter(Boolean).join(' | ');
     const primaryAppointment = confirmedAppointments[0];
+    const confirmedAppointmentIds = confirmedAppointments.map((appointment) => String(appointment.id));
+    const preSchedulingFlows = confirmedAppointmentIds.length
+      ? await prisma.preSchedulingFlow.findMany({
+          where: {
+            appointmentId: {
+              in: confirmedAppointmentIds,
+            },
+          },
+          select: {
+            appointmentId: true,
+            guideNumber: true,
+            preAuthorizedAt: true,
+          },
+        })
+      : [];
+
+    const primaryFlow =
+      preSchedulingFlows.find((flow: any) => String(flow.appointmentId) === String(primaryAppointment?.id || ''))
+      || preSchedulingFlows.find((flow: any) => Boolean(flow.preAuthorizedAt))
+      || preSchedulingFlows[0]
+      || null;
+
+    const resolvedConvenioStatus = (
+      normalizeStatus(primaryAppointment?.authorizationStatus) === 'AUTHORIZED' || Boolean(primaryFlow?.preAuthorizedAt)
+    ) ? 'Autorizado' : null;
+    const resolvedConvenioNumber = primaryFlow?.guideNumber || patient.healthInsuranceNumber || null;
+
     const primaryDoctorName = String(primaryAppointment?.doctorName || '').trim();
     const matchedDoctor = primaryDoctorName
       ? await prisma.doctor.findFirst({
@@ -216,12 +243,14 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
           fullName: patient.name,
           cpf: patient.cpf,
           birthDate: patient.birthDate ? patient.birthDate.toISOString().slice(0, 10) : null,
+          appointmentId: primaryAppointment?.id || existingPreAttendance.appointmentId || null,
           gender: patient.gender || null,
           phone: patient.phone || patient.cellphone || null,
           email: patient.email || null,
           address: patient.address || null,
           convenio: confirmedAppointments[0]?.convenio || patient.healthInsuranceName || null,
-          convenioNumber: patient.healthInsuranceNumber || null,
+          convenioNumber: resolvedConvenioNumber,
+          convenioStatus: resolvedConvenioStatus,
           convenioValidUntil: patient.healthInsuranceExpiry ? patient.healthInsuranceExpiry.toISOString().slice(0, 10) : null,
           status: 'Na fila da recepção',
           queue,
@@ -241,12 +270,14 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
           fullName: patient.name,
           cpf: patient.cpf,
           birthDate: patient.birthDate ? patient.birthDate.toISOString().slice(0, 10) : null,
+          appointmentId: primaryAppointment?.id || null,
           gender: patient.gender || null,
           phone: patient.phone || patient.cellphone || null,
           email: patient.email || null,
           address: patient.address || null,
           convenio: confirmedAppointments[0]?.convenio || patient.healthInsuranceName || null,
-          convenioNumber: patient.healthInsuranceNumber || null,
+          convenioNumber: resolvedConvenioNumber,
+          convenioStatus: resolvedConvenioStatus,
           convenioValidUntil: patient.healthInsuranceExpiry ? patient.healthInsuranceExpiry.toISOString().slice(0, 10) : null,
           status: 'Na fila da recepção',
           queue,
@@ -281,6 +312,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
       preAttendance: {
         id: preAttendance.id,
         status: preAttendance.status,
+        appointmentId: preAttendance.appointmentId,
         queue: preAttendance.queue,
         queueType: preAttendance.queueType,
         agenda: preAttendance.agenda,

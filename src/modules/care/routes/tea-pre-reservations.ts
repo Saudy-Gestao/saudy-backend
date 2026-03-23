@@ -86,6 +86,92 @@ function timeToMinutes(time: string): number {
   return safeHours * 60 + safeMinutes;
 }
 
+function resolveDurationMinutes(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 15;
+  return Math.max(1, Math.min(1440, Math.floor(parsed)));
+}
+
+function fitsDoctorWorkingWindow(
+  slotTime: string,
+  durationMinutes: number,
+  workingHoursStart?: string | null,
+  workingHoursEnd?: string | null,
+): boolean {
+  const startMinute = timeToMinutes(slotTime);
+  const endMinute = startMinute + resolveDurationMinutes(durationMinutes);
+
+  const windowStartMinute = workingHoursStart ? timeToMinutes(workingHoursStart) : null;
+  const windowEndMinute = workingHoursEnd ? timeToMinutes(workingHoursEnd) : null;
+
+  if (windowStartMinute !== null && startMinute < windowStartMinute) return false;
+  if (windowEndMinute !== null && endMinute > windowEndMinute) return false;
+  return true;
+}
+
+type NormalizedDoctorWindow = {
+  weekdays: string[];
+  hoursStart?: string | null;
+  hoursEnd?: string | null;
+};
+
+function parseDoctorWorkingWindows(doctor: any): NormalizedDoctorWindow[] {
+  const normalizedLegacyDays = Array.isArray(doctor?.workingDays)
+    ? doctor.workingDays
+      .map((item: any) => normalizeWeekdayToken(item))
+      .filter(Boolean) as string[]
+    : [];
+
+  const rawSchedules = (() => {
+    if (Array.isArray(doctor?.workingSchedules)) return doctor.workingSchedules;
+    if (typeof doctor?.workingSchedules === 'string' && doctor.workingSchedules.trim()) {
+      try {
+        const parsed = JSON.parse(doctor.workingSchedules);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  })();
+
+  const scheduleWindows = rawSchedules
+    .map((schedule: any) => {
+      const weekdays = Array.isArray(schedule?.days)
+        ? schedule.days
+          .map((item: any) => normalizeWeekdayToken(item))
+          .filter(Boolean) as string[]
+        : [];
+      if (!weekdays.length) return null;
+      return {
+        weekdays,
+        hoursStart: schedule?.hoursStart || null,
+        hoursEnd: schedule?.hoursEnd || null,
+      } as NormalizedDoctorWindow;
+    })
+    .filter((item: NormalizedDoctorWindow | null): item is NormalizedDoctorWindow => Boolean(item));
+
+  if (scheduleWindows.length > 0) {
+    return scheduleWindows;
+  }
+
+  if (normalizedLegacyDays.length === 0) {
+    return [{ weekdays: [...JS_DAY_TO_PIT_WEEKDAY], hoursStart: doctor?.workingHoursStart || null, hoursEnd: doctor?.workingHoursEnd || null }];
+  }
+
+  return [{ weekdays: normalizedLegacyDays, hoursStart: doctor?.workingHoursStart || null, hoursEnd: doctor?.workingHoursEnd || null }];
+}
+
+function getDoctorWindowsForWeekday(doctor: any, weekdayToken: string): Array<{ hoursStart?: string | null; hoursEnd?: string | null }> {
+  const allWindows = parseDoctorWorkingWindows(doctor);
+  return allWindows
+    .filter((window) => window.weekdays.includes(weekdayToken))
+    .map((window) => ({
+      hoursStart: window.hoursStart || null,
+      hoursEnd: window.hoursEnd || null,
+    }));
+}
+
 function getShiftSlots(shift?: string | null): string[] {
   if (!shift) {
     return [...SHIFT_TIME_SLOTS.MANHA, ...SHIFT_TIME_SLOTS.TARDE, ...SHIFT_TIME_SLOTS.NOITE];
@@ -248,6 +334,100 @@ function pickPendingRepresentativeReservation(reservations: any[]): any | null {
   return orderedFallback[0];
 }
 
+async function hasPendingFrequencyIncreaseForTherapy(pitTherapyId: string, branchId: string): Promise<boolean> {
+  const therapy = await prisma.teaPitTherapy.findFirst({
+    where: {
+      id: pitTherapyId,
+      isActive: true,
+      pit: { teaProfile: { patient: { branchId } } },
+    },
+    include: {
+      pit: {
+        include: {
+          teaProfile: {
+            include: {
+              patient: { select: { id: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!therapy) return false;
+
+  const patientId = String(therapy?.pit?.teaProfile?.patient?.id || '');
+  if (!patientId) return false;
+
+  const todayIso = formatDateAsIso(new Date());
+  const [convertedReservations, activeTeaAppointments] = await Promise.all([
+    prisma.teaPreReservation.findMany({
+      where: {
+        pitTherapyId,
+        status: 'CONVERTED' as any,
+      },
+      select: {
+        suggestedDate: true,
+        suggestedTime: true,
+      },
+    }),
+    prisma.appointment.findMany({
+      where: {
+        isActive: true,
+        type: 'RETORNO TEA',
+        patientId,
+        date: { gte: todayIso },
+        NOT: [
+          { status: 'CANCELED' },
+          { status: 'CANCELADO' },
+          { status: 'COMPLETED' },
+          { status: 'CONCLUIDO' },
+        ],
+      },
+      select: {
+        date: true,
+        time: true,
+      },
+    }),
+  ]);
+
+  const appointmentSignature = new Set(
+    activeTeaAppointments
+      .filter((item: any) => item?.date && item?.time)
+      .map((item: any) => `${String(item.date)}#${String(item.time)}`),
+  );
+
+  const activeConvertedSlotSignatures = new Set<string>();
+  convertedReservations.forEach((item: any) => {
+    const dateIso = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : null;
+    const time = item?.suggestedTime ? String(item.suggestedTime) : null;
+    if (!dateIso || !time) return;
+    const slotSignature = `${dateIso}#${time}`;
+    if (appointmentSignature.has(slotSignature)) {
+      activeConvertedSlotSignatures.add(slotSignature);
+    }
+  });
+
+  if (activeConvertedSlotSignatures.size === 0) return false;
+
+  const slotsByWeek = new Map<string, Set<string>>();
+  activeConvertedSlotSignatures.forEach((slotSignature) => {
+    const [dateIso] = slotSignature.split('#');
+    if (!dateIso) return;
+    const weekStart = startOfWeekMonday(new Date(`${dateIso}T00:00:00`));
+    const weekKey = formatDateAsIso(weekStart);
+    if (!slotsByWeek.has(weekKey)) slotsByWeek.set(weekKey, new Set<string>());
+    slotsByWeek.get(weekKey)!.add(slotSignature);
+  });
+
+  const activeWeeklyReference = Array.from(slotsByWeek.values())
+    .map((weekSlots) => weekSlots.size)
+    .reduce((max, count) => Math.max(max, Math.max(0, Number(count) || 0)), 0);
+  const weeklyTarget = Math.max(1, Number(therapy?.weeklyFrequency) || 1);
+
+  return activeWeeklyReference > 0 && activeWeeklyReference < weeklyTarget;
+}
+
 export default async function teaPreReservationsRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -353,6 +533,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       where: {
         isActive: true,
         pit: {
+          status: { not: 'Inativo' },
           teaProfile: {
             isActive: true,
           },
@@ -371,6 +552,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                     id: true,
                     name: true,
                     cpf: true,
+                    hasHealthInsurance: true,
+                    healthInsuranceName: true,
                   },
                 },
               },
@@ -385,6 +568,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       where: {
         isActive: false,
         pit: {
+          status: { not: 'Inativo' },
           teaProfile: {
             isActive: true,
           },
@@ -403,6 +587,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                     id: true,
                     name: true,
                     cpf: true,
+                    hasHealthInsurance: true,
+                    healthInsuranceName: true,
                   },
                 },
               },
@@ -414,8 +600,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       take: 1000,
     });
 
+    const removedTherapyBySignature = new Map<string, any>();
+    removedTherapies.forEach((therapy: any) => {
+      const signature = `${String(therapy?.pitId || '')}#${String(therapy?.procedureId || therapy?.therapyType || '').trim().toLowerCase()}#${String(therapy?.professionalDoctorId || therapy?.professional || '').trim().toLowerCase()}`;
+      const current = removedTherapyBySignature.get(signature);
+      if (!current) {
+        removedTherapyBySignature.set(signature, therapy);
+        return;
+      }
+
+      const currentUpdatedAt = current?.updatedAt ? new Date(current.updatedAt).getTime() : 0;
+      const nextUpdatedAt = therapy?.updatedAt ? new Date(therapy.updatedAt).getTime() : 0;
+      if (nextUpdatedAt >= currentUpdatedAt) {
+        removedTherapyBySignature.set(signature, therapy);
+      }
+    });
+    const dedupedRemovedTherapies = Array.from(removedTherapyBySignature.values());
+
     const therapyIds = therapies.map((item: any) => item.id);
-    const removedTherapyIds = removedTherapies.map((item: any) => item.id);
+    const removedTherapyIds = dedupedRemovedTherapies.map((item: any) => item.id);
 
     const reservations = (therapyIds.length > 0 || removedTherapyIds.length > 0)
       ? await prisma.teaPreReservation.findMany({
@@ -424,6 +627,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         },
       })
       : [];
+
+    const authorizationAttachments = (therapyIds.length > 0 || removedTherapyIds.length > 0)
+      ? await prisma.convenioAuthorizationAttachment.findMany({
+        where: {
+          branchId: (request as any).branchId as string,
+          isActive: true,
+          sourceType: 'TEA',
+          pitTherapyId: { in: [...therapyIds, ...removedTherapyIds] },
+        },
+        orderBy: { uploadedAt: 'desc' },
+      })
+      : [];
+    const attachmentsByTherapyId = new Map<string, any[]>();
+    authorizationAttachments.forEach((item: any) => {
+      const key = String(item?.pitTherapyId || '');
+      if (!key) return;
+      if (!attachmentsByTherapyId.has(key)) attachmentsByTherapyId.set(key, []);
+      attachmentsByTherapyId.get(key)!.push(item);
+    });
 
     const reservationsByTherapyId: Record<string, any[]> = {};
     for (const reservation of reservations) {
@@ -469,23 +691,9 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     );
 
     const items = therapies.map((therapy: any) => {
-      const resolveModeWeeklyCount = (counts: number[]) => {
+      const resolveWeeklyCoverageCount = (counts: number[]) => {
         if (!counts.length) return 0;
-        const frequency = new Map<number, number>();
-        counts.forEach((count) => {
-          const safe = Math.max(0, Number(count) || 0);
-          frequency.set(safe, (frequency.get(safe) || 0) + 1);
-        });
-
-        let selectedCount = 0;
-        let selectedOccurrences = -1;
-        frequency.forEach((occurrences, count) => {
-          if (occurrences > selectedOccurrences || (occurrences === selectedOccurrences && count > selectedCount)) {
-            selectedCount = count;
-            selectedOccurrences = occurrences;
-          }
-        });
-        return selectedCount;
+        return counts.reduce((max, count) => Math.max(max, Math.max(0, Number(count) || 0)), 0);
       };
 
       const therapyReservations = reservationsByTherapyId[therapy.id] || [];
@@ -518,8 +726,59 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
 
       const weeklyCounts = Array.from(slotsByWeek.values()).map((weekSlots) => weekSlots.size).filter((count) => count > 0);
-      const activeWeeklyReference = resolveModeWeeklyCount(weeklyCounts);
+      const activeWeeklyReference = resolveWeeklyCoverageCount(weeklyCounts);
       const weeklyTarget = Math.max(1, Number(therapy?.weeklyFrequency) || 1);
+      const openReservations = therapyReservations.filter((item: any) => OPEN_STATUSES.includes(String(item?.status || '') as any));
+      const weeklyPatternBySignature = new Map<string, { date: string; time: string }>();
+      const upsertWeeklyPatternSlot = (dateIso: string | null, time: string | null) => {
+        if (!dateIso || !time) return;
+        const rawDate = new Date(`${dateIso}T00:00:00`);
+        if (Number.isNaN(rawDate.getTime())) return;
+        const weekday = rawDate.getDay();
+        const signature = `${weekday}#${time}`;
+        const existing = weeklyPatternBySignature.get(signature);
+        if (!existing || dateIso < existing.date) {
+          weeklyPatternBySignature.set(signature, { date: dateIso, time });
+        }
+      };
+
+      openReservations.forEach((item: any) => {
+        const rawDate = item?.suggestedDate ? new Date(item.suggestedDate) : null;
+        const dateIso = rawDate && !Number.isNaN(rawDate.getTime()) ? formatDateAsIso(rawDate) : null;
+        const time = item?.suggestedTime ? String(item.suggestedTime) : null;
+        upsertWeeklyPatternSlot(dateIso, time);
+      });
+
+      // Frequency-change flow may have no open pre-reservations. In this case,
+      // derive weekly anchors from converted sessions that still exist as active appointments.
+      if (weeklyPatternBySignature.size === 0) {
+        activeConvertedSlotSignatures.forEach((slotSignature) => {
+          const [dateIso, time] = String(slotSignature).split('#');
+          upsertWeeklyPatternSlot(dateIso || null, time || null);
+        });
+      }
+
+      const weeklySlotPattern = Array.from(weeklyPatternBySignature.values()).sort((a, b) => {
+        const weekdayA = new Date(`${a.date}T00:00:00`).getDay();
+        const weekdayB = new Date(`${b.date}T00:00:00`).getDay();
+        if (weekdayA !== weekdayB) return weekdayA - weekdayB;
+        return parseTimeToSortableValue(a.time) - parseTimeToSortableValue(b.time);
+      });
+      const openSlotsByWeek = new Map<string, Set<string>>();
+      openReservations.forEach((item: any) => {
+        const dateIso = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : null;
+        const time = item?.suggestedTime ? String(item.suggestedTime) : null;
+        if (!dateIso || !time) return;
+        const weekStart = startOfWeekMonday(new Date(`${dateIso}T00:00:00`));
+        const weekKey = formatDateAsIso(weekStart);
+        if (!openSlotsByWeek.has(weekKey)) openSlotsByWeek.set(weekKey, new Set<string>());
+        openSlotsByWeek.get(weekKey)!.add(`${dateIso}#${time}`);
+      });
+      const openWeeklyCounts = Array.from(openSlotsByWeek.values())
+        .map((weekSlots) => weekSlots.size)
+        .filter((count) => count > 0);
+      const openWeeklyReference = resolveWeeklyCoverageCount(openWeeklyCounts);
+      const isWeeklyReservationComplete = openWeeklyReference >= weeklyTarget;
       const lastConvertedAt = convertedReservations.reduce((latestDate: Date | null, item: any) => {
         const convertedAt = item?.convertedAt ? new Date(item.convertedAt) : null;
         if (!convertedAt || Number.isNaN(convertedAt.getTime())) return latestDate;
@@ -542,11 +801,16 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
       const patientName = therapy.pit?.teaProfile?.patient?.name || 'Paciente sem nome';
       const patientCpf = therapy.pit?.teaProfile?.patient?.cpf || null;
+      const hasConvenio = Boolean(
+        therapy?.pit?.teaProfile?.patient?.hasHealthInsurance
+        || String(therapy?.pit?.teaProfile?.patient?.healthInsuranceName || '').trim(),
+      );
       const procedureName = therapy.therapyType || latest?.procedureName || null;
       const professionalName = therapy.professional || latest?.professionalName || null;
+      const authorizationDocs = attachmentsByTherapyId.get(String(therapy.id)) || [];
 
       const effectiveStatus = treatAsPendingScheduling
-        ? 'PENDING_SCHEDULING'
+        ? (hasWeeklyFrequencyDelta ? 'RESERVED' : 'PENDING_SCHEDULING')
         : (hasAnyReservation ? String(latest.status) : 'PENDING_SCHEDULING');
       const expiryMetadata = getExpiryMetadata(treatAsPendingScheduling ? null : (latest?.expiresAt || null), effectiveStatus);
 
@@ -575,11 +839,20 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           weekdays: therapy.preferredWeekdays,
           shift: therapy.preferredShift,
         },
+        weeklyReservationCount: openWeeklyReference,
+        isWeeklyReservationComplete,
         slotSuggestion: {
           suggestedDate: !treatAsPendingScheduling && hasAnyReservation ? latest?.suggestedDate : null,
           suggestedTime: !treatAsPendingScheduling && hasAnyReservation ? latest?.suggestedTime : null,
         },
+        weeklySlotPattern,
         notes: !treatAsPendingScheduling && hasAnyReservation ? latest?.notes : null,
+        authorizationAttachmentsCount: authorizationDocs.length,
+        authorizationAttachments: authorizationDocs.slice(0, 5).map((doc: any) => ({
+          id: doc.id,
+          fileName: doc.fileName,
+          uploadedAt: doc.uploadedAt,
+        })),
         source: hasWeeklyFrequencyDelta
           ? 'PIT_PENDING_FREQUENCY_CHANGE'
           : (!treatAsPendingScheduling && hasAnyReservation ? 'PRE_RESERVATION' : 'PIT_PENDING'),
@@ -603,11 +876,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       };
     });
 
-    const removedTherapyPendingItems = removedTherapies
+    const activeTherapySignatureSet = new Set(
+      items.map((item: any) => {
+        const pitId = String(item?.pitId || '');
+        const procedureId = String(item?.procedure?.id || item?.procedure?.name || '').trim().toLowerCase();
+        const professionalId = String(item?.professional?.id || item?.professional?.name || '').trim().toLowerCase();
+        return `${pitId}#${procedureId}#${professionalId}`;
+      }),
+    );
+
+    const removedTherapyPendingItems = dedupedRemovedTherapies
       .map((therapy: any) => {
         const therapyReservations = reservationsByTherapyId[therapy.id] || [];
         const convertedReservations = therapyReservations.filter((item: any) => String(item?.status || '') === 'CONVERTED');
         if (convertedReservations.length === 0) return null;
+
+        const removedTherapySignature = `${String(therapy?.pitId || '')}#${String(therapy?.procedureId || therapy?.therapyType || '').trim().toLowerCase()}#${String(therapy?.professionalDoctorId || therapy?.professional || '').trim().toLowerCase()}`;
+        if (activeTherapySignatureSet.has(removedTherapySignature)) {
+          return null;
+        }
 
         const patientId = String(therapy?.pit?.teaProfile?.patient?.id || '');
         const hasFutureActiveConvertedSessions = convertedReservations.some((item: any) => {
@@ -622,6 +909,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
         const patientName = therapy.pit?.teaProfile?.patient?.name || 'Paciente sem nome';
         const patientCpf = therapy.pit?.teaProfile?.patient?.cpf || null;
+        const authorizationDocs = attachmentsByTherapyId.get(String(therapy.id)) || [];
 
         return {
           preReservationId: null,
@@ -653,6 +941,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             suggestedTime: null,
           },
           notes: null,
+          authorizationAttachmentsCount: authorizationDocs.length,
+          authorizationAttachments: authorizationDocs.slice(0, 5).map((doc: any) => ({
+            id: doc.id,
+            fileName: doc.fileName,
+            uploadedAt: doc.uploadedAt,
+          })),
           source: 'PIT_REMOVED_THERAPY',
           removedFromPit: true,
           requiresUnschedule: true,
@@ -767,6 +1061,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         workingDays: true,
         workingHoursStart: true,
         workingHoursEnd: true,
+        workingSchedules: true,
       },
     });
 
@@ -796,13 +1091,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .filter(Boolean) as string[]
       : [];
 
-    const doctorWorkingDays = Array.isArray(doctor.workingDays)
-      ? doctor.workingDays
-        .map((item: any) => normalizeWeekdayToken(item))
-        .filter(Boolean) as string[]
-      : [];
-
-    const candidateDateStrings: string[] = [];
+    const preferredCandidateDateStrings: string[] = [];
+    const fallbackCandidateDateStrings: string[] = [];
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const monday = startOfWeekMonday(now);
@@ -816,13 +1106,24 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
       const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[date.getDay()];
 
-      const matchesPreferredWeekday = preferredWeekdays.length === 0 || preferredWeekdays.includes(weekdayToken);
-      const matchesDoctorWorkingDays = doctorWorkingDays.length === 0 || doctorWorkingDays.includes(weekdayToken);
+      const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+      const matchesDoctorWorkingDays = doctorWindows.length > 0;
 
-      if (!matchesPreferredWeekday || !matchesDoctorWorkingDays) continue;
+      if (!matchesDoctorWorkingDays) continue;
 
-      candidateDateStrings.push(formatDateAsIso(date));
+      const isoDate = formatDateAsIso(date);
+      const isPreferredWeekday = preferredWeekdays.length > 0 && preferredWeekdays.includes(weekdayToken);
+
+      if (isPreferredWeekday) {
+        preferredCandidateDateStrings.push(isoDate);
+      } else {
+        fallbackCandidateDateStrings.push(isoDate);
+      }
     }
+
+    const candidateDateStrings = preferredWeekdays.length > 0
+      ? [...preferredCandidateDateStrings, ...fallbackCandidateDateStrings]
+      : [...fallbackCandidateDateStrings];
 
     if (candidateDateStrings.length === 0) {
       return {
@@ -836,12 +1137,22 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       };
     }
 
+    const candidateDateRange = [...candidateDateStrings].sort((a, b) => a.localeCompare(b));
+    const rangeStart = candidateDateRange[0];
+    const rangeEnd = candidateDateRange[candidateDateRange.length - 1];
+
     const [doctorAppointments, patientAppointments, doctorReservations, patientReservations] = await Promise.all([
       prisma.appointment.findMany({
         where: {
           isActive: true,
           doctorName: doctor.name,
           date: { in: candidateDateStrings },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -850,6 +1161,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           isActive: true,
           patientId: therapy.pit.teaProfile.patient.id,
           date: { in: candidateDateStrings },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -857,9 +1174,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           professionalDoctorId: doctor.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
-            gte: new Date(`${candidateDateStrings[0]}T00:00:00`),
-            lte: new Date(`${candidateDateStrings[candidateDateStrings.length - 1]}T23:59:59`),
+            gte: new Date(`${rangeStart}T00:00:00`),
+            lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
         select: { suggestedDate: true, suggestedTime: true },
@@ -868,9 +1187,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           patientId: therapy.pit.teaProfile.patient.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
-            gte: new Date(`${candidateDateStrings[0]}T00:00:00`),
-            lte: new Date(`${candidateDateStrings[candidateDateStrings.length - 1]}T23:59:59`),
+            gte: new Date(`${rangeStart}T00:00:00`),
+            lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
         select: { suggestedDate: true, suggestedTime: true },
@@ -895,15 +1216,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     });
 
     const baseSlots = getShiftSlots(therapy.preferredShift);
-    const startMinutes = doctor.workingHoursStart ? timeToMinutes(doctor.workingHoursStart) : null;
-    const endMinutes = doctor.workingHoursEnd ? timeToMinutes(doctor.workingHoursEnd) : null;
-
-    const filteredSlots = baseSlots.filter((slot) => {
-      const minutes = timeToMinutes(slot);
-      if (startMinutes !== null && minutes < startMinutes) return false;
-      if (endMinutes !== null && minutes > endMinutes) return false;
-      return true;
-    });
+    const slotDurationMinutes = resolveDurationMinutes(therapy.durationMinutes);
 
     const suggestions: Array<{ date: string; time: string; doctorName: string; procedureName: string | null }> = [];
     const today = new Date();
@@ -911,6 +1224,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
     for (const date of candidateDateStrings) {
       const candidateDate = new Date(`${date}T00:00:00`);
+      const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
+      const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+      const filteredSlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
+        fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
+      )));
+      if (filteredSlots.length === 0) continue;
        const suggestionDateObj = new Date(candidateDate);
        while (suggestionDateObj.getTime() < today.getTime()) {
          suggestionDateObj.setDate(suggestionDateObj.getDate() + 7);
@@ -1016,6 +1335,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         workingDays: true,
         workingHoursStart: true,
         workingHoursEnd: true,
+        workingSchedules: true,
       },
     });
 
@@ -1041,18 +1361,18 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .filter(Boolean) as string[]
       : [];
 
-    const doctorWorkingDays = Array.isArray(doctor.workingDays)
-      ? doctor.workingDays
-        .map((item: any) => normalizeWeekdayToken(item))
-        .filter(Boolean) as string[]
-      : [];
-
     const [doctorAppointments, patientAppointments, doctorReservations, patientReservations] = await Promise.all([
       prisma.appointment.findMany({
         where: {
           isActive: true,
           doctorName: doctor.name,
           date: { in: weekDates },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -1061,6 +1381,12 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           isActive: true,
           patientId: therapy.pit.teaProfile.patient.id,
           date: { in: weekDates },
+          NOT: [
+            { status: 'CANCELED' },
+            { status: 'CANCELADO' },
+            { status: 'COMPLETED' },
+            { status: 'CONCLUIDO' },
+          ],
         },
         select: { date: true, time: true },
       }),
@@ -1068,6 +1394,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           professionalDoctorId: doctor.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
             gte: new Date(`${weekDates[0]}T00:00:00`),
             lte: new Date(`${weekDates[6]}T23:59:59`),
@@ -1079,6 +1407,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         where: {
           patientId: therapy.pit.teaProfile.patient.id,
           status: { in: [...OPEN_STATUSES] as any },
+          pit: { status: { not: 'Inativo' } },
+          pitTherapy: { isActive: true },
           suggestedDate: {
             gte: new Date(`${weekDates[0]}T00:00:00`),
             lte: new Date(`${weekDates[6]}T23:59:59`),
@@ -1106,27 +1436,24 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     });
 
     const baseSlots = getShiftSlots(therapy.preferredShift);
-    const startMinutes = doctor.workingHoursStart ? timeToMinutes(doctor.workingHoursStart) : null;
-    const endMinutes = doctor.workingHoursEnd ? timeToMinutes(doctor.workingHoursEnd) : null;
-
-    const filteredSlots = baseSlots.filter((slot) => {
-      const minutes = timeToMinutes(slot);
-      if (startMinutes !== null && minutes < startMinutes) return false;
-      if (endMinutes !== null && minutes > endMinutes) return false;
-      return true;
-    });
+    const slotDurationMinutes = resolveDurationMinutes(therapy.durationMinutes);
 
     const days = weekDates.map((date) => {
       const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[new Date(`${date}T00:00:00`).getDay()];
       const matchesPreferredWeekday = preferredWeekdays.length === 0 || preferredWeekdays.includes(weekdayToken);
-      const matchesDoctorWorkingDays = doctorWorkingDays.length === 0 || doctorWorkingDays.includes(weekdayToken);
-      const isDayEnabled = matchesPreferredWeekday && matchesDoctorWorkingDays;
+      const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+      const matchesDoctorWorkingDays = doctorWindows.length > 0;
+      const isDayEnabled = matchesDoctorWorkingDays;
+      const daySlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
+        fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
+      )));
 
       return {
         date,
         weekday: weekdayToken,
+        isPreferredWeekday: matchesPreferredWeekday,
         enabled: isDayEnabled,
-        slots: filteredSlots.map((time) => ({
+        slots: daySlots.map((time) => ({
           time,
           occupied: isDayEnabled ? occupied.has(`${date}#${time}`) : false,
           selectable: isDayEnabled && !occupied.has(`${date}#${time}`),
@@ -1492,6 +1819,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             recurringUntilDate: { type: 'string' },
             expiresAt: { type: 'string' },
             status: { type: 'string' },
+            replaceExistingByTherapy: { type: 'boolean' },
             items: {
               type: 'array',
               items: {
@@ -1522,12 +1850,15 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const recurringUntilDate = body?.recurringUntilDate ? new Date(body.recurringUntilDate) : null;
       const hasUntilDate = Boolean(recurringUntilDate && !Number.isNaN(recurringUntilDate.getTime()));
       const expiresAt = body?.expiresAt ? new Date(body.expiresAt) : null;
+      const replaceExistingByTherapy = Boolean(body?.replaceExistingByTherapy);
       const requestedStatus = normalizeStatus(body?.status);
       const acceptedStatus = requestedStatus && ['RESERVED', 'PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'].includes(requestedStatus)
         ? requestedStatus
         : 'PENDING_AUTHORIZATION';
       const shouldInferStatusFromHistory = !requestedStatus;
       const hasAuthorizedHistoryByTherapyId = new Map<string, boolean>();
+      const hasPendingFrequencyIncreaseByTherapyId = new Map<string, boolean>();
+      const replacedTherapyIds = new Set<string>();
 
       const created: any[] = [];
       let skippedConflicts = 0;
@@ -1557,8 +1888,85 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
         if (!therapy || !therapy.isActive) continue;
 
+        if (replaceExistingByTherapy && !replacedTherapyIds.has(therapy.id)) {
+          const existingOpenSeries = await prisma.teaPreReservation.findMany({
+            where: {
+              pitId: therapy.pitId,
+              pitTherapyId: therapy.id,
+              status: {
+                in: ['PENDING_SCHEDULING', 'RESERVED', 'PROPOSED', 'PENDING_AUTHORIZATION'] as any,
+              },
+            },
+            select: { id: true },
+          });
+
+          if (existingOpenSeries.length > 0) {
+            await prisma.teaPreReservation.updateMany({
+              where: {
+                id: { in: existingOpenSeries.map((row: { id: string }) => row.id) },
+              },
+              data: {
+                status: 'CANCELED' as any,
+                notes: 'Série substituída por nova proposta manual (Reservado parcial)',
+              },
+            });
+
+            await Promise.all(
+              existingOpenSeries.map((row: { id: string }) => appendTimelineEvent(
+                row.id,
+                'STATUS_CHANGED',
+                'Pré-reserva substituída por nova proposta manual (Reservado parcial)',
+                actor,
+                {
+                  status: 'CANCELED',
+                  source: 'MANUAL_REPLACEMENT',
+                },
+              )),
+            );
+          }
+
+          replacedTherapyIds.add(therapy.id);
+        }
+
+        const assignedDoctor = therapy.professionalDoctorId
+          ? await prisma.doctor.findFirst({
+            where: {
+              id: therapy.professionalDoctorId,
+              branchId: (request as any).branchId as string,
+              isActive: true,
+            },
+            select: {
+              workingDays: true,
+              workingHoursStart: true,
+              workingHoursEnd: true,
+              workingSchedules: true,
+            },
+          })
+          : null;
+
+        const effectiveDuration = resolveDurationMinutes(durationMinutes ?? therapy.durationMinutes);
+
+        if (assignedDoctor && !fitsDoctorWorkingWindow(
+          suggestedTime,
+          effectiveDuration,
+          assignedDoctor.workingHoursStart,
+          assignedDoctor.workingHoursEnd,
+        )) {
+          skippedConflicts += 1;
+          continue;
+        }
+
         let acceptedStatusForTherapy = acceptedStatus;
         if (shouldInferStatusFromHistory) {
+          if (!hasPendingFrequencyIncreaseByTherapyId.has(therapy.id)) {
+            const hasPendingIncrease = await hasPendingFrequencyIncreaseForTherapy(therapy.id, (request as any).branchId as string);
+            hasPendingFrequencyIncreaseByTherapyId.set(therapy.id, hasPendingIncrease);
+          }
+
+          if (hasPendingFrequencyIncreaseByTherapyId.get(therapy.id)) {
+            acceptedStatusForTherapy = 'PENDING_AUTHORIZATION';
+          }
+
           if (!hasAuthorizedHistoryByTherapyId.has(therapy.id)) {
             const authorizedHistory = await prisma.teaPreReservation.findFirst({
               where: {
@@ -1570,12 +1978,16 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             hasAuthorizedHistoryByTherapyId.set(therapy.id, Boolean(authorizedHistory));
           }
 
-          if (hasAuthorizedHistoryByTherapyId.get(therapy.id)) {
+          if (
+            acceptedStatusForTherapy !== 'PENDING_AUTHORIZATION'
+            && hasAuthorizedHistoryByTherapyId.get(therapy.id)
+          ) {
             acceptedStatusForTherapy = 'AUTHORIZED';
           }
         }
 
-        const baseDate = new Date(suggestedDate);
+        // Parse date-only values in local time to avoid timezone day shift.
+        const baseDate = new Date(`${suggestedDate}T00:00:00`);
         if (Number.isNaN(baseDate.getTime())) continue;
 
         const maxIterations = recurring ? (hasUntilDate ? 120 : recurrenceWeeks) : 1;
@@ -1589,8 +2001,20 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           }
 
           const candidateDateIso = formatDateAsIso(candidateDate);
+          const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
           const dayStart = new Date(`${candidateDateIso}T00:00:00`);
           const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
+
+          if (assignedDoctor) {
+            const doctorWindows = getDoctorWindowsForWeekday(assignedDoctor, weekdayToken);
+            const fitsAnyWindow = doctorWindows.some((window) => (
+              fitsDoctorWorkingWindow(suggestedTime, effectiveDuration, window.hoursStart, window.hoursEnd)
+            ));
+            if (!fitsAnyWindow) {
+              skippedConflicts += 1;
+              continue;
+            }
+          }
 
           const [appointmentConflict, preReservationConflict] = await Promise.all([
             prisma.appointment.findFirst({
@@ -1637,7 +2061,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               status: acceptedStatusForTherapy,
               suggestedDate: candidateDate,
               suggestedTime,
-              durationMinutes,
+              durationMinutes: effectiveDuration,
               expiresAt,
               authorizedAt: acceptedStatusForTherapy === 'AUTHORIZED' ? new Date() : null,
             },
@@ -1702,6 +2126,20 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const existing = await prisma.teaPreReservation.findFirst({ where: { id, patient: { branchId: (request as any).branchId as string } } });
     if (!existing) return reply.code(404).send({ error: 'Pre-reservation not found' });
 
+    const hasPendingFrequencyIncrease = status === 'PENDING_AUTHORIZATION'
+      ? await hasPendingFrequencyIncreaseForTherapy(existing.pitTherapyId, (request as any).branchId as string)
+      : false;
+    const shouldBypassAuthorizationStep = status === 'PENDING_AUTHORIZATION' && !hasPendingFrequencyIncrease
+      ? Boolean(await prisma.teaPreReservation.findFirst({
+        where: {
+          pitTherapyId: existing.pitTherapyId,
+          status: { in: ['AUTHORIZED', 'CONVERTED'] as any },
+        },
+        select: { id: true },
+      }))
+      : false;
+    const resolvedStatus = shouldBypassAuthorizationStep ? 'AUTHORIZED' : status;
+
     const applySeries = Boolean(body?.applySeries);
 
     if (applySeries) {
@@ -1719,30 +2157,32 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const updatedItems: any[] = [];
 
       for (const target of targets) {
-        const statusIsProposed = status === 'PROPOSED';
+        const statusIsProposed = resolvedStatus === 'PROPOSED';
         const expiresAtValue = body?.expiresAt
           ? new Date(body.expiresAt)
           : (statusIsProposed ? new Date(Date.now() + (48 * 60 * 60 * 1000)) : undefined);
         const updated = await prisma.teaPreReservation.update({
           where: { id: target.id },
           data: {
-            status,
+            status: resolvedStatus,
             notes: body?.notes !== undefined ? (body.notes || null) : undefined,
             expiresAt: expiresAtValue,
-            authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (status === 'AUTHORIZED' ? new Date() : undefined),
-            convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (status === 'CONVERTED' ? new Date() : undefined),
+            authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (resolvedStatus === 'AUTHORIZED' ? new Date() : undefined),
+            convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (resolvedStatus === 'CONVERTED' ? new Date() : undefined),
           },
         });
 
         await appendTimelineEvent(
           updated.id,
           'STATUS_CHANGED',
-          `Status alterado para ${status}`,
+          `Status alterado para ${resolvedStatus}`,
           actor,
           {
             previousStatus: target.status,
-            nextStatus: status,
+            requestedStatus: status,
+            nextStatus: resolvedStatus,
             applySeries: true,
+            bypassedAuthorizationStep: shouldBypassAuthorizationStep,
           },
         );
 
@@ -1758,24 +2198,26 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const updated = await prisma.teaPreReservation.update({
       where: { id },
       data: {
-        status,
+        status: resolvedStatus,
         notes: body?.notes !== undefined ? (body.notes || null) : undefined,
         expiresAt: body?.expiresAt
           ? new Date(body.expiresAt)
-          : (status === 'PROPOSED' ? new Date(Date.now() + (48 * 60 * 60 * 1000)) : undefined),
-        authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (status === 'AUTHORIZED' ? new Date() : undefined),
-        convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (status === 'CONVERTED' ? new Date() : undefined),
+          : (resolvedStatus === 'PROPOSED' ? new Date(Date.now() + (48 * 60 * 60 * 1000)) : undefined),
+        authorizedAt: body?.authorizedAt ? new Date(body.authorizedAt) : (resolvedStatus === 'AUTHORIZED' ? new Date() : undefined),
+        convertedAt: body?.convertedAt ? new Date(body.convertedAt) : (resolvedStatus === 'CONVERTED' ? new Date() : undefined),
       },
     });
 
     await appendTimelineEvent(
       updated.id,
       'STATUS_CHANGED',
-      `Status alterado para ${status}`,
+      `Status alterado para ${resolvedStatus}`,
       actor,
       {
         previousStatus: existing.status,
-        nextStatus: status,
+        requestedStatus: status,
+        nextStatus: resolvedStatus,
+        bypassedAuthorizationStep: shouldBypassAuthorizationStep,
       },
     );
 
@@ -1811,15 +2253,18 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       where: {
         teaProfileId: String(teaProfileId),
         status: 'CONVERTED' as any,
-        suggestedDate: { gte: fromDateStart },
         suggestedTime: { not: null },
       },
       include: {
         pitTherapy: {
           select: {
             id: true,
+            isActive: true,
             therapyType: true,
             professional: true,
+            procedureId: true,
+            professionalDoctorId: true,
+            pitId: true,
             weeklyFrequency: true,
             preferredWeekdays: true,
             preferredShift: true,
@@ -1867,6 +2312,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const grouped = new Map<string, any>();
 
     convertedReservations.forEach((reservation: any) => {
+      if (!reservation?.pitTherapy?.isActive) return;
+
       const dateIso = reservation?.suggestedDate ? formatDateAsIso(new Date(reservation.suggestedDate)) : null;
       const time = reservation?.suggestedTime ? String(reservation.suggestedTime) : null;
       if (!dateIso || !time) return;
@@ -1925,14 +2372,17 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           pitTherapyId: { type: 'string' },
           cancelAll: { type: 'boolean' },
           fromDate: { type: 'string' },
+          weekdayIndex: { type: 'number' },
           reason: { type: 'string' },
         },
       },
     },
   }, async (request, reply) => {
-    const body = request.body as { teaProfileId?: string; pitTherapyId?: string; cancelAll?: boolean; fromDate?: string; reason?: string };
+    const body = request.body as { teaProfileId?: string; pitTherapyId?: string; cancelAll?: boolean; fromDate?: string; weekdayIndex?: number; reason?: string };
     const actor = resolveActorFromRequest(request);
     const cancelAll = Boolean(body?.cancelAll);
+    const hasWeekdayFilter = Number.isInteger(body?.weekdayIndex);
+    const weekdayIndex = hasWeekdayFilter ? Number(body?.weekdayIndex) : null;
 
     if (!body?.teaProfileId || (!cancelAll && !body?.pitTherapyId)) {
       return reply.code(400).send({
@@ -1944,13 +2394,22 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
     }
 
+    if (hasWeekdayFilter && (weekdayIndex === null || weekdayIndex < 0 || weekdayIndex > 6)) {
+      return reply.code(400).send({
+        error: 'Validation failed',
+        fields: {
+          weekdayIndex: 'weekdayIndex deve ser um número entre 0 e 6',
+        },
+      });
+    }
+
     const fromIso = String(body?.fromDate || formatDateAsIso(new Date()));
     const fromDateStart = new Date(`${fromIso}T00:00:00`);
     if (Number.isNaN(fromDateStart.getTime())) {
       return reply.code(400).send({ error: 'Validation failed', fields: { fromDate: 'Data inválida' } });
     }
 
-    const reservations = await prisma.teaPreReservation.findMany({
+    const candidateReservations = await prisma.teaPreReservation.findMany({
       where: {
         teaProfileId: String(body.teaProfileId),
         ...(cancelAll ? {} : { pitTherapyId: String(body.pitTherapyId) }),
@@ -1961,11 +2420,20 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       select: {
         id: true,
         patientId: true,
+        pitTherapyId: true,
         suggestedDate: true,
         suggestedTime: true,
       },
       orderBy: [{ suggestedDate: 'asc' }, { suggestedTime: 'asc' }],
     });
+
+    const reservations = hasWeekdayFilter
+      ? candidateReservations.filter((reservation: any) => {
+        const dateIso = reservation?.suggestedDate ? formatDateAsIso(new Date(reservation.suggestedDate)) : null;
+        if (!dateIso) return false;
+        return new Date(`${dateIso}T00:00:00`).getDay() === weekdayIndex;
+      })
+      : candidateReservations;
 
     if (reservations.length === 0) {
       return {
@@ -1983,6 +2451,13 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     }
 
     let canceledAppointments = 0;
+    const targetPitTherapyIds = Array.from(
+      new Set(
+        reservations
+          .map((reservation: any) => String(reservation?.pitTherapyId || ''))
+          .filter(Boolean),
+      ),
+    );
     const slotSignatures = new Set<string>();
     reservations.forEach((reservation: any) => {
       const dateIso = reservation?.suggestedDate ? formatDateAsIso(new Date(reservation.suggestedDate)) : null;
@@ -2025,21 +2500,58 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       await tx.teaPreReservationTimeline.createMany({
         data: reservations.map((reservation: any) => ({
           preReservationId: reservation.id,
-          eventType: cancelAll ? 'APPOINTMENT_CANCELED_BATCH_ALL' : 'APPOINTMENT_CANCELED_BATCH',
-          eventLabel: cancelAll ? 'Agendamento cancelado em lote (todas as terapias)' : 'Agendamento cancelado em lote',
+          eventType: hasWeekdayFilter
+            ? 'APPOINTMENT_CANCELED_BATCH_WEEKDAY'
+            : (cancelAll ? 'APPOINTMENT_CANCELED_BATCH_ALL' : 'APPOINTMENT_CANCELED_BATCH'),
+          eventLabel: hasWeekdayFilter
+            ? 'Agendamento cancelado em lote por dia da semana'
+            : (cancelAll ? 'Agendamento cancelado em lote (todas as terapias)' : 'Agendamento cancelado em lote'),
           actor,
           payload: {
             reason: body?.reason || null,
             fromDate: fromIso,
             cancelAll,
+            weekdayIndex,
           },
         })),
       });
+
+      // Remove canceled therapies from active PIT flow so they do not return to pre-reservation.
+      if (!hasWeekdayFilter && targetPitTherapyIds.length > 0) {
+        await tx.teaPitTherapy.updateMany({
+          where: {
+            id: { in: targetPitTherapyIds },
+            pit: {
+              teaProfileId: String(body.teaProfileId),
+            },
+          },
+          data: {
+            isActive: false,
+          },
+        });
+
+        await tx.teaPreReservation.updateMany({
+          where: {
+            teaProfileId: String(body.teaProfileId),
+            pitTherapyId: { in: targetPitTherapyIds },
+            status: {
+              in: ['PENDING_SCHEDULING', 'RESERVED', 'PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any,
+            },
+          },
+          data: {
+            status: 'CANCELED' as any,
+            notes: body?.reason
+              ? `Terapia removida do PIT por desmarcação em lote: ${String(body.reason)}`
+              : 'Terapia removida do PIT por desmarcação em lote',
+          },
+        });
+      }
     });
 
     return {
       canceledAppointments,
       affectedReservations: reservations.length,
+      deactivatedTherapies: hasWeekdayFilter ? 0 : targetPitTherapyIds.length,
     };
   });
 
@@ -2606,6 +3118,40 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       prisma.teaPreReservation.count({ where }),
     ]);
 
-    return { items, total };
+    const pitTherapyIds = Array.from(new Set(items.map((item: any) => String(item?.pitTherapyId || '')).filter(Boolean)));
+    const attachments = pitTherapyIds.length > 0
+      ? await prisma.convenioAuthorizationAttachment.findMany({
+        where: {
+          branchId: (request as any).branchId as string,
+          isActive: true,
+          sourceType: 'TEA',
+          pitTherapyId: { in: pitTherapyIds },
+        },
+        orderBy: { uploadedAt: 'desc' },
+      })
+      : [];
+
+    const attachmentsByTherapyId = new Map<string, any[]>();
+    attachments.forEach((item: any) => {
+      const key = String(item?.pitTherapyId || '');
+      if (!key) return;
+      if (!attachmentsByTherapyId.has(key)) attachmentsByTherapyId.set(key, []);
+      attachmentsByTherapyId.get(key)!.push(item);
+    });
+
+    const itemsWithAttachments = items.map((item: any) => {
+      const docs = attachmentsByTherapyId.get(String(item?.pitTherapyId || '')) || [];
+      return {
+        ...item,
+        authorizationAttachmentsCount: docs.length,
+        authorizationAttachments: docs.slice(0, 5).map((doc: any) => ({
+          id: doc.id,
+          fileName: doc.fileName,
+          uploadedAt: doc.uploadedAt,
+        })),
+      };
+    });
+
+    return { items: itemsWithAttachments, total };
   });
 }

@@ -42,6 +42,16 @@ enum TeaPreReservationStatus {
     CANCELED
 }
 
+enum PreSchedulingStatus {
+    PENDING
+    PRE_AUTHORIZED
+    LINK_SENT
+    WAITING_PATIENT_DOCUMENTS
+    DOCUMENTS_RECEIVED
+    COMPLETED
+    CANCELED
+}
+
 model Company {
     id        String   @id @default(uuid())
     cnpj      String   @unique
@@ -494,6 +504,7 @@ model PreAttendance {
     fullName           String
     cpf                String
     patientId          String?
+    appointmentId      String?
     birthDate          String?
     gender             String?
     phone              String?
@@ -540,6 +551,7 @@ model PreAttendance {
 
     @@index([doctorId])
     @@index([branchId])
+    @@index([appointmentId])
     @@map("pre_attendances")
 }
 
@@ -610,6 +622,7 @@ model Appointment {
     inventoryConsumedAt DateTime?
     observations    String?
     totem           Int?
+    preSchedulingFlow PreSchedulingFlow?
     createdAt       DateTime @default(now())
     updatedAt       DateTime @updatedAt
     isActive        Boolean  @default(true)
@@ -650,10 +663,83 @@ model MwlEntry {
     @@map("mwl_entries")
 }
 
+model PreSchedulingFlow {
+    id                    String              @id @default(uuid())
+    branchId              String?
+    appointmentId         String              @unique
+    appointment           Appointment         @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+    patientId             String?
+    patientName           String?
+    patientCpf            String?
+    patientPhone          String?
+    status                PreSchedulingStatus @default(PENDING)
+    preAuthorizedAt       DateTime?
+    guideNumber           String?
+    preAuthorizationNotes String?             @db.Text
+    publicToken           String              @unique
+    linkSentAt            DateTime?
+    linkSentByUserId      String?
+    linkMockMessage       String?             @db.Text
+    patientVerifiedAt     DateTime?
+    patientVerifiedCpf    String?
+    patientVerifiedName   String?
+    patientVerifiedTrust  Float?
+    patientSubmittedAt    DateTime?
+    completedAt           DateTime?
+    createdAt             DateTime            @default(now())
+    updatedAt             DateTime            @updatedAt
+    documents             PreSchedulingDocument[]
+
+    @@index([branchId])
+    @@index([status])
+    @@index([patientCpf])
+    @@map("pre_scheduling_flows")
+}
+
+model PreSchedulingDocument {
+    id                String           @id @default(uuid())
+    flowId            String
+    flow              PreSchedulingFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+    documentType      String
+    fileName          String
+    mimeType          String?
+    sizeBytes         Int?
+    gcsObjectName     String
+    uploadedByType    String           @default("PATIENT")
+    uploadedByCpf     String?
+    uploadedAt        DateTime         @default(now())
+    createdAt         DateTime         @default(now())
+
+    @@index([flowId, uploadedAt])
+    @@map("pre_scheduling_documents")
+}
+
+model ConvenioAuthorizationAttachment {
+    id                String   @id @default(uuid())
+    branchId          String
+    sourceType        String
+    appointmentId     String?
+    pitTherapyId      String?
+    fileName          String
+    mimeType          String?
+    sizeBytes         Int?
+    gcsObjectName     String
+    uploadedByUserId  String?
+    uploadedAt        DateTime @default(now())
+    createdAt         DateTime @default(now())
+    isActive          Boolean  @default(true)
+
+    @@index([branchId, sourceType])
+    @@index([appointmentId])
+    @@index([pitTherapyId])
+    @@map("convenio_authorization_attachments")
+}
+
 model Consultation {
     id               String   @id @default(uuid())
     branchId         String?
     doctorId         String?
+    appointmentId    String?
     doctorName       String?
     patientName      String?
     convenio         String?
@@ -685,6 +771,7 @@ model Consultation {
 
     @@index([doctorId])
     @@index([branchId])
+    @@index([appointmentId])
     @@map("consultations")
 }
 
@@ -990,4 +1077,82 @@ model FacialLog {
     @@index([userId])
     @@index([createdAt])
     @@map("facial_logs")
+}
+
+model WhatsAppConfig {
+    id          String   @id @default(uuid())
+    branchId    String   @unique
+    accountSid  String
+    authToken   String
+    fromNumber  String
+    appId       String?  // Gupshup App ID (UUID) — usado para sincronizar status de templates HSM
+    isActive    Boolean  @default(true)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    @@index([branchId])
+    @@map("whatsapp_configs")
+}
+
+enum WhatsAppMessageType {
+    APPOINTMENT_CREATED
+    APPOINTMENT_CONFIRMATION
+    APPOINTMENT_REMINDER
+    APPOINTMENT_CANCELED
+}
+
+model WhatsAppMessageTemplate {
+    id                String              @id @default(uuid())
+    branchId          String
+    type              WhatsAppMessageType
+    name              String
+    message           String              @db.Text
+    hsmTemplateName   String?             // Nome do template HSM no Gupshup (ex: "confirmacao_agendamento")
+    hsmTemplateApproved Boolean           @default(false) // true = aprovado pela Meta
+    isActive          Boolean             @default(true)
+    createdAt         DateTime            @default(now())
+    updatedAt         DateTime            @updatedAt
+
+    @@unique([branchId, type])
+    @@index([branchId])
+    @@map("whatsapp_message_templates")
+}
+
+model WhatsAppNotificationConfig {
+    id                            String   @id @default(uuid())
+    branchId                      String   @unique
+    sendOnAppointmentCreated      Boolean  @default(true)
+    sendConfirmationEnabled       Boolean  @default(true)
+    confirmationHoursBefore       Int      @default(24)
+    sendReminderEnabled           Boolean  @default(false)
+    reminderHoursBefore           Int      @default(2)
+    createdAt                     DateTime @default(now())
+    updatedAt                     DateTime @updatedAt
+
+    @@index([branchId])
+    @@map("whatsapp_notification_configs")
+}
+
+model WhatsAppMessageLog {
+    id                 String   @id @default(uuid())
+    branchId           String
+    appointmentId      String?
+    patientName        String?
+    patientPhone       String
+    messageType        WhatsAppMessageType
+    message            String   @db.Text
+    status             String   @default("PENDING")
+    errorMessage       String?  @db.Text
+    providerMessageId  String?
+    sentAt             DateTime?
+    deliveredAt        DateTime?
+    readAt             DateTime?
+    createdAt          DateTime @default(now())
+    updatedAt          DateTime @updatedAt
+
+    @@index([branchId])
+    @@index([appointmentId])
+    @@index([status])
+    @@index([createdAt])
+    @@map("whatsapp_message_logs")
 }
