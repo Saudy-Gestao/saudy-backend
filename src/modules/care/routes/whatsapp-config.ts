@@ -64,6 +64,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
           accountSid: { type: 'string', description: 'Gupshup API Key' },
           authToken: { type: 'string', description: 'Gupshup App Name' },
           fromNumber: { type: 'string', description: 'Gupshup Source Number (ex: 5511999999999)' },
+          appId: { type: 'string', description: 'Gupshup App ID (UUID) — necessário para sincronizar status de templates HSM' },
           isActive: { type: 'boolean' },
         },
       },
@@ -98,12 +99,14 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         accountSid: data.accountSid,
         authToken: authTokenToUse,
         fromNumber: data.fromNumber,
+        appId: data.appId || null,
         isActive: data.isActive ?? true,
       },
       update: {
         accountSid: data.accountSid,
         authToken: authTokenToUse,
         fromNumber: data.fromNumber,
+        appId: data.appId !== undefined ? (data.appId || null) : undefined,
         isActive: data.isActive,
       },
     });
@@ -360,6 +363,75 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     return WhatsAppMessageBuilder.getAvailableVariables();
+  });
+
+  // ===== Sincronizar status de templates HSM com Gupshup =====
+
+  app.post('/whatsapp/templates/sync-hsm', {
+    schema: {
+      summary: 'Sync HSM template approval status from Gupshup',
+      tags: ['WhatsApp'],
+      response: {
+        200: { type: 'object', additionalProperties: true },
+        400: { type: 'object' },
+        403: { type: 'object' },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+
+    const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
+    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+
+    if (!gupshupAppId || !apiKey) {
+      return reply.code(400).send({
+        error: 'App ID do Gupshup não configurado. Preencha o campo App ID nas configurações.',
+      });
+    }
+
+    // Buscar templates no Gupshup
+    const gupshupRes = await fetch(
+      `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
+      { headers: { apikey: apiKey } },
+    );
+
+    if (!gupshupRes.ok) {
+      const body = await gupshupRes.text();
+      return reply.code(400).send({ error: `Erro ao consultar Gupshup: ${body}` });
+    }
+
+    const gupshupData = await gupshupRes.json() as { status: string; templates: any[] };
+    // Map: elementName (lowercase) -> status
+    const gupshupTemplates: Record<string, string> = {};
+    for (const t of (gupshupData.templates || [])) {
+      if (t.elementName) gupshupTemplates[t.elementName.toLowerCase()] = t.status;
+    }
+
+    // Atualizar templates locais
+    const localTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
+    let updated = 0;
+
+    for (const tmpl of localTemplates) {
+      if (!tmpl.hsmTemplateName) continue;
+      const gupshupStatus = gupshupTemplates[tmpl.hsmTemplateName.toLowerCase()];
+      const approved = gupshupStatus === 'APPROVED';
+      if (tmpl.hsmTemplateApproved !== approved) {
+        await prisma.whatsAppMessageTemplate.update({
+          where: { id: tmpl.id },
+          data: { hsmTemplateApproved: approved },
+        });
+        updated++;
+      }
+    }
+
+    return {
+      synced: localTemplates.filter((t: any) => t.hsmTemplateName).length,
+      updated,
+      gupshupTemplates,
+    };
   });
 
 }

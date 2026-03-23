@@ -1046,6 +1046,7 @@ model WhatsAppConfig {
     accountSid  String
     authToken   String
     fromNumber  String
+    appId       String?  // Gupshup App ID (UUID) — usado para sincronizar status de templates HSM
     isActive    Boolean  @default(true)
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt
@@ -1067,7 +1068,8 @@ model WhatsAppMessageTemplate {
     type              WhatsAppMessageType
     name              String
     message           String              @db.Text
-    hsmTemplateName   String?             // Nome do template HSM aprovado no Gupshup (ex: "confirmacao_agendamento")
+    hsmTemplateName   String?             // Nome do template HSM no Gupshup (ex: "confirmacao_agendamento")
+    hsmTemplateApproved Boolean           @default(false) // true = aprovado pela Meta
     isActive          Boolean             @default(true)
     createdAt         DateTime            @default(now())
     updatedAt         DateTime            @updatedAt
