@@ -1,7 +1,49 @@
 import { FastifyInstance } from 'fastify';
+import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
+
+const normalizeRoomIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    ),
+  );
+};
+
+const mapDoctorResponse = (doctor: any) => {
+  const roomLinks = Array.isArray(doctor?.roomLinks) ? doctor.roomLinks : [];
+  const normalizedLinks = roomLinks
+    .map((link: any) => ({
+      id: String(link?.id || ''),
+      roomId: String(link?.roomId || ''),
+      room: link?.room
+        ? {
+            id: String(link.room.id || ''),
+            name: String(link.room.name || ''),
+            branchId: String(link.room.branchId || ''),
+          }
+        : null,
+    }))
+    .filter((link: any) => link.roomId);
+
+  const roomIds = normalizedLinks.map((link: any) => link.roomId);
+  const fallbackRoomId = String(doctor?.roomId || '').trim();
+  if (fallbackRoomId && !roomIds.includes(fallbackRoomId)) {
+    roomIds.unshift(fallbackRoomId);
+  }
+
+  return {
+    ...doctor,
+    roomIds,
+    rooms: normalizedLinks,
+    workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
+  };
+};
 
 export default async function doctorRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
@@ -78,13 +120,20 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
     const doctors = await prisma.doctor.findMany({
       where,
+      include: {
+        roomLinks: {
+          include: {
+            room: {
+              select: { id: true, name: true, branchId: true },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
       orderBy: { name: 'asc' },
     });
 
-    return doctors.map((doctor: any) => ({
-       ...doctor,
-       workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
-     }));
+    return doctors.map(mapDoctorResponse);
   });
 
   // Get doctor by ID
@@ -117,16 +166,23 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
     const doctor = await prisma.doctor.findFirst({
       where: { id, branchId },
+      include: {
+        roomLinks: {
+          include: {
+            room: {
+              select: { id: true, name: true, branchId: true },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
 
     if (!doctor) {
       return reply.code(404).send({ error: 'Doctor not found' });
     }
 
-    return {
-      ...doctor,
-      workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
-    };
+    return mapDoctorResponse(doctor);
   });
 
   // Get doctor by CRM
@@ -160,16 +216,23 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
     const doctor = await prisma.doctor.findFirst({
       where: { crm, crmState: state.toUpperCase(), branchId },
+      include: {
+        roomLinks: {
+          include: {
+            room: {
+              select: { id: true, name: true, branchId: true },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
 
     if (!doctor) {
       return reply.code(404).send({ error: 'Doctor not found' });
     }
 
-     return {
-       ...doctor,
-       workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
-     };
+     return mapDoctorResponse(doctor);
   });
 
   // Create new doctor
@@ -221,7 +284,14 @@ export default async function doctorRoutes(app: FastifyInstance) {
     data.phone = normalizedPhone || normalizedCellphone;
     data.cellphone = normalizedCellphone || null;
 
-    if (data?.roomId !== undefined) {
+    const roomIds = normalizeRoomIds(data?.roomIds);
+    if (roomIds.length > 0) {
+      const rooms = await prisma.sector.findMany({ where: { id: { in: roomIds }, branchId } });
+      if (rooms.length !== roomIds.length) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { roomIds: 'Uma ou mais salas sao invalidas' } });
+      }
+      data.roomId = roomIds[0];
+    } else if (data?.roomId !== undefined) {
       const roomId = String(data.roomId || '').trim();
       if (roomId) {
         const room = await prisma.sector.findUnique({ where: { id: roomId } });
@@ -250,8 +320,8 @@ export default async function doctorRoutes(app: FastifyInstance) {
         ]);
       }
 
-      const doctor = await prisma.doctor.create({
-        data: {
+      const doctor = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const createData: any = {
           ...data,
           email: normalizedEmail,
           cpf: normalizedCpf,
@@ -260,14 +330,43 @@ export default async function doctorRoutes(app: FastifyInstance) {
           specialties: data.specialties || [],
           workingDays: data.workingDays || [],
           workingSchedules: workingSchedulesData || '[]',
-        },
+        };
+        delete createData.roomIds;
+
+        const createdDoctor = await tx.doctor.create({
+          data: createData,
+        });
+
+        const roomIdsToSync = roomIds.length > 0
+          ? roomIds
+          : (createdDoctor.roomId ? [String(createdDoctor.roomId)] : []);
+
+        if (roomIdsToSync.length > 0) {
+          await tx.doctorRoom.createMany({
+            data: roomIdsToSync.map((roomId) => ({
+              doctorId: createdDoctor.id,
+              roomId,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        return tx.doctor.findUniqueOrThrow({
+          where: { id: createdDoctor.id },
+          include: {
+            roomLinks: {
+              include: {
+                room: {
+                  select: { id: true, name: true, branchId: true },
+                },
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+          },
+        });
       });
 
-      // Parse workingSchedules back to object for response
-      const doctorResponse = {
-        ...doctor,
-        workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
-      };
+      const doctorResponse = mapDoctorResponse(doctor);
 
       return reply.code(201).send(doctorResponse);
     } catch (error: any) {
@@ -333,7 +432,14 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
     if (Object.keys(fieldErrors).length > 0) return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
 
-    if (data?.roomId !== undefined) {
+    const roomIds = normalizeRoomIds(data?.roomIds);
+    if (roomIds.length > 0) {
+      const rooms = await prisma.sector.findMany({ where: { id: { in: roomIds }, branchId } });
+      if (rooms.length !== roomIds.length) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { roomIds: 'Uma ou mais salas sao invalidas' } });
+      }
+      data.roomId = roomIds[0];
+    } else if (data?.roomId !== undefined) {
       const roomId = String(data.roomId || '').trim();
       if (roomId) {
         const room = await prisma.sector.findUnique({ where: { id: roomId } });
@@ -375,22 +481,53 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
       const updateData: any = { ...data, branchId };
       delete updateData.workingSchedules;
+      delete updateData.roomIds;
       if (workingSchedulesData !== undefined) {
         updateData.workingSchedules = workingSchedulesData;
       } else if (Array.isArray(data.workingSchedules) && data.workingSchedules.length === 0) {
         updateData.workingSchedules = '[]';
       }
 
-      const doctor = await prisma.doctor.update({
-        where: { id },
-        data: updateData,
+      const doctor = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        await tx.doctor.update({
+          where: { id },
+          data: updateData,
+        });
+
+        if (data?.roomIds !== undefined || data?.roomId !== undefined) {
+          const roomIdsToSync = roomIds.length > 0
+            ? roomIds
+            : (updateData.roomId ? [String(updateData.roomId)] : []);
+
+          await tx.doctorRoom.deleteMany({ where: { doctorId: id } });
+
+          if (roomIdsToSync.length > 0) {
+            await tx.doctorRoom.createMany({
+              data: roomIdsToSync.map((roomId) => ({
+                doctorId: id,
+                roomId,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+
+        return tx.doctor.findUniqueOrThrow({
+          where: { id },
+          include: {
+            roomLinks: {
+              include: {
+                room: {
+                  select: { id: true, name: true, branchId: true },
+                },
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+          },
+        });
       });
 
-      // Parse workingSchedules back to object for response
-      return {
-        ...doctor,
-        workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
-      };
+      return mapDoctorResponse(doctor);
     } catch (error: any) {
       if (error.code === 'P2002') {
         const field = error.meta?.target?.[0];
