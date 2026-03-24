@@ -27,17 +27,38 @@ const generateAccessionNumber = () => {
   return `ACC-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
 };
 
-const formatLocalDate = (date: Date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+
+const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const readPart = (type: string) => parts.find((item) => item.type === type)?.value || '';
+
+  return {
+    year: readPart('year'),
+    month: readPart('month'),
+    day: readPart('day'),
+    hour: readPart('hour'),
+    minute: readPart('minute'),
+  };
+};
+
+const formatDateInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const { year, month, day } = getTimeZoneParts(date, timeZone);
   return `${year}-${month}-${day}`;
 };
 
-const formatLocalTime = (date: Date) => {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
+const formatTimeInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const { hour, minute } = getTimeZoneParts(date, timeZone);
+  return `${hour}:${minute}`;
 };
 
 const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
@@ -63,8 +84,8 @@ const applyAutomaticNoShowForBranch = async (branchId: string) => {
   const settings = await prisma.branchSettings.findUnique({ where: { branchId } });
   const toleranceMinutes = Math.max(0, Number(settings?.noShowToleranceMinutes ?? 30));
   const threshold = new Date(Date.now() - (toleranceMinutes * 60 * 1000));
-  const thresholdDate = formatLocalDate(threshold);
-  const thresholdTime = formatLocalTime(threshold);
+  const thresholdDate = formatDateInTimeZone(threshold);
+  const thresholdTime = formatTimeInTimeZone(threshold);
 
   const candidates = await prisma.appointment.findMany({
     where: {
