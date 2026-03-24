@@ -176,9 +176,9 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         },
       },
       response: {
-        200: { type: 'object' },
-        400: { type: 'object' },
-        403: { type: 'object' },
+        200: { type: 'object', additionalProperties: true },
+        400: { type: 'object', additionalProperties: true },
+        403: { type: 'object', additionalProperties: true },
       },
     },
   }, async (request, reply) => {
@@ -280,6 +280,103 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     });
 
     return { success: true };
+  });
+
+  // ===== Enviar template para o Gupshup =====
+
+  app.post('/whatsapp/templates/:id/push-to-gupshup', {
+    schema: {
+      summary: 'Create HSM template in Gupshup via API',
+      tags: ['WhatsApp'],
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      response: {
+        200: { type: 'object', additionalProperties: true },
+        400: { type: 'object' },
+        403: { type: 'object' },
+        404: { type: 'object' },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+
+    const template = await prisma.whatsAppMessageTemplate.findFirst({ where: { id, branchId } });
+    if (!template) return reply.code(404).send({ error: 'Template não encontrado' });
+
+    if (!template.hsmTemplateName) {
+      return reply.code(400).send({
+        error: 'Preencha o campo "Nome do Template (Gupshup/Meta HSM)" antes de enviar para o Gupshup.',
+      });
+    }
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
+    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+
+    if (!gupshupAppId || !apiKey) {
+      return reply.code(400).send({
+        error: 'App ID do Gupshup não configurado. Preencha o campo App ID nas configurações de credenciais.',
+      });
+    }
+
+    // Converter variáveis nomeadas ({{paciente_nome}}) em numeradas ({{1}}, {{2}}, ...)
+    let varIndex = 1;
+    const numberedContent = template.message.replace(/\{\{[^}]+\}\}/g, () => `{{${varIndex++}}}`);
+
+    // Montar exemplo com valores fictícios
+    const exampleMessage = template.message
+      .replace(/\{\{paciente_nome\}\}/gi, 'João Silva')
+      .replace(/\{\{paciente_cpf\}\}/gi, '123.456.789-00')
+      .replace(/\{\{medico_nome\}\}/gi, 'Dr. Carlos')
+      .replace(/\{\{especialidade\}\}/gi, 'Cardiologia')
+      .replace(/\{\{data\}\}/gi, '18/03/2026 (Quarta-feira)')
+      .replace(/\{\{hora\}\}/gi, '14:00')
+      .replace(/\{\{convenio\}\}/gi, 'Plano Saúdy')
+      .replace(/\{\{observacoes\}\}/gi, '-');
+
+    const body = new URLSearchParams({
+      elementName: template.hsmTemplateName,
+      languageCode: 'pt_BR',
+      content: numberedContent,
+      category: 'UTILITY',
+      templateType: 'TEXT',
+      vertical: 'Healthcare',
+      example: exampleMessage,
+      enableSample: 'true',
+    });
+
+    console.log('[push-to-gupshup] sending body:', body.toString());
+
+    const gupshupRes = await fetch(
+      `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          apikey: apiKey,
+        },
+        body: body.toString(),
+      },
+    );
+
+    const rawText = await gupshupRes.text();
+    let parsed: any;
+    try { parsed = JSON.parse(rawText); } catch { parsed = rawText; }
+
+    if (!gupshupRes.ok) {
+      return reply.code(400).send({
+        error: `Erro ao criar template no Gupshup (${gupshupRes.status}): ${rawText}`,
+        detail: parsed,
+      });
+    }
+
+    return { success: true, gupshupResponse: parsed };
   });
 
   // ===== Notification Config =====
