@@ -1165,16 +1165,18 @@ enum WhatsAppMessageType {
 }
 
 model WhatsAppMessageTemplate {
-    id                String              @id @default(uuid())
-    branchId          String
-    type              WhatsAppMessageType
-    name              String
-    message           String              @db.Text
-    hsmTemplateName   String?             // Nome do template HSM no Gupshup (ex: "confirmacao_agendamento")
-    hsmTemplateApproved Boolean           @default(false) // true = aprovado pela Meta
-    isActive          Boolean             @default(true)
-    createdAt         DateTime            @default(now())
-    updatedAt         DateTime            @updatedAt
+    id                  String              @id @default(uuid())
+    branchId            String
+    type                WhatsAppMessageType
+    name                String
+    message             String              @db.Text
+    hsmTemplateName     String?             // Nome do template HSM no Gupshup (ex: "confirmacao_agendamento")
+    hsmTemplateId       String?             // ID interno do template retornado pelo Gupshup
+    hsmTemplateStatus   String?             // Status raw: APPROVED, REJECTED, PENDING, etc.
+    hsmTemplateApproved Boolean             @default(false) // true = aprovado pela Meta
+    isActive            Boolean             @default(true)
+    createdAt           DateTime            @default(now())
+    updatedAt           DateTime            @updatedAt
 
     @@unique([branchId, type])
     @@index([branchId])
