@@ -1403,7 +1403,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             { status: 'CONCLUIDO' },
           ],
         },
-        select: { date: true, time: true },
+        select: { date: true, time: true, durationMinutes: true },
       }),
       prisma.appointment.findMany({
         where: {
@@ -1430,7 +1430,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${weekDates[6]}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1443,19 +1443,32 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${weekDates[6]}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
     ]);
 
     const occupied = new Set<string>();
 
-    // The manual grid should reflect real agenda occupancy only.
-    // Open pre-reservations are still proposals and must not block manual selection.
     [...doctorAppointments].forEach((item: any) => {
       const date = String(item.date || '').trim();
       const time = String(item.time || '').trim();
       if (!date || !time) return;
-      occupied.add(`${date}#${time}`);
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
+    });
+
+    [...doctorReservations, ...patientReservations].forEach((item: any) => {
+      const time = String(item?.suggestedTime || '').trim();
+      const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
+      if (!date || !time) return;
+
+      // Keep the current therapy editable in the manual modal.
+      if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
+
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
     });
 
     const baseSlots = getShiftSlots(therapy.preferredShift);
