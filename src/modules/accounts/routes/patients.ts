@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
+import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
 export default async function patientRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
@@ -157,6 +159,7 @@ export default async function patientRoutes(app: FastifyInstance) {
       response: {
         200: { $ref: 'Patient#' },
         403: { type: 'object' },
+        400: { type: 'object' },
         404: {
           type: 'object',
           properties: { error: { type: 'string' } },
@@ -169,9 +172,14 @@ export default async function patientRoutes(app: FastifyInstance) {
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const { cpf } = request.params as { cpf: string };
+    const normalizedCpf = normalizeCpf(cpf);
+
+    if (!isValidCpf(normalizedCpf)) {
+      return reply.code(400).send({ error: 'Invalid CPF' });
+    }
 
     const patient = await prisma.patient.findFirst({
-      where: { cpf, branchId },
+      where: { cpf: normalizedCpf, branchId },
     });
 
     if (!patient) {
@@ -209,18 +217,25 @@ export default async function patientRoutes(app: FastifyInstance) {
     // Server-side field validation
     const fieldErrors: Record<string,string> = {};
     if (!data?.name || String(data.name).trim() === '') fieldErrors.name = 'Nome é obrigatório';
-    if (!data?.cpf || !/^\d{11}$/.test(String(data.cpf))) fieldErrors.cpf = 'CPF deve conter 11 dígitos numéricos';
+    const normalizedCpf = normalizeCpf(data?.cpf);
+    const normalizedEmail = normalizeEmail(data?.email);
+    if (!isValidCpf(normalizedCpf)) fieldErrors.cpf = 'CPF inválido';
     if (!data?.birthDate || isNaN(Date.parse(String(data.birthDate)))) fieldErrors.birthDate = 'Data de nascimento inválida';
     else if (new Date(String(data.birthDate)) > new Date()) fieldErrors.birthDate = 'Data de nascimento inválida';
     // gender is required and must be one of allowed enums
     if (!data?.gender) fieldErrors.gender = 'Gênero é obrigatório';
     else if (!['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
-    if (data?.email !== undefined && data.email && !/^[\w-.]+@[\w-]+\.[\w-.]+$/.test(String(data.email))) fieldErrors.email = 'Email inválido';
+    if (data?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
     if (data?.hasHealthInsurance && !data?.healthInsuranceName) fieldErrors.healthInsuranceName = 'Nome do convênio é obrigatório';
 
     // Celular obrigatório + formato (10 ou 11 dígitos)
     if (!data?.cellphone) fieldErrors.cellphone = 'Celular é obrigatório';
     else if (!/^\d{10,11}$/.test(String(data.cellphone))) fieldErrors.cellphone = 'Celular inválido';
+
+    const normalizedGuardianCpf = normalizeCpf(data?.guardianCpf);
+    if (data?.guardianCpf !== undefined && data?.guardianCpf !== null && String(data.guardianCpf).trim() !== '') {
+      if (!isValidCpf(normalizedGuardianCpf)) fieldErrors.guardianCpf = 'CPF do responsável inválido';
+    }
 
     if (Object.keys(fieldErrors).length > 0) {
       return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
@@ -230,6 +245,9 @@ export default async function patientRoutes(app: FastifyInstance) {
       const patient = await prisma.patient.create({
         data: {
           ...data,
+          cpf: normalizedCpf,
+          email: normalizedEmail || null,
+          guardianCpf: normalizedGuardianCpf || null,
           branchId,
           birthDate: new Date(data.birthDate),
           healthInsuranceExpiry: data.healthInsuranceExpiry ? new Date(data.healthInsuranceExpiry) : null,
@@ -295,8 +313,14 @@ export default async function patientRoutes(app: FastifyInstance) {
     try {
       // validate provided fields on update
       const fieldErrors: Record<string,string> = {};
-      if (data?.email !== undefined && data.email && !/^[\w-.]+@[\w-]+\.[\w-.]+$/.test(String(data.email))) fieldErrors.email = 'Email inválido';
-      if (data?.cpf !== undefined && data.cpf && !/^\d{11}$/.test(String(data.cpf))) fieldErrors.cpf = 'CPF deve conter 11 dígitos numéricos';
+      const normalizedEmail = normalizeEmail(data?.email);
+      if (data?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
+      const normalizedCpf = normalizeCpf(data?.cpf);
+      if (data?.cpf !== undefined && String(data.cpf).trim() !== '' && !isValidCpf(normalizedCpf)) fieldErrors.cpf = 'CPF inválido';
+      const normalizedGuardianCpf = normalizeCpf(data?.guardianCpf);
+      if (data?.guardianCpf !== undefined && String(data.guardianCpf).trim() !== '' && !isValidCpf(normalizedGuardianCpf)) {
+        fieldErrors.guardianCpf = 'CPF do responsável inválido';
+      }
       if (data?.birthDate !== undefined && data.birthDate && (isNaN(Date.parse(String(data.birthDate))) || new Date(String(data.birthDate)) > new Date())) fieldErrors.birthDate = 'Data de nascimento inválida';
       if (data?.hasHealthInsurance && data.hasHealthInsurance && !data?.healthInsuranceName) fieldErrors.healthInsuranceName = 'Nome do convênio é obrigatório';
 
@@ -315,6 +339,9 @@ export default async function patientRoutes(app: FastifyInstance) {
       if (Object.keys(fieldErrors).length > 0) return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
 
       const updateData: any = { ...data };
+      if (data?.cpf !== undefined) updateData.cpf = normalizedCpf || null;
+      if (data?.email !== undefined) updateData.email = normalizedEmail || null;
+      if (data?.guardianCpf !== undefined) updateData.guardianCpf = normalizedGuardianCpf || null;
 
       if (data.birthDate !== undefined) {
         if (data.birthDate) {

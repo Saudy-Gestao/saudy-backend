@@ -23,6 +23,7 @@
     "@prisma/client": "^7.1.0",
     "axios": "^1.13.6",
     "bcryptjs": "^3.0.3",
+    "dicom-dimse": "^0.0.7",
     "dayjs": "^1.11.20",
     "dicom-parser": "^1.8.21",
     "dotenv": "^17.2.3",

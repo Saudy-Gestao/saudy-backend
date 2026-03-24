@@ -615,6 +615,7 @@ model Appointment {
     durationMinutes Int?
     type            String?
     status          String?
+    accessionNumber String?
     authorizationStatus String @default("PENDING")
     authorizationNotes  String? @db.Text
     authorizedAt        DateTime?
@@ -626,10 +627,40 @@ model Appointment {
     updatedAt       DateTime @updatedAt
     isActive        Boolean  @default(true)
     teaEvolutions   TeaEvolution[]
+    worklistItems   ReportWorklistItem[]
+    laudos          Report[]
+    mwlEntries      MwlEntry[]
 
     @@index([branchId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
     @@map("appointments")
+}
+
+// Modality Worklist entry — created when appointment is confirmed, consumed when DICOM arrives
+model MwlEntry {
+    id               String       @id @default(uuid())
+    branchId         String?
+    appointmentId    String?
+    appointment      Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+    accessionNumber  String?      // populated at creation, used to correlate incoming DICOM
+    patientName      String?
+    patientCpf       String?
+    examType         String?      // modality or exam name
+    scheduledAt      String?      // "YYYY-MM-DD HH:mm"
+    convenio         String?
+    requestingDoctor String?
+    status           String       @default("agendado") // agendado | adquirido | cancelado
+    worklistItems    ReportWorklistItem[]
+    createdAt        DateTime     @default(now())
+    updatedAt        DateTime     @updatedAt
+    isActive         Boolean      @default(true)
+
+    @@index([branchId])
+    @@index([appointmentId])
+    @@index([accessionNumber])
+    @@index([patientCpf])
+    @@index([status])
+    @@map("mwl_entries")
 }
 
 model PreSchedulingFlow {
@@ -745,9 +776,13 @@ model Consultation {
 }
 
 model Report {
-    id                String   @id @default(uuid())
+    id                String              @id @default(uuid())
     branchId          String?
-    patientName       String
+    worklistItemId    String?
+    worklistItem      ReportWorklistItem? @relation(fields: [worklistItemId], references: [id], onDelete: SetNull)
+    appointmentId     String?
+    appointment       Appointment?        @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+    patientName       String?             // nullable: can be sourced from linked appointment
     cpf               String?
     birthDate         String?
     requestingDoctor  String?
@@ -756,43 +791,43 @@ model Report {
     description       String?
     conclusion        String?
     notes             String?
-    status            String?
+    status            String?             @default("rascunho")
     exam              String?
     scheduledFor      String?
     responsibleDoctor String?
     observation       String?
-    createdAt         DateTime @default(now())
-    updatedAt         DateTime @updatedAt
-    isActive          Boolean  @default(true)
+    issuerSignedAt    String?
+    reviewerSignedAt  String?
+    addendums         ReportAddendum[]
+    createdAt         DateTime            @default(now())
+    updatedAt         DateTime            @updatedAt
+    isActive          Boolean             @default(true)
 
     @@index([branchId])
+    @@index([worklistItemId])
+    @@index([appointmentId])
     @@map("reports")
 }
 
 model ReportWorklistItem {
-    id               String   @id @default(uuid())
+    id               String    @id @default(uuid())
     branchId         String?
+    mwlEntryId       String?   // FK to MwlEntry — set when DICOM is correlated to a worklist entry
+    mwlEntry         MwlEntry? @relation(fields: [mwlEntryId], references: [id], onDelete: SetNull)
+    appointmentId    String?   // convenience: denormalized from mwlEntry.appointmentId
+    appointment      Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
     externalStudyId  String?
     accessionNumber  String?
-    patientName      String
     patientCpf       String?
-    patientBirthDate String?
-    examType         String
-    scheduledAt      String?
-    convenio         String?
-    requestingDoctor String?
-    assignedTo       String?
-    priority         String   @default("normal")
-    status           String   @default("pendente")
-    reportText       String?  @db.Text
-    issuerSignedAt   String?
-    reviewerSignedAt String?
+    // patient metadata is sourced from linked appointment when available
+    // duplicates are avoided by not keeping these fields on worklist
     dicomStudyUid    String?
     dicomSeriesUid   String?
     dicomPath        String?   // local filesystem path or storage key
     dicomUrl         String?   // public URL to retrieve the DICOM or preview
     dicomReceivedAt  DateTime? // when the file was ingested
     metadata         Json?
+    laudos           Report[]
     addendums        ReportAddendum[]
     dicomFiles       DicomFile[]
     createdAt        DateTime @default(now())
@@ -800,6 +835,7 @@ model ReportWorklistItem {
     isActive         Boolean  @default(true)
 
     @@index([branchId])
+    @@index([appointmentId])
     @@index([dicomStudyUid])
     @@map("report_worklist_items")
 }
@@ -826,22 +862,25 @@ model OrthancStudy {
 }
 
 model ReportAddendum {
-    id               String             @id @default(uuid())
+    id               String              @id @default(uuid())
     branchId         String?
-    worklistItemId   String
-    content          String             @db.Text
-    status           String             @default("draft")
+    worklistItemId   String?             // legacy: link to worklist item (kept for backward compat)
+    reportId         String?             // preferred: link to Report (laudo)
+    content          String              @db.Text
+    status           String              @default("draft")
     issuerSignedAt   String?
     reviewerSignedAt String?
     savedAt          String?
     finalizedAt      String?
-    createdAt        DateTime           @default(now())
-    updatedAt        DateTime           @updatedAt
-    isActive         Boolean            @default(true)
-    worklistItem     ReportWorklistItem @relation(fields: [worklistItemId], references: [id], onDelete: Cascade)
+    createdAt        DateTime            @default(now())
+    updatedAt        DateTime            @updatedAt
+    isActive         Boolean             @default(true)
+    worklistItem     ReportWorklistItem? @relation(fields: [worklistItemId], references: [id], onDelete: SetNull)
+    report           Report?             @relation(fields: [reportId], references: [id], onDelete: Cascade)
 
     @@index([branchId])
     @@index([worklistItemId, status])
+    @@index([reportId, status])
     @@map("report_addendums")
 }
 

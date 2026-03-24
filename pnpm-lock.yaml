@@ -35,6 +35,9 @@ importers:
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3
+      dicom-dimse:
+        specifier: ^0.0.7
+        version: 0.0.7
       dayjs:
         specifier: ^1.11.20
         version: 1.11.20
@@ -594,6 +597,9 @@ packages:
 
   destr@2.0.5:
     resolution: {integrity: sha512-ugFTXCtDZunbzasqBxrK93Ik/DRYsO6S/fedkWEMKqt04xZ4csmnmwGDBAb07QWNaGMAmnTIemsYZCksjATwsA==}
+
+  dicom-dimse@0.0.7:
+    resolution: {integrity: sha512-GNNoiQytT0u1tLanNqP8HBMw+62cJM2N5NdnlRtb5T0lFDPwnZ/mbWPnayo3aqKLg5idAN2Px2ckdp2HJ8y8iQ==}
 
   dicom-parser@1.8.21:
     resolution: {integrity: sha512-lYCweHQDsC8UFpXErPlg86Px2A8bay0HiUY+wzoG3xv5GzgqVHU3lziwSc/Gzn7VV7y2KeP072SzCviuOoU02w==}
@@ -1843,6 +1849,8 @@ snapshots:
   dequal@2.0.3: {}
 
   destr@2.0.5: {}
+
+  dicom-dimse@0.0.7: {}
 
   dicom-parser@1.8.21: {}
 
