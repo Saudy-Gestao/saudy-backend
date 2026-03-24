@@ -1,28 +1,21 @@
-import { Storage } from '@google-cloud/storage';
-
-const bucketName = process.env.GOOGLE_STORAGE_BUCKET_DICOM || process.env.GOOGLE_STORAGE_BUCKET;
-if (!bucketName) {
-  console.warn('GCS DICOM bucket not configured (GOOGLE_STORAGE_BUCKET_DICOM)');
-}
-
-const storage = new Storage();
-const bucket = bucketName ? storage.bucket(bucketName) : null;
+/**
+ * Camada de compatibilidade DICOM — delega ao StorageProvider ativo.
+ *
+ * Anteriormente apontava diretamente ao GCS. Agora usa getDicomStorage()
+ * cujo driver é controlado por STORAGE_PROVIDER (gcs | local).
+ */
+import { getDicomStorage } from '../../lib/storage';
 
 export async function uploadDicomToGcs(objectName: string, buffer: Buffer) {
-  if (!bucket) throw new Error('GCS bucket not configured');
-  const file = bucket.file(objectName);
-  await file.save(buffer, { resumable: false });
-  // Optionally make public or set ACL here
+  await getDicomStorage().save(objectName, buffer, {
+    contentType: 'application/dicom',
+  });
 }
 
 export async function downloadDicomFromGcs(objectName: string): Promise<Buffer> {
-  if (!bucket) throw new Error('GCS bucket not configured');
-  const file = bucket.file(objectName);
-  const [buffer] = await file.download();
-  return buffer;
+  return getDicomStorage().download(objectName);
 }
 
 export function getDicomStreamFromGcs(objectName: string) {
-  if (!bucket) throw new Error('GCS bucket not configured');
-  return bucket.file(objectName).createReadStream();
+  return getDicomStorage().createReadStream(objectName);
 }

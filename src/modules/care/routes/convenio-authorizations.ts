@@ -1,16 +1,10 @@
 import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
-import { Storage } from '@google-cloud/storage';
 import prisma from '../lib/prisma';
+import { getAnexosStorage } from '../../../lib/storage';
 
 type AuthorizationStatus = 'PENDING' | 'AUTHORIZED' | 'DENIED';
 type SourceType = 'APPOINTMENT' | 'TEA';
-
-const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
-  || process.env.GOOGLE_STORAGE_BUCKET_CONVENIO_AUTH
-  || process.env.GOOGLE_STORAGE_BUCKET;
-const storage = GCS_BUCKET ? new Storage() : null;
-const bucket = (storage && GCS_BUCKET) ? storage.bucket(GCS_BUCKET) : null;
 
 const parseCsv = (value: unknown): string[] => (
   String(value || '')
@@ -366,15 +360,14 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       where: { id: attachmentId, branchId, isActive: true },
     });
     if (!attachment) return reply.code(404).send({ error: 'Attachment not found' });
-    if (!bucket) return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
 
-    const file = bucket.file(attachment.gcsObjectName);
-    const [exists] = await file.exists();
-    if (!exists) return reply.code(404).send({ error: 'Arquivo não encontrado no storage' });
+    const storage = getAnexosStorage();
+    const fileExists = await storage.exists(attachment.gcsObjectName);
+    if (!fileExists) return reply.code(404).send({ error: 'Arquivo não encontrado no storage' });
 
     reply.header('Content-Type', attachment.mimeType || 'application/octet-stream');
     reply.header('Content-Disposition', `inline; filename="${attachment.fileName || 'anexo'}"`);
-    return reply.send(file.createReadStream());
+    return reply.send(storage.createReadStream(attachment.gcsObjectName));
   });
 
   app.post('/:sourceType/:id/attachments', {
@@ -403,10 +396,6 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
 
-    if (!bucket) {
-      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
-    }
-
     const userId = String((request.user as any)?.id || '');
     const { sourceType, id } = request.params as { sourceType: string; id: string };
     const payload = request.body as { fileName: string; fileBase64: string; mimeType?: string };
@@ -434,18 +423,13 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     }
 
     const objectName = `convenio-authorizations/${branchId}/${source.toLowerCase()}/${id}/${Date.now()}_${makeObjectSuffix()}_${safeFileName}`;
-    const file = bucket.file(objectName);
-    await file.save(buffer, {
-      resumable: false,
+    await getAnexosStorage().save(objectName, buffer, {
       contentType: payload.mimeType || 'application/octet-stream',
       metadata: {
-        contentType: payload.mimeType || 'application/octet-stream',
-        metadata: {
-          branchId,
-          sourceType: source,
-          sourceId: id,
-          uploadedByUserId: userId || '',
-        },
+        branchId,
+        sourceType: source,
+        sourceId: id,
+        uploadedByUserId: userId || '',
       },
     });
 

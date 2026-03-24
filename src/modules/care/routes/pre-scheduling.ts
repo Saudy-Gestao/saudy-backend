@@ -1,15 +1,9 @@
 import { randomBytes } from 'crypto';
-import { Storage } from '@google-cloud/storage';
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { getAnexosStorage } from '../../../lib/storage';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
-const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
-  || process.env.GOOGLE_STORAGE_BUCKET_PRE_SCHEDULING
-  || process.env.GOOGLE_STORAGE_BUCKET;
-
-const storage = GCS_BUCKET ? new Storage() : null;
-const bucket = (storage && GCS_BUCKET) ? storage.bucket(GCS_BUCKET) : null;
 
 const normalizeStatus = (value?: string | null) => String(value || '').trim().toUpperCase();
 const normalizeCpf = (value?: string | null) => String(value || '').replace(/\D/g, '');
@@ -422,17 +416,13 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     const document = flow.documents?.[0];
     if (!document) return reply.code(404).send({ error: 'Documento não encontrado' });
 
-    if (!bucket) {
-      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
-    }
-
-    const file = bucket.file(document.gcsObjectName);
-    const [exists] = await file.exists();
-    if (!exists) return reply.code(404).send({ error: 'Arquivo não encontrado no storage' });
+    const storageDoc = getAnexosStorage();
+    const fileExists = await storageDoc.exists(document.gcsObjectName);
+    if (!fileExists) return reply.code(404).send({ error: 'Arquivo não encontrado no storage' });
 
     reply.header('Content-Type', document.mimeType || 'application/octet-stream');
     reply.header('Content-Disposition', `inline; filename="${document.fileName || 'documento'}"`);
-    return reply.send(file.createReadStream());
+    return reply.send(storageDoc.createReadStream(document.gcsObjectName));
   });
 
   app.post('/:appointmentId/review-documents', {
@@ -642,10 +632,6 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
 
     if (!flow) return reply.code(404).send({ error: 'Link inválido ou expirado' });
 
-    if (!bucket) {
-      return reply.code(503).send({ error: 'Bucket GCS não configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
-    }
-
     const normalizedCpf = normalizeCpf(payload.cpf || flow.patientVerifiedCpf || '');
     if (!normalizedCpf) return reply.code(400).send({ error: 'Validação facial pendente para identificar CPF' });
 
@@ -660,17 +646,13 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
 
     const safeFileName = sanitizeFileName(payload.fileName || 'documento');
     const objectName = `pre-scheduling/${String(flow.branchId || 'sem-filial')}/${flow.id}/${Date.now()}-${safeFileName}`;
-    const file = bucket.file(objectName);
 
-    await file.save(buffer, {
-      resumable: false,
+    await getAnexosStorage().save(objectName, buffer, {
       contentType: payload.mimeType || 'application/octet-stream',
       metadata: {
-        metadata: {
-          flowId: flow.id,
-          documentType: payload.documentType,
-          cpf: normalizedCpf,
-        },
+        flowId: flow.id,
+        documentType: payload.documentType,
+        cpf: normalizedCpf,
       },
     });
 
