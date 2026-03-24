@@ -97,6 +97,7 @@ model Sector {
     description String
     users       User[]
     doctors     Doctor[]
+    doctorRooms DoctorRoom[]
     medicalEquipments MedicalEquipment[]
 
     @@map("sectors")
@@ -198,6 +199,7 @@ model Doctor {
     zipCode           String?  @db.VarChar(8)
     roomId            String?
     room              Sector?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
+    roomLinks         DoctorRoom[]
     isActive          Boolean  @default(true)
     workingDays       String[] @default([])
     workingHoursStart String?
@@ -212,6 +214,20 @@ model Doctor {
     @@unique([crm, crmState])
     @@index([branchId])
     @@map("doctors")
+}
+
+model DoctorRoom {
+    id        String   @id @default(uuid())
+    doctorId  String
+    roomId    String
+    doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+    room      Sector   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+    createdAt DateTime @default(now())
+
+    @@unique([doctorId, roomId])
+    @@index([doctorId])
+    @@index([roomId])
+    @@map("doctor_rooms")
 }
 
 model Patient {
@@ -635,11 +651,31 @@ model Appointment {
     worklistItems   ReportWorklistItem[]
     laudos          Report[]
     mwlEntries      MwlEntry[]
+    attachments     AppointmentAttachment[]
 
     @@index([branchId])
     @@index([rescheduledFromAppointmentId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
     @@map("appointments")
+}
+
+model AppointmentAttachment {
+    id               String      @id @default(uuid())
+    branchId         String
+    appointmentId    String
+    appointment      Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+    fileName         String
+    mimeType         String?
+    sizeBytes        Int?
+    gcsObjectName    String
+    uploadedByUserId String?
+    uploadedAt       DateTime    @default(now())
+    createdAt        DateTime    @default(now())
+    isActive         Boolean     @default(true)
+
+    @@index([branchId])
+    @@index([appointmentId])
+    @@map("appointment_attachments")
 }
 
 // Modality Worklist entry — created when appointment is confirmed, consumed when DICOM arrives

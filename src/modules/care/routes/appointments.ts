@@ -1,4 +1,6 @@
+import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
+import { Storage } from '@google-cloud/storage';
 import prisma from '../lib/prisma';
 import type { Prisma } from '@prisma/client';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
@@ -37,6 +39,25 @@ const formatLocalTime = (date: Date) => {
   const minutes = String(date.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
 };
+
+const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
+  || process.env.GOOGLE_STORAGE_BUCKET_CONVENIO_AUTH
+  || process.env.GOOGLE_STORAGE_BUCKET;
+const storage = GCS_BUCKET ? new Storage() : null;
+const bucket = (storage && GCS_BUCKET) ? storage.bucket(GCS_BUCKET) : null;
+
+const sanitizeFileName = (value: string) => String(value || 'arquivo')
+  .replace(/[^a-zA-Z0-9._-]/g, '_')
+  .replace(/_+/g, '_')
+  .slice(0, 120);
+
+const decodeBase64 = (raw: string): Buffer => {
+  const trimmed = String(raw || '').trim();
+  const normalized = trimmed.includes(',') ? trimmed.split(',').pop() || '' : trimmed;
+  return Buffer.from(normalized, 'base64');
+};
+
+const makeObjectSuffix = () => randomBytes(8).toString('hex');
 
 const applyAutomaticNoShowForBranch = async (branchId: string) => {
   const settings = await prisma.branchSettings.findUnique({ where: { branchId } });
@@ -312,6 +333,145 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     const item = await prisma.appointment.findFirst({ where: { id, branchId } });
     if (!item) return reply.code(404).send({ error: 'Appointment not found' });
     return item;
+  });
+
+  app.get('/:id/attachments', {
+    schema: {
+      summary: 'List appointment attachments',
+      tags: ['Appointments'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const appointment = await prisma.appointment.findFirst({
+      where: { id, branchId, isActive: true },
+      select: { id: true },
+    });
+    if (!appointment) return reply.code(404).send({ error: 'Appointment not found' });
+
+    const items = await prisma.appointmentAttachment.findMany({
+      where: { appointmentId: id, branchId, isActive: true },
+      orderBy: { uploadedAt: 'desc' },
+    });
+
+    return {
+      total: items.length,
+      items: items.map((item: any) => ({
+        id: item.id,
+        fileName: item.fileName,
+        mimeType: item.mimeType || null,
+        sizeBytes: item.sizeBytes || null,
+        uploadedAt: item.uploadedAt,
+      })),
+    };
+  });
+
+  app.get('/attachments/:attachmentId/view', {
+    schema: {
+      summary: 'View appointment attachment',
+      tags: ['Appointments'],
+      params: {
+        type: 'object',
+        properties: { attachmentId: { type: 'string' } },
+        required: ['attachmentId'],
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { attachmentId } = request.params as any;
+    const attachment = await prisma.appointmentAttachment.findFirst({
+      where: { id: attachmentId, branchId, isActive: true },
+    });
+    if (!attachment) return reply.code(404).send({ error: 'Attachment not found' });
+    if (!bucket) return reply.code(503).send({ error: 'Bucket GCS nao configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
+
+    const file = bucket.file(attachment.gcsObjectName);
+    const [exists] = await file.exists();
+    if (!exists) return reply.code(404).send({ error: 'Arquivo nao encontrado no storage' });
+
+    reply.header('Content-Type', attachment.mimeType || 'application/octet-stream');
+    reply.header('Content-Disposition', `inline; filename="${attachment.fileName || 'anexo'}"`);
+    return reply.send(file.createReadStream());
+  });
+
+  app.post('/:id/attachments', {
+    schema: {
+      summary: 'Upload attachment for appointment',
+      tags: ['Appointments'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        required: ['fileName', 'fileBase64'],
+        properties: {
+          fileName: { type: 'string' },
+          fileBase64: { type: 'string' },
+          mimeType: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    if (!bucket) return reply.code(503).send({ error: 'Bucket GCS nao configurado (GOOGLE_STORAGE_BUCKET_ANEXOS)' });
+
+    const userId = String((request.user as any)?.id || '');
+    const { id } = request.params as any;
+    const payload = request.body as { fileName: string; fileBase64: string; mimeType?: string };
+
+    const appointment = await prisma.appointment.findFirst({
+      where: { id, branchId, isActive: true },
+      select: { id: true },
+    });
+    if (!appointment) return reply.code(404).send({ error: 'Appointment not found' });
+
+    const safeFileName = sanitizeFileName(payload.fileName || 'anexo');
+    const buffer = decodeBase64(payload.fileBase64);
+    if (!buffer || buffer.length === 0) {
+      return reply.code(400).send({ error: 'Arquivo invalido' });
+    }
+
+    const objectName = `scheduling/${branchId}/${id}/${Date.now()}_${makeObjectSuffix()}_${safeFileName}`;
+    const file = bucket.file(objectName);
+    await file.save(buffer, {
+      resumable: false,
+      contentType: payload.mimeType || 'application/octet-stream',
+      metadata: {
+        contentType: payload.mimeType || 'application/octet-stream',
+        metadata: {
+          branchId,
+          appointmentId: id,
+          uploadedByUserId: userId || '',
+        },
+      },
+    });
+
+    const created = await prisma.appointmentAttachment.create({
+      data: {
+        branchId,
+        appointmentId: id,
+        fileName: safeFileName,
+        mimeType: payload.mimeType || null,
+        sizeBytes: buffer.length,
+        gcsObjectName: objectName,
+        uploadedByUserId: userId || null,
+      },
+    });
+
+    return reply.code(201).send({
+      message: 'Anexo enviado com sucesso',
+      item: {
+        id: created.id,
+        fileName: created.fileName,
+        mimeType: created.mimeType || null,
+        sizeBytes: created.sizeBytes || null,
+        uploadedAt: created.uploadedAt,
+      },
+    });
   });
 
   app.post('/', {
