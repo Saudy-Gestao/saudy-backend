@@ -24,6 +24,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
             branchId: { type: 'string' },
             requireFacialForReportDelivery: { type: 'boolean' },
             requireFacialForPatientRegistration: { type: 'boolean' },
+            noShowToleranceMinutes: { type: 'number' },
           },
         },
         403: {
@@ -89,6 +90,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
         properties: {
           requireFacialForReportDelivery: { type: 'boolean' },
           requireFacialForPatientRegistration: { type: 'boolean' },
+          noShowToleranceMinutes: { type: 'number' },
         },
       },
       response: {
@@ -99,6 +101,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
             branchId: { type: 'string' },
             requireFacialForReportDelivery: { type: 'boolean' },
             requireFacialForPatientRegistration: { type: 'boolean' },
+            noShowToleranceMinutes: { type: 'number' },
           },
         },
         403: {
@@ -111,9 +114,10 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { branchId } = request.params as { branchId: string };
-    const { requireFacialForReportDelivery, requireFacialForPatientRegistration } = request.body as {
+    const { requireFacialForReportDelivery, requireFacialForPatientRegistration, noShowToleranceMinutes } = request.body as {
       requireFacialForReportDelivery?: boolean;
       requireFacialForPatientRegistration?: boolean;
+      noShowToleranceMinutes?: number;
     };
 
     // Verify user has access to this branch
@@ -141,11 +145,13 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
       update: {
         ...(requireFacialForReportDelivery !== undefined ? { requireFacialForReportDelivery } : {}),
         ...(requireFacialForPatientRegistration !== undefined ? { requireFacialForPatientRegistration } : {}),
+        ...(noShowToleranceMinutes !== undefined ? { noShowToleranceMinutes: Math.max(0, Math.floor(Number(noShowToleranceMinutes) || 0)) } : {}),
       },
       create: {
         branchId,
         ...(requireFacialForReportDelivery !== undefined ? { requireFacialForReportDelivery } : {}),
         ...(requireFacialForPatientRegistration !== undefined ? { requireFacialForPatientRegistration } : {}),
+        ...(noShowToleranceMinutes !== undefined ? { noShowToleranceMinutes: Math.max(0, Math.floor(Number(noShowToleranceMinutes) || 0)) } : {}),
       },
     });
 
