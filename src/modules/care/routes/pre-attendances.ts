@@ -3,6 +3,8 @@ import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+
 type QueueStatusSyncItem = {
   id: string;
   appointmentId: string | null;
@@ -59,27 +61,67 @@ const parseAppointmentDateTime = (date?: string | null, time?: string | null) =>
   return new Date(year, month - 1, day, hours, minutes, 0, 0);
 };
 
+const formatNaiveDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatNaiveTime = (date: Date) => {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+};
+
+const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const readPart = (type: string) => parts.find((item) => item.type === type)?.value || '';
+
+  return {
+    year: readPart('year'),
+    month: readPart('month'),
+    day: readPart('day'),
+    hour: readPart('hour'),
+    minute: readPart('minute'),
+  };
+};
+
+const getClinicNowDateTime = () => {
+  const { year, month, day, hour, minute } = getTimeZoneParts(new Date());
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}`,
+  };
+};
+
 const getPreAttendanceTimingStatus = (appointmentDate?: string | null, appointmentTime?: string | null) => {
   const appointmentAt = parseAppointmentDateTime(appointmentDate, appointmentTime);
   if (!appointmentAt) return null;
 
-  const now = new Date();
-  const appointmentDayEnd = new Date(
-    appointmentAt.getFullYear(),
-    appointmentAt.getMonth(),
-    appointmentAt.getDate(),
-    23,
-    59,
-    59,
-    999,
-  );
-
-  if (now > appointmentDayEnd) {
+  const clinicNow = getClinicNowDateTime();
+  const appointmentDateIso = formatNaiveDate(appointmentAt);
+  if (clinicNow.date > appointmentDateIso) {
     return 'Não compareceu';
   }
 
   const delayedAt = new Date(appointmentAt.getTime() + (30 * 60 * 1000));
-  if (now > delayedAt) {
+  const delayedDateIso = formatNaiveDate(delayedAt);
+  const delayedTime = formatNaiveTime(delayedAt);
+
+  if (
+    clinicNow.date > delayedDateIso
+    || (clinicNow.date === delayedDateIso && clinicNow.time > delayedTime)
+  ) {
     return 'Atrasado';
   }
 

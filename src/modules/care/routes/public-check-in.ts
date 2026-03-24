@@ -2,6 +2,8 @@ import type { Appointment as AppointmentModel, PreAttendance as PreAttendanceMod
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+
 type DoctorQueueLookup = {
   id: string;
   name: string;
@@ -36,14 +38,93 @@ const parseAppointmentDateTime = (date?: string | null, time?: string | null) =>
   return new Date(year, month - 1, day, hours, minutes, 0, 0);
 };
 
+const formatNaiveDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatNaiveTime = (date: Date) => {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+};
+
+const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const readPart = (type: string) => parts.find((item) => item.type === type)?.value || '';
+
+  return {
+    year: readPart('year'),
+    month: readPart('month'),
+    day: readPart('day'),
+    hour: readPart('hour'),
+    minute: readPart('minute'),
+    second: readPart('second'),
+  };
+};
+
+const getTimeZoneOffsetMinutes = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const { year, month, day, hour, minute, second } = getTimeZoneParts(date, timeZone);
+  const asUtc = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+    0,
+  );
+  return (asUtc - date.getTime()) / 60000;
+};
+
+const createDateForTimeZone = (
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+  millisecond = 0,
+  timeZone = CLINIC_TIME_ZONE,
+) => {
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+  const offsetMinutes = getTimeZoneOffsetMinutes(utcGuess, timeZone);
+  return new Date(utcGuess.getTime() - (offsetMinutes * 60 * 1000));
+};
+
+const getClinicNowDateTime = () => {
+  const { year, month, day, hour, minute } = getTimeZoneParts(new Date());
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}`,
+  };
+};
+
 const getCheckInQueueStatus = (appointmentDate?: string | null, appointmentTime?: string | null) => {
   const appointmentAt = parseAppointmentDateTime(appointmentDate, appointmentTime);
   if (!appointmentAt) return 'Na fila da recepção';
 
-  const now = new Date();
   const delayedAt = new Date(appointmentAt.getTime() + (30 * 60 * 1000));
+  const clinicNow = getClinicNowDateTime();
+  const delayedDateIso = formatNaiveDate(delayedAt);
+  const delayedTime = formatNaiveTime(delayedAt);
 
-  if (now > delayedAt) {
+  if (
+    clinicNow.date > delayedDateIso
+    || (clinicNow.date === delayedDateIso && clinicNow.time > delayedTime)
+  ) {
     return 'Atrasado';
   }
 
@@ -51,19 +132,13 @@ const getCheckInQueueStatus = (appointmentDate?: string | null, appointmentTime?
 };
 
 const getTodayDateString = () => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return getClinicNowDateTime().date;
 };
 
 const getTodayBounds = () => {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
+  const { year, month, day } = getTimeZoneParts(new Date());
+  const start = createDateForTimeZone(Number(year), Number(month), Number(day), 0, 0, 0, 0);
+  const end = createDateForTimeZone(Number(year), Number(month), Number(day), 23, 59, 59, 999);
 
   return { start, end };
 };
