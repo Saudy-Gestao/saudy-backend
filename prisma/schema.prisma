@@ -84,6 +84,7 @@ model BranchSettings {
     branch                          Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
     requireFacialForReportDelivery  Boolean @default(false)
     requireFacialForPatientRegistration Boolean @default(true)
+    noShowToleranceMinutes          Int     @default(30)
 
     @@map("branch_settings")
 }
@@ -96,6 +97,7 @@ model Sector {
     description String
     users       User[]
     doctors     Doctor[]
+    medicalEquipments MedicalEquipment[]
 
     @@map("sectors")
 }
@@ -604,6 +606,9 @@ model TeaPreReservationTimeline {
 model Appointment {
     id              String   @id @default(uuid())
     branchId        String?
+    rescheduledFromAppointmentId String?
+    rescheduledFromAppointment Appointment? @relation("AppointmentReschedule", fields: [rescheduledFromAppointmentId], references: [id], onDelete: SetNull)
+    rescheduledAppointments Appointment[] @relation("AppointmentReschedule")
     patientName     String?
     patientCpf      String?
     patientId       String?
@@ -632,6 +637,7 @@ model Appointment {
     mwlEntries      MwlEntry[]
 
     @@index([branchId])
+    @@index([rescheduledFromAppointmentId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
     @@map("appointments")
 }
@@ -977,9 +983,66 @@ model Procedure {
     doctors            ProcedureDoctor[]
     evolutionTemplates TeaEvolutionTemplate[]
     materials          ProcedureMaterial[]
+    equipmentLinks     MedicalEquipmentProcedure[]
 
     @@index([branchId])
     @@map("procedures")
+}
+
+model MedicalEquipment {
+    id               String   @id @default(uuid())
+    branchId         String?
+    roomId           String?
+    room             Sector?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
+    name             String
+    manufacturer     String?
+    model            String?
+    modality         String?
+    integrationType  String   @default("MWL_BRIDGE")
+    bridgeIdentifier String?
+    aeTitle          String?
+    mwlRemoteAeTitle String?
+    storeRemoteAeTitle String?
+    stationName      String?
+    serialNumber     String?
+    patrimonyCode    String?
+    mwlHost          String?
+    mwlPort          Int?
+    storeHost        String?
+    storePort        Int?
+    dicomWebPath     String?
+    supportsWorklist Boolean  @default(false)
+    supportsStore    Boolean  @default(true)
+    supportsPrint    Boolean  @default(false)
+    status           String   @default("Ativo")
+    observations     String?  @db.Text
+    lastTestStatus   String?
+    lastTestMessage  String?  @db.Text
+    lastTestedAt     DateTime?
+    isActive         Boolean  @default(true)
+    createdAt        DateTime @default(now())
+    updatedAt        DateTime @updatedAt
+
+    procedures MedicalEquipmentProcedure[]
+
+    @@index([branchId])
+    @@index([roomId])
+    @@map("medical_equipments")
+}
+
+model MedicalEquipmentProcedure {
+    id                 String           @id @default(uuid())
+    medicalEquipmentId String
+    procedureId        String
+    createdAt          DateTime         @default(now())
+
+    medicalEquipment MedicalEquipment @relation(fields: [medicalEquipmentId], references: [id], onDelete: Cascade)
+    procedure        Procedure        @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+
+    @@unique([medicalEquipmentId, procedureId])
+    @@index([medicalEquipmentId])
+    @@index([procedureId])
+    @@map("medical_equipment_procedures")
 }
 
 model ProcedureMaterial {

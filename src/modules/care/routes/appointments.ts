@@ -5,12 +5,14 @@ import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 
 const COMPLETED_STATUSES = new Set(['REALIZADO', 'COMPLETED', 'FINALIZADO', 'ATENDIDO']);
 const CANCELED_STATUSES = new Set(['CANCELADO', 'CANCELED']);
+const NO_SHOW_STATUSES = new Set(['NAO_COMPARECEU', 'NÃO_COMPARECEU', 'NO_SHOW', 'NO-SHOW', 'AUSENTE', 'FALTOU']);
 
 const normalizeStatus = (status?: string | null) => String(status || '').trim().toUpperCase();
 
 const mapAppointmentStatusToWorklistStatus = (status?: string | null) => {
   const normalized = normalizeStatus(status);
   if (CANCELED_STATUSES.has(normalized)) return 'cancelado';
+  if (NO_SHOW_STATUSES.has(normalized)) return 'cancelado';
   if (COMPLETED_STATUSES.has(normalized)) return 'finalizado';
   if (normalized === 'CONFIRMED' || normalized === 'CONFIRMADO') return 'confirmado';
   if (normalized === 'EM ANDAMENTO' || normalized === 'EM_ANDAMENTO' || normalized === 'IN_PROGRESS') return 'em_andamento';
@@ -21,6 +23,62 @@ const generateAccessionNumber = () => {
   // AcessionNumber deve ser único para correlação MWL/DICOM.
   // Usamos timestamp + random para evitar colisões em ambiente de alta concorrência.
   return `ACC-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+};
+
+const formatLocalDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatLocalTime = (date: Date) => {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+};
+
+const applyAutomaticNoShowForBranch = async (branchId: string) => {
+  const settings = await prisma.branchSettings.findUnique({ where: { branchId } });
+  const toleranceMinutes = Math.max(0, Number(settings?.noShowToleranceMinutes ?? 30));
+  const threshold = new Date(Date.now() - (toleranceMinutes * 60 * 1000));
+  const thresholdDate = formatLocalDate(threshold);
+  const thresholdTime = formatLocalTime(threshold);
+
+  const candidates = await prisma.appointment.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      status: { in: ['AGENDADO', 'CONFIRMADO'] },
+      OR: [
+        { date: { lt: thresholdDate } },
+        {
+          AND: [
+            { date: thresholdDate },
+            { time: { lte: thresholdTime } },
+          ],
+        },
+      ],
+    },
+    select: { id: true },
+    take: 500,
+  });
+
+  if (!candidates.length) return;
+
+  const appointmentIds = candidates.map((item: { id: string }) => item.id);
+
+  await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.appointment.updateMany({
+      where: { id: { in: appointmentIds } },
+      data: { status: 'NAO_COMPARECEU' },
+    });
+
+    await tx.mwlEntry.updateMany({
+      where: { appointmentId: { in: appointmentIds } },
+      data: { status: 'cancelado', isActive: false },
+    });
+  });
 };
 
 // Creates or updates the MwlEntry linked to this appointment.
@@ -176,6 +234,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return { items: [], total: 0 };
 
+    await applyAutomaticNoShowForBranch(branchId);
+
     const { 
       search, 
       status, 
@@ -278,6 +338,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           observations: { type: 'string' },
           totem: { type: 'number' },
           accessionNumber: { type: 'string' },
+          rescheduledFromAppointmentId: { type: 'string' },
         },
       },
       response: {
@@ -292,9 +353,20 @@ export default async function appointmentRoutes(app: FastifyInstance) {
 
     const data = request.body as any;
     try {
+      if (data.rescheduledFromAppointmentId) {
+        const source = await prisma.appointment.findFirst({
+          where: { id: String(data.rescheduledFromAppointmentId), branchId },
+          select: { id: true },
+        });
+        if (!source) {
+          return reply.code(400).send({ error: 'Source appointment for reschedule not found' });
+        }
+      }
+
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const created = await tx.appointment.create({ data: {
           branchId,
+          rescheduledFromAppointmentId: data.rescheduledFromAppointmentId || null,
           patientName: data.patientName || null,
           patientCpf: data.patientCpf || null,
           patientId: data.patientId || null,
