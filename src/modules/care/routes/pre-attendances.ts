@@ -1,6 +1,19 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
+type QueueStatusSyncItem = {
+  id: string;
+  appointmentId: string | null;
+  status: string | null;
+  notes: string | null;
+};
+
+type QueueStatusAppointment = {
+  id: string;
+  date: string;
+  time: string;
+};
+
 const normalizeStatusKey = (value?: string | null) => String(value || '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
@@ -15,14 +28,125 @@ const canonicalStatus = (value?: string | null) => {
 };
 
 const TRANSITION_RULES: Record<string, string[]> = {
-  NA_FILA_DA_RECEPCAO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'CHECKLIST_EM_ANDAMENTO', 'CANCELADO', 'CANCELADA'],
+  NA_FILA_DA_RECEPCAO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'CHECKLIST_EM_ANDAMENTO', 'ATRASADO', 'NAO_COMPARECEU', 'CANCELADO', 'CANCELADA'],
+  ATRASADO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'CHECKLIST_EM_ANDAMENTO', 'NAO_COMPARECEU', 'CANCELADO', 'CANCELADA'],
   EM_ATENDIMENTO_NA_RECEPCAO: ['CHECKLIST_EM_ANDAMENTO', 'RECEPCAO_CONCLUIDA', 'CANCELADO', 'CANCELADA'],
   CHECKLIST_EM_ANDAMENTO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'RECEPCAO_CONCLUIDA', 'CANCELADO', 'CANCELADA'],
   RECEPCAO_CONCLUIDA: ['FINALIZADO', 'FINALIZADA', 'CANCELADO', 'CANCELADA'],
+  NAO_COMPARECEU: [],
   FINALIZADO: [],
   FINALIZADA: [],
   CANCELADO: [],
   CANCELADA: [],
+};
+
+const ACTIVE_QUEUE_STATUSES = new Set([
+  'NA_FILA_DA_RECEPCAO',
+  'ATRASADO',
+]);
+
+const parseAppointmentDateTime = (date?: string | null, time?: string | null) => {
+  const normalizedDate = String(date || '').trim();
+  const normalizedTime = String(time || '').trim();
+  if (!normalizedDate || !normalizedTime) return null;
+
+  const [year, month, day] = normalizedDate.split('-').map(Number);
+  const [hours, minutes] = normalizedTime.split(':').map(Number);
+  if ([year, month, day, hours, minutes].some((value) => Number.isNaN(value))) return null;
+
+  return new Date(year, month - 1, day, hours, minutes, 0, 0);
+};
+
+const getPreAttendanceTimingStatus = (appointmentDate?: string | null, appointmentTime?: string | null) => {
+  const appointmentAt = parseAppointmentDateTime(appointmentDate, appointmentTime);
+  if (!appointmentAt) return null;
+
+  const now = new Date();
+  const appointmentDayEnd = new Date(
+    appointmentAt.getFullYear(),
+    appointmentAt.getMonth(),
+    appointmentAt.getDate(),
+    23,
+    59,
+    59,
+    999,
+  );
+
+  if (now > appointmentDayEnd) {
+    return 'Não compareceu';
+  }
+
+  const delayedAt = new Date(appointmentAt.getTime() + (30 * 60 * 1000));
+  if (now > delayedAt) {
+    return 'Atrasado';
+  }
+
+  return 'Na fila da recepção';
+};
+
+const syncPreAttendanceTimingStatuses = async (branchId: string, userId?: string | null) => {
+  const queueItems: QueueStatusSyncItem[] = await prisma.preAttendance.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      appointmentId: { not: null },
+    },
+    select: {
+      id: true,
+      appointmentId: true,
+      status: true,
+      notes: true,
+    },
+  });
+
+  const candidates = queueItems.filter((item: QueueStatusSyncItem) => ACTIVE_QUEUE_STATUSES.has(canonicalStatus(item.status)));
+  if (!candidates.length) return;
+
+  const appointmentIds = candidates
+    .map((item) => String(item.appointmentId || '').trim())
+    .filter(Boolean);
+
+  if (!appointmentIds.length) return;
+
+  const appointments: QueueStatusAppointment[] = await prisma.appointment.findMany({
+    where: {
+      id: { in: appointmentIds },
+      branchId,
+    },
+    select: {
+      id: true,
+      date: true,
+      time: true,
+    },
+  });
+
+  const appointmentById = new Map(
+    appointments.map((appointment: QueueStatusAppointment) => [String(appointment.id), appointment]),
+  );
+
+  const updates = candidates
+    .map((item: QueueStatusSyncItem) => {
+      const appointment = appointmentById.get(String(item.appointmentId || ''));
+      if (!appointment) return null;
+
+      const nextStatus = getPreAttendanceTimingStatus(appointment.date, appointment.time);
+      if (!nextStatus || canonicalStatus(nextStatus) === canonicalStatus(item.status)) {
+        return null;
+      }
+
+      return prisma.preAttendance.update({
+        where: { id: item.id },
+        data: {
+          status: nextStatus,
+          notes: appendStatusAudit(item.notes, item.status, nextStatus, userId || null),
+        },
+      });
+    })
+    .filter(Boolean);
+
+  if (updates.length) {
+    await prisma.$transaction(updates);
+  }
 };
 
 const canTransitionStatus = (fromRaw?: string | null, toRaw?: string | null) => {
@@ -83,6 +207,9 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
   }, async (request) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return { items: [], total: 0 };
+    const userId = String((request.user as any)?.id || '');
+
+    await syncPreAttendanceTimingStatuses(branchId, userId || null);
 
     const { search, status, queueType, limit = 50, offset = 0 } = request.query as any;
 
