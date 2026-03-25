@@ -28,6 +28,26 @@ const generateAccessionNumber = () => {
 };
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+const APPOINTMENT_MUTABLE_FIELDS = new Set([
+  'rescheduledFromAppointmentId',
+  'patientName',
+  'patientCpf',
+  'patientId',
+  'doctorName',
+  'specialty',
+  'convenio',
+  'date',
+  'time',
+  'durationMinutes',
+  'type',
+  'status',
+  'accessionNumber',
+  'authorizationStatus',
+  'authorizationNotes',
+  'observations',
+  'totem',
+  'isActive',
+]);
 
 const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -707,7 +727,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       if (!existing) return reply.code(404).send({ error: 'Appointment not found' });
 
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const updateData = { ...data } as any;
+        const updateData = Object.fromEntries(
+          Object.entries(data || {}).filter(([key]) => APPOINTMENT_MUTABLE_FIELDS.has(key))
+        ) as Record<string, any>;
         const resolvedDoctorName = updateData.doctorName ?? existing.doctorName;
         const resolvedDate = updateData.date ?? existing.date;
         const resolvedTime = updateData.time ?? existing.time;

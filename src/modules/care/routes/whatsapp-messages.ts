@@ -157,7 +157,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         where: { branchId, type: data.messageType, isActive: true },
       });
 
-      if (templateRecord?.hsmTemplateName && !data.customMessage) {
+      if ((templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName) && !data.customMessage) {
         const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
           patientName: appointment.patientName,
           patientCpf: appointment.patientCpf,
@@ -170,7 +170,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         });
         result = await gupshup.sendTemplateMessage({
           to: patientPhone,
-          templateName: templateRecord.hsmTemplateName,
+          templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
           params: hsmParams,
         });
         if (result.status === 'error') {

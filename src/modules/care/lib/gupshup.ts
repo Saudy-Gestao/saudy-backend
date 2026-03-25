@@ -13,7 +13,7 @@ export interface SendMessageParams {
 
 export interface SendTemplateParams {
   to: string;
-  templateName: string;
+  templateId: string;
   params: string[]; // Ordered values matching {{1}}, {{2}}, ... in the HSM template
 }
 
@@ -137,17 +137,22 @@ export class GupshupService {
         source: this.sourceNumber,
         destination: destinationNumber,
         'src.name': this.appName,
-        message: JSON.stringify({
-          type: 'template',
-          template: {
-            id: params.templateName,
-            params: params.params,
-          },
+        template: JSON.stringify({
+          id: params.templateId,
+          params: params.params,
         }),
       });
 
-      const response = await this.client.post('/msg', data.toString());
+      const response = await this.client.post('/template/msg', data.toString());
 
+      console.log('[gupshup] template request', JSON.stringify({
+        endpoint: '/template/msg',
+        source: this.sourceNumber,
+        destination: destinationNumber,
+        appName: this.appName,
+        templateId: params.templateId,
+        params: params.params,
+      }));
       console.log('[gupshup] template response', response.status, JSON.stringify(response.data));
 
       if (response.data.status === 'submitted' || response.data.status === 'success') {

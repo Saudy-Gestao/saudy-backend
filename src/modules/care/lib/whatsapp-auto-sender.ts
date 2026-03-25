@@ -71,12 +71,24 @@ export class WhatsAppAutoSender {
         return { success: false, error: 'Envio de lembrete está desativado' };
       }
 
+      const appointmentData: AppointmentData = {
+        patientName: appointment.patientName,
+        patientCpf: appointment.patientCpf,
+        doctorName: appointment.doctorName,
+        specialty: appointment.specialty,
+        date: appointment.date,
+        time: appointment.time,
+        convenio: appointment.convenio,
+        observations: appointment.observations,
+      };
+
       // Buscar template de mensagem
       let message: string;
+      let templateRecord: Awaited<ReturnType<typeof prisma.whatsAppMessageTemplate.findFirst>> | null = null;
       if (params.customMessage) {
         message = params.customMessage;
       } else {
-        const template = await prisma.whatsAppMessageTemplate.findFirst({
+        templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
           where: {
             branchId: params.branchId,
             type: params.messageType,
@@ -84,23 +96,10 @@ export class WhatsAppAutoSender {
           },
         });
 
-        if (!template) {
+        if (!templateRecord) {
           return { success: false, error: 'Template de mensagem não encontrado' };
         }
-
-        // Construir mensagem com os dados do agendamento
-        const appointmentData: AppointmentData = {
-          patientName: appointment.patientName,
-          patientCpf: appointment.patientCpf,
-          doctorName: appointment.doctorName,
-          specialty: appointment.specialty,
-          date: appointment.date,
-          time: appointment.time,
-          convenio: appointment.convenio,
-          observations: appointment.observations,
-        };
-
-        message = WhatsAppMessageBuilder.buildMessage(template.message, appointmentData);
+        message = WhatsAppMessageBuilder.buildMessage(templateRecord.message, appointmentData);
       }
 
       // Criar log antes de enviar
@@ -123,10 +122,32 @@ export class WhatsAppAutoSender {
         sourceNumber: whatsappConfig.fromNumber,
       });
 
-      const result = await gupshup.sendTextMessage({
-        to: patientPhone,
-        message,
-      });
+      let result;
+      if (
+        !params.customMessage
+        && templateRecord?.hsmTemplateApproved
+        && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName)
+      ) {
+        const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, appointmentData);
+        result = await gupshup.sendTemplateMessage({
+          to: patientPhone,
+          templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
+          params: hsmParams,
+        });
+
+        if (result.status === 'error') {
+          console.warn('[whatsapp-auto-sender] HSM template falhou, tentando session text:', result.error);
+          result = await gupshup.sendTextMessage({
+            to: patientPhone,
+            message,
+          });
+        }
+      } else {
+        result = await gupshup.sendTextMessage({
+          to: patientPhone,
+          message,
+        });
+      }
 
       // Atualizar log com resultado
       if (result.status === 'success') {
