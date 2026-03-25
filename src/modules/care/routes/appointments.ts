@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+﻿import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
 import { Storage } from '@google-cloud/storage';
 import prisma from '../lib/prisma';
@@ -7,7 +7,7 @@ import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 
 const COMPLETED_STATUSES = new Set(['REALIZADO', 'COMPLETED', 'FINALIZADO', 'ATENDIDO']);
 const CANCELED_STATUSES = new Set(['CANCELADO', 'CANCELED']);
-const NO_SHOW_STATUSES = new Set(['NAO_COMPARECEU', 'NÃO_COMPARECEU', 'NO_SHOW', 'NO-SHOW', 'AUSENTE', 'FALTOU']);
+const NO_SHOW_STATUSES = new Set(['NAO_COMPARECEU', 'NÃƒO_COMPARECEU', 'NO_SHOW', 'NO-SHOW', 'AUSENTE', 'FALTOU']);
 
 const normalizeStatus = (status?: string | null) => String(status || '').trim().toUpperCase();
 
@@ -22,8 +22,8 @@ const mapAppointmentStatusToWorklistStatus = (status?: string | null) => {
 };
 
 const generateAccessionNumber = () => {
-  // AcessionNumber deve ser único para correlação MWL/DICOM.
-  // Usamos timestamp + random para evitar colisões em ambiente de alta concorrência.
+  // AcessionNumber deve ser Ãºnico para correlaÃ§Ã£o MWL/DICOM.
+  // Usamos timestamp + random para evitar colisÃµes em ambiente de alta concorrÃªncia.
   return `ACC-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
 };
 
@@ -60,6 +60,83 @@ const formatTimeInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
   const { hour, minute } = getTimeZoneParts(date, timeZone);
   return `${hour}:${minute}`;
 };
+
+const parseTimeToMinutes = (value?: string | null): number | null => {
+  if (!value) return null;
+  const match = String(value).trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return (hours * 60) + minutes;
+};
+
+const timeRangesOverlap = (
+  startA?: string | null,
+  durationA?: number | null,
+  startB?: string | null,
+  durationB?: number | null,
+): boolean => {
+  const startMinutesA = parseTimeToMinutes(startA);
+  const startMinutesB = parseTimeToMinutes(startB);
+  if (startMinutesA === null || startMinutesB === null) return false;
+  const safeDurationA = Number.isFinite(durationA) && Number(durationA) > 0 ? Number(durationA) : 30;
+  const safeDurationB = Number.isFinite(durationB) && Number(durationB) > 0 ? Number(durationB) : 30;
+  const endMinutesA = startMinutesA + safeDurationA;
+  const endMinutesB = startMinutesB + safeDurationB;
+  return startMinutesA < endMinutesB && startMinutesB < endMinutesA;
+};
+
+const hasBlockingStatus = (status?: string | null) => {
+  const normalized = normalizeStatus(status);
+  return !(CANCELED_STATUSES.has(normalized) || COMPLETED_STATUSES.has(normalized) || NO_SHOW_STATUSES.has(normalized));
+};
+
+async function findDoctorScheduleConflict(params: {
+  tx: Prisma.TransactionClient;
+  branchId: string;
+  doctorName?: string | null;
+  date?: string | null;
+  time?: string | null;
+  durationMinutes?: number | null;
+  excludeAppointmentId?: string | null;
+}) {
+  const { tx, branchId, doctorName, date, time, durationMinutes, excludeAppointmentId } = params;
+  if (!doctorName || !date || !time) return null;
+
+  const candidates = await tx.appointment.findMany({
+    where: {
+      branchId,
+      doctorName,
+      date,
+      isActive: true,
+      ...(excludeAppointmentId ? { id: { not: excludeAppointmentId } } : {}),
+      NOT: [
+        { status: 'CANCELED' },
+        { status: 'CANCELADO' },
+        { status: 'COMPLETED' },
+        { status: 'CONCLUIDO' },
+        { status: 'NAO_COMPARECEU' },
+        { status: 'NÃO_COMPARECEU' },
+        { status: 'NO_SHOW' },
+        { status: 'NO-SHOW' },
+        { status: 'AUSENTE' },
+        { status: 'FALTOU' },
+      ],
+    },
+    select: {
+      id: true,
+      patientName: true,
+      time: true,
+      durationMinutes: true,
+      status: true,
+    },
+  });
+
+  return candidates.find((candidate: any) => (
+    timeRangesOverlap(time, durationMinutes, candidate?.time, candidate?.durationMinutes)
+  )) || null;
+}
 
 const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
   || process.env.GOOGLE_STORAGE_BUCKET_CONVENIO_AUTH
@@ -125,7 +202,7 @@ const applyAutomaticNoShowForBranch = async (branchId: string) => {
 
 // Creates or updates the MwlEntry linked to this appointment.
 // MwlEntry is what the imaging equipment queries via MWL/C-FIND.
-// It is NOT the DICOM index — that is ReportWorklistItem, created later when the image arrives.
+// It is NOT the DICOM index â€” that is ReportWorklistItem, created later when the image arrives.
 const syncMwlFromAppointment = async (
   tx: Prisma.TransactionClient,
   appointment: any,
@@ -315,7 +392,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       if (endDate) where.date.lte = endDate;
     }
     
-    // Search (só aplica se não tiver filtros específicos de paciente)
+    // Search (sÃ³ aplica se nÃ£o tiver filtros especÃ­ficos de paciente)
     if (search && !patientId && !patientCpf) {
       where.OR = [
         { patientName: { contains: search, mode: 'insensitive' } },
@@ -525,6 +602,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       response: {
         201: { type: 'object' },
         400: { type: 'object', additionalProperties: true },
+        409: { type: 'object', additionalProperties: true },
         403: { type: 'object' },
       },
     },
@@ -542,6 +620,26 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         if (!source) {
           return reply.code(400).send({ error: 'Source appointment for reschedule not found' });
         }
+      }
+
+      const requestedDurationMinutes = Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : 30;
+      const doctorConflict = await prisma.$transaction(async (tx: Prisma.TransactionClient) => (
+        findDoctorScheduleConflict({
+          tx,
+          branchId,
+          doctorName: data.doctorName || null,
+          date: data.date || null,
+          time: data.time || null,
+          durationMinutes: requestedDurationMinutes,
+        })
+      ));
+
+      if (doctorConflict) {
+        return reply.code(409).send({
+          error: 'Scheduling conflict',
+          message: 'O médico já possui outra consulta nesse horário.',
+          details: 'Conflito com ' + String(doctorConflict.patientName || 'outro paciente') + ' às ' + String(doctorConflict.time || '') + '.',
+        });
       }
 
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -592,6 +690,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       response: {
         200: { type: 'object' },
         400: { type: 'object', additionalProperties: true },
+        409: { type: 'object', additionalProperties: true },
         403: { type: 'object' },
         404: { type: 'object', additionalProperties: true },
       },
@@ -609,6 +708,34 @@ export default async function appointmentRoutes(app: FastifyInstance) {
 
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const updateData = { ...data } as any;
+        const resolvedDoctorName = updateData.doctorName ?? existing.doctorName;
+        const resolvedDate = updateData.date ?? existing.date;
+        const resolvedTime = updateData.time ?? existing.time;
+        const resolvedDurationMinutes = Number.isFinite(updateData.durationMinutes)
+          ? Number(updateData.durationMinutes)
+          : (Number.isFinite(existing.durationMinutes) ? Number(existing.durationMinutes) : 30);
+        const nextStatusForConflict = updateData.status ?? existing.status;
+        const schedulingChanged = (
+          resolvedDoctorName !== existing.doctorName
+          || resolvedDate !== existing.date
+          || resolvedTime !== existing.time
+          || resolvedDurationMinutes !== (Number.isFinite(existing.durationMinutes) ? Number(existing.durationMinutes) : 30)
+          || nextStatusForConflict !== existing.status
+        );
+        if (schedulingChanged && hasBlockingStatus(nextStatusForConflict)) {
+          const doctorConflict = await findDoctorScheduleConflict({
+            tx,
+            branchId,
+            doctorName: resolvedDoctorName,
+            date: resolvedDate,
+            time: resolvedTime,
+            durationMinutes: resolvedDurationMinutes,
+            excludeAppointmentId: id,
+          });
+          if (doctorConflict) {
+            throw new Error('DOCTOR_SCHEDULE_CONFLICT::' + String(doctorConflict.patientName || 'outro paciente') + '::' + String(doctorConflict.time || ''));
+          }
+        }
         if (updateData.authorizationStatus === 'AUTHORIZED' && !existing.authorizedAt) {
           updateData.authorizedAt = new Date();
         }
@@ -641,6 +768,14 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update appointment');
+      if (String(err?.message || '').startsWith('DOCTOR_SCHEDULE_CONFLICT::')) {
+        const [, patientName, conflictTime] = String(err.message).split('::');
+        return reply.code(409).send({
+          error: 'Scheduling conflict',
+          message: 'O médico já possui outra consulta nesse horário.',
+          details: 'Conflito com ' + String(patientName || 'outro paciente') + ' às ' + String(conflictTime || '') + '.',
+        });
+      }
       return reply.code(400).send({ error: 'Failed to update appointment', details: err.message });
     }
   });

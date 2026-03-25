@@ -92,6 +92,49 @@ function resolveDurationMinutes(value: unknown): number {
   return Math.max(1, Math.min(1440, Math.floor(parsed)));
 }
 
+function minutesToTime(totalMinutes: number): string {
+  const normalized = Math.max(0, totalMinutes);
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function buildCoveredTimeSlots(startTime: string, durationMinutes?: number | null, stepMinutes = 15): string[] {
+  const safeStep = Math.max(1, Number(stepMinutes) || 15);
+  const startMinute = timeToMinutes(startTime);
+  const safeDuration = resolveDurationMinutes(durationMinutes);
+  const slots: string[] = [];
+
+  for (let offset = 0; offset < safeDuration; offset += safeStep) {
+    slots.push(minutesToTime(startMinute + offset));
+  }
+
+  return Array.from(new Set(slots));
+}
+
+function canPlaceSessionAtSlot(
+  date: string,
+  startTime: string,
+  durationMinutes: number | null | undefined,
+  occupied: Set<string>,
+): boolean {
+  const coveredSlots = buildCoveredTimeSlots(startTime, durationMinutes);
+  return coveredSlots.every((coveredTime) => !occupied.has(`${date}#${coveredTime}`));
+}
+
+function timeRangesOverlap(
+  startA: string,
+  durationA: number | null | undefined,
+  startB: string,
+  durationB: number | null | undefined,
+): boolean {
+  const startAMinutes = timeToMinutes(startA);
+  const endAMinutes = startAMinutes + resolveDurationMinutes(durationA);
+  const startBMinutes = timeToMinutes(startB);
+  const endBMinutes = startBMinutes + resolveDurationMinutes(durationB);
+  return startAMinutes < endBMinutes && startBMinutes < endAMinutes;
+}
+
 function fitsDoctorWorkingWindow(
   slotTime: string,
   durationMinutes: number,
@@ -1140,7 +1183,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const candidateDateRange = [...candidateDateStrings].sort((a, b) => a.localeCompare(b));
     const rangeStart = candidateDateRange[0];
     const rangeEnd = candidateDateRange[candidateDateRange.length - 1];
-
+ 
     const [doctorAppointments, patientAppointments, doctorReservations, patientReservations] = await Promise.all([
       prisma.appointment.findMany({
         where: {
@@ -1154,7 +1197,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             { status: 'CONCLUIDO' },
           ],
         },
-        select: { date: true, time: true },
+        select: { date: true, time: true, durationMinutes: true },
       }),
       prisma.appointment.findMany({
         where: {
@@ -1168,7 +1211,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             { status: 'CONCLUIDO' },
           ],
         },
-        select: { date: true, time: true },
+        select: { date: true, time: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1181,7 +1224,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1194,25 +1237,41 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
     ]);
 
     const occupied = new Set<string>();
 
-    [...doctorAppointments, ...patientAppointments].forEach((item: any) => {
+    [...doctorAppointments].forEach((item: any) => {
       const date = String(item.date || '').trim();
       const time = String(item.time || '').trim();
       if (!date || !time) return;
-      occupied.add(`${date}#${time}`);
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
+    });
+
+    [...patientAppointments].forEach((item: any) => {
+      const date = String(item.date || '').trim();
+      const time = String(item.time || '').trim();
+      if (!date || !time) return;
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
     });
 
     [...doctorReservations, ...patientReservations].forEach((item: any) => {
-      if (!item.suggestedDate || !item.suggestedTime) return;
-      const date = formatDateAsIso(new Date(item.suggestedDate));
-      const time = String(item.suggestedTime).trim();
+      const time = String(item?.suggestedTime || '').trim();
+      const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
       if (!date || !time) return;
-      occupied.add(`${date}#${time}`);
+
+      // Do not block the therapy's own open slots during regeneration.
+      if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
+
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
     });
 
     const baseSlots = getShiftSlots(therapy.preferredShift);
@@ -1241,6 +1300,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
          const suggestionSignature = `${suggestionIso}#${time}`;
          // Suggest only truly available slots. This avoids offering times that will be dropped later.
          if (occupied.has(originalSignature) || occupied.has(suggestionSignature)) continue;
+         if (!canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied)) continue;
+         if (!canPlaceSessionAtSlot(suggestionIso, time, slotDurationMinutes, occupied)) continue;
          if (excludedSlots.has(originalSignature) || excludedSlots.has(suggestionSignature)) continue;
          suggestions.push({
            date: suggestionIso,
@@ -1374,7 +1435,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             { status: 'CONCLUIDO' },
           ],
         },
-        select: { date: true, time: true },
+        select: { date: true, time: true, durationMinutes: true },
       }),
       prisma.appointment.findMany({
         where: {
@@ -1388,7 +1449,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             { status: 'CONCLUIDO' },
           ],
         },
-        select: { date: true, time: true },
+        select: { date: true, time: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1401,7 +1462,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${weekDates[6]}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1414,25 +1475,41 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${weekDates[6]}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
     ]);
 
     const occupied = new Set<string>();
 
-    [...doctorAppointments, ...patientAppointments].forEach((item: any) => {
+    [...doctorAppointments].forEach((item: any) => {
       const date = String(item.date || '').trim();
       const time = String(item.time || '').trim();
       if (!date || !time) return;
-      occupied.add(`${date}#${time}`);
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
+    });
+
+    [...patientAppointments].forEach((item: any) => {
+      const date = String(item.date || '').trim();
+      const time = String(item.time || '').trim();
+      if (!date || !time) return;
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
     });
 
     [...doctorReservations, ...patientReservations].forEach((item: any) => {
-      if (!item.suggestedDate || !item.suggestedTime) return;
-      const date = formatDateAsIso(new Date(item.suggestedDate));
-      const time = String(item.suggestedTime).trim();
+      const time = String(item?.suggestedTime || '').trim();
+      const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
       if (!date || !time) return;
-      occupied.add(`${date}#${time}`);
+
+      // Keep the current therapy editable in the manual modal.
+      if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
+
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
     });
 
     const baseSlots = getShiftSlots(therapy.preferredShift);
@@ -1456,7 +1533,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         slots: daySlots.map((time) => ({
           time,
           occupied: isDayEnabled ? occupied.has(`${date}#${time}`) : false,
-          selectable: isDayEnabled && !occupied.has(`${date}#${time}`),
+          selectable: isDayEnabled && canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied),
         })),
       };
     });
@@ -1545,6 +1622,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     };
 
     const recurring = Boolean(body?.recurring);
+    const requestDurationMinutes = resolveDurationMinutes(body?.durationMinutes ?? therapy.durationMinutes);
     if (!recurring) {
       if (body?.suggestedDate && body?.suggestedTime) {
         const candidateDate = new Date(body.suggestedDate);
@@ -1560,22 +1638,20 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
         const suggestedTime = String(body.suggestedTime);
 
-        const [appointmentConflict, preReservationConflict] = await Promise.all([
-          prisma.appointment.findFirst({
+        const [appointmentConflicts, preReservationConflicts] = await Promise.all([
+          prisma.appointment.findMany({
             where: {
               isActive: true,
               date: candidateDateIso,
-              time: suggestedTime,
               OR: [
                 { doctorName: therapy.professional || undefined },
                 { patientId: therapy.pit.teaProfile.patient.id },
               ],
             },
-            select: { id: true },
+            select: { id: true, time: true, durationMinutes: true },
           }),
-          prisma.teaPreReservation.findFirst({
+          prisma.teaPreReservation.findMany({
             where: {
-              suggestedTime,
               status: { in: [...OPEN_STATUSES] as any },
               suggestedDate: {
                 gte: dayStart,
@@ -1586,9 +1662,16 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                 { patientId: therapy.pit.teaProfile.patient.id },
               ],
             },
-            select: { id: true },
+            select: { id: true, suggestedTime: true, durationMinutes: true },
           }),
         ]);
+
+        const appointmentConflict = appointmentConflicts.find((item: any) => (
+          item?.time && timeRangesOverlap(suggestedTime, requestDurationMinutes, String(item.time), item.durationMinutes)
+        ));
+        const preReservationConflict = preReservationConflicts.find((item: any) => (
+          item?.suggestedTime && timeRangesOverlap(suggestedTime, requestDurationMinutes, String(item.suggestedTime), item.durationMinutes)
+        ));
 
         if (appointmentConflict || preReservationConflict) {
           return reply.code(409).send({
@@ -1602,6 +1685,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           ...baseData,
           suggestedDate: body?.suggestedDate ? new Date(body.suggestedDate) : null,
           suggestedTime: body?.suggestedTime || null,
+          durationMinutes: body?.suggestedDate && body?.suggestedTime ? requestDurationMinutes : null,
         },
       });
 
@@ -1651,6 +1735,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const recurrenceWeeks = Math.max(1, Math.min(52, Number(body?.recurrenceWeeks) || 8));
     const recurringUntilDate = body?.recurringUntilDate ? new Date(body.recurringUntilDate) : null;
     const hasUntilDate = recurringUntilDate && !Number.isNaN(recurringUntilDate.getTime());
+    const effectiveDuration = resolveDurationMinutes(body?.durationMinutes ?? therapy.durationMinutes);
 
     const createdItems: any[] = [];
     let skippedConflicts = 0;
@@ -1666,23 +1751,21 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const dayStart = new Date(`${candidateDateIso}T00:00:00`);
       const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
 
-      const [appointmentConflict, preReservationConflict] = await Promise.all([
-        prisma.appointment.findFirst({
+      const [appointmentConflicts, preReservationConflicts] = await Promise.all([
+        prisma.appointment.findMany({
           where: {
             isActive: true,
             date: candidateDateIso,
-            time: String(body.suggestedTime),
             OR: [
               { doctorName: therapy.professional },
               { patientId: therapy.pit.teaProfile.patient.id },
             ],
           },
-          select: { id: true },
+          select: { id: true, time: true, durationMinutes: true },
         }),
-        prisma.teaPreReservation.findFirst({
+        prisma.teaPreReservation.findMany({
           where: {
             status: { in: [...OPEN_STATUSES] as any },
-            suggestedTime: String(body.suggestedTime),
             suggestedDate: {
               gte: dayStart,
               lte: dayEnd,
@@ -1692,9 +1775,16 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               { patientId: therapy.pit.teaProfile.patient.id },
             ],
           },
-          select: { id: true },
+          select: { id: true, suggestedTime: true, durationMinutes: true },
         }),
       ]);
+
+      const appointmentConflict = appointmentConflicts.find((item: any) => (
+        item?.time && timeRangesOverlap(String(body.suggestedTime), effectiveDuration, String(item.time), item.durationMinutes)
+      ));
+      const preReservationConflict = preReservationConflicts.find((item: any) => (
+        item?.suggestedTime && timeRangesOverlap(String(body.suggestedTime), effectiveDuration, String(item.suggestedTime), item.durationMinutes)
+      ));
 
       if (appointmentConflict || preReservationConflict) {
         skippedConflicts += 1;
@@ -1706,6 +1796,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           ...baseData,
           suggestedDate: candidateDate,
           suggestedTime: String(body.suggestedTime),
+          durationMinutes: effectiveDuration,
         },
       });
 
@@ -2016,32 +2107,37 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             }
           }
 
-          const [appointmentConflict, preReservationConflict] = await Promise.all([
-            prisma.appointment.findFirst({
+          const [appointmentConflicts, preReservationConflicts] = await Promise.all([
+            prisma.appointment.findMany({
               where: {
                 isActive: true,
                 date: candidateDateIso,
-                time: suggestedTime,
                 OR: [
                   { doctorName: therapy.professional || undefined },
                   { patientId: therapy.pit.teaProfile.patient.id },
                 ],
               },
-              select: { id: true },
+              select: { id: true, time: true, durationMinutes: true },
             }),
-            prisma.teaPreReservation.findFirst({
+            prisma.teaPreReservation.findMany({
               where: {
                 status: { in: [...OPEN_STATUSES] as any },
-                suggestedTime,
                 suggestedDate: { gte: dayStart, lte: dayEnd },
                 OR: [
                   { professionalDoctorId: therapy.professionalDoctorId || undefined },
                   { patientId: therapy.pit.teaProfile.patient.id },
                 ],
               },
-              select: { id: true },
+              select: { id: true, suggestedTime: true, durationMinutes: true },
             }),
           ]);
+
+          const appointmentConflict = appointmentConflicts.find((item: any) => (
+            item?.time && timeRangesOverlap(suggestedTime, effectiveDuration, String(item.time), item.durationMinutes)
+          ));
+          const preReservationConflict = preReservationConflicts.find((item: any) => (
+            item?.suggestedTime && timeRangesOverlap(suggestedTime, effectiveDuration, String(item.suggestedTime), item.durationMinutes)
+          ));
 
           if (appointmentConflict || preReservationConflict) {
             skippedConflicts += 1;
@@ -2849,26 +2945,31 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const fallbackDate = formatDateAsIso(new Date(reservation.suggestedDate));
         const appointmentDate = overrideSeriesDates[reservationIndex] || fallbackDate;
 
-        const [doctorConflict, patientConflict] = await Promise.all([
-          prisma.appointment.findFirst({
+        const [doctorConflicts, patientConflicts] = await Promise.all([
+          prisma.appointment.findMany({
             where: {
               isActive: true,
               date: appointmentDate,
-              time: reservation.suggestedTime,
               doctorName: reservation.professionalName || undefined,
             },
-            select: { id: true },
+            select: { id: true, time: true, durationMinutes: true },
           }),
-          prisma.appointment.findFirst({
+          prisma.appointment.findMany({
             where: {
               isActive: true,
               date: appointmentDate,
-              time: reservation.suggestedTime,
               patientId: reservation.patient.id,
             },
-            select: { id: true },
+            select: { id: true, time: true, durationMinutes: true },
           }),
         ]);
+
+        const doctorConflict = doctorConflicts.find((item: any) => (
+          item?.time && timeRangesOverlap(String(reservation.suggestedTime), reservation.durationMinutes, String(item.time), item.durationMinutes)
+        ));
+        const patientConflict = patientConflicts.find((item: any) => (
+          item?.time && timeRangesOverlap(String(reservation.suggestedTime), reservation.durationMinutes, String(item.time), item.durationMinutes)
+        ));
 
         if (doctorConflict || patientConflict) {
           if (patientConflict) {
@@ -3011,26 +3112,31 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     }
 
     const appointmentDate = formatDateAsIso(new Date(preReservation.suggestedDate));
-    const [doctorConflict, patientConflict] = await Promise.all([
-      prisma.appointment.findFirst({
+    const [doctorConflicts, patientConflicts] = await Promise.all([
+      prisma.appointment.findMany({
         where: {
           isActive: true,
           date: appointmentDate,
-          time: preReservation.suggestedTime,
           doctorName: preReservation.professionalName || undefined,
         },
-        select: { id: true },
+        select: { id: true, time: true, durationMinutes: true },
       }),
-      prisma.appointment.findFirst({
+      prisma.appointment.findMany({
         where: {
           isActive: true,
           date: appointmentDate,
-          time: preReservation.suggestedTime,
           patientId: preReservation.patient.id,
         },
-        select: { id: true },
+        select: { id: true, time: true, durationMinutes: true },
       }),
     ]);
+
+    const doctorConflict = doctorConflicts.find((item: any) => (
+      item?.time && timeRangesOverlap(String(preReservation.suggestedTime), preReservation.durationMinutes, String(item.time), item.durationMinutes)
+    ));
+    const patientConflict = patientConflicts.find((item: any) => (
+      item?.time && timeRangesOverlap(String(preReservation.suggestedTime), preReservation.durationMinutes, String(item.time), item.durationMinutes)
+    ));
 
     if (doctorConflict || patientConflict) {
       return reply.code(409).send({
@@ -3155,3 +3261,6 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     return { items: itemsWithAttachments, total };
   });
 }
+
+
+
