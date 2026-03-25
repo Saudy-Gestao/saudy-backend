@@ -150,9 +150,16 @@ export default async function dicomRoutes(app: FastifyInstance) {
     return reply.send(stream);
   });
 
-  // list all files linked to an item (by item id or study UID)
+  // list DICOMs linked to an item (by item id or study UID)
+  // default view groups by series, but each series can expose its own instances
   app.get('/:key/files', async (request, reply) => {
     const { key } = request.params as any;
+    const { view = 'instances', includeInstances = 'true', seriesUid } = (request.query || {}) as {
+      view?: string;
+      includeInstances?: string;
+      seriesUid?: string;
+    };
+    const shouldIncludeInstances = String(includeInstances).toLowerCase() !== 'false';
     const item = await prisma.reportWorklistItem.findFirst({
       where: { OR: [{ id: key }, { dicomStudyUid: key }] },
     });
@@ -161,13 +168,133 @@ export default async function dicomRoutes(app: FastifyInstance) {
     const files = await prisma.dicomFile.findMany({
       where: { worklistItemId: item.id },
       orderBy: { createdAt: 'asc' },
+      select: { id: true, seriesUid: true, createdAt: true, instanceId: true },
     });
 
-    const list = files.map((f: { id: string }) => ({
+    // common viewer pattern: request all instances from one selected series
+    if (typeof seriesUid === 'string' && seriesUid.length > 0) {
+      const resolvedSeriesUid = seriesUid === '__NO_SERIES__' ? null : seriesUid;
+      const selected = files.filter(
+        (f: { id: string; seriesUid: string | null; createdAt: Date; instanceId: string | null }) =>
+          f.seriesUid === resolvedSeriesUid,
+      );
+      const list = selected.map((f: { id: string; seriesUid: string | null; instanceId: string | null }) => ({
+        id: f.id,
+        seriesUid: f.seriesUid,
+        instanceId: f.instanceId,
+        url: `/dicom/file/${f.id}`,
+      }));
+      return {
+        view: 'instances',
+        key,
+        seriesUid: resolvedSeriesUid,
+        totalInstances: list.length,
+        files: list,
+        instances: list,
+      };
+    }
+
+    if (view === 'instances') {
+      const list = files.map((f: { id: string; seriesUid: string | null; instanceId: string | null }) => ({
+        id: f.id,
+        seriesUid: f.seriesUid,
+        instanceId: f.instanceId,
+        url: `/dicom/file/${f.id}`,
+      }));
+      return {
+        view: 'instances',
+        totalInstances: list.length,
+        files: list,
+      };
+    }
+
+    const bySeries = new Map<
+      string,
+      {
+        id: string;
+        seriesUid: string | null;
+        instancesCount: number;
+        instances: Array<{ id: string; instanceId: string | null; url: string }>;
+      }
+    >();
+
+    for (const f of files) {
+      const seriesKey = f.seriesUid || '__NO_SERIES__';
+      const existing = bySeries.get(seriesKey);
+      if (existing) {
+        existing.instancesCount += 1;
+        if (shouldIncludeInstances) {
+          existing.instances.push({
+            id: f.id,
+            instanceId: f.instanceId,
+            url: `/dicom/file/${f.id}`,
+          });
+        }
+      } else {
+        bySeries.set(seriesKey, {
+          id: f.id,
+          seriesUid: f.seriesUid,
+          instancesCount: 1,
+          instances: shouldIncludeInstances
+            ? [{ id: f.id, instanceId: f.instanceId, url: `/dicom/file/${f.id}` }]
+            : [],
+        });
+      }
+    }
+
+    const series = Array.from(bySeries.values()).map((s) => ({
+      id: s.id,
+      seriesUid: s.seriesUid,
+      instancesCount: s.instancesCount,
+      url: `/dicom/file/${s.id}`,
+      instances: s.instances,
+      files: s.instances,
+    }));
+
+    // backward-compatible key name: `files` now represents series when view=series
+    return {
+      view: 'series',
+      totalInstances: files.length,
+      totalSeries: series.length,
+      files: series,
+      series,
+    };
+  });
+
+  // list all instances from one selected series for a given item/study
+  app.get('/:key/series/:seriesUid/files', async (request, reply) => {
+    const { key, seriesUid } = request.params as any;
+    const resolvedSeriesUid = seriesUid === '__NO_SERIES__' ? null : seriesUid;
+
+    const item = await prisma.reportWorklistItem.findFirst({
+      where: { OR: [{ id: key }, { dicomStudyUid: key }] },
+      select: { id: true },
+    });
+    if (!item) return reply.code(404).send({ error: 'DICOM not found' });
+
+    const files = await prisma.dicomFile.findMany({
+      where: {
+        worklistItemId: item.id,
+        seriesUid: resolvedSeriesUid,
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, seriesUid: true, instanceId: true },
+    });
+
+    const list = files.map((f: { id: string; seriesUid: string | null; instanceId: string | null }) => ({
       id: f.id,
+      seriesUid: f.seriesUid,
+      instanceId: f.instanceId,
       url: `/dicom/file/${f.id}`,
     }));
-    return { files: list };
+
+    return {
+      view: 'instances',
+      key,
+      seriesUid: resolvedSeriesUid,
+      totalInstances: list.length,
+      files: list,
+    };
   });
 
   // fetch a specific file by its own ID
