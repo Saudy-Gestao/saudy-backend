@@ -20,6 +20,16 @@ export async function processDicomBuffer(
   branchId: string | null,
   instanceId?: string,
 ): Promise<any /* ReportWorklistItem */> {
+  // --- Deduplication guard: if instanceId is known, skip entirely if already processed ---
+  // This must happen BEFORE the GCS upload to avoid orphaned files when the poller
+  // fires multiple overlapping cycles during bulk ingestion.
+  if (instanceId) {
+    const existing = await prisma.dicomFile.findFirst({ where: { instanceId } });
+    if (existing) {
+      const item = await prisma.reportWorklistItem.findUnique({ where: { id: existing.worklistItemId } });
+      if (item) return item;
+    }
+  }
   // parse minimal metadata
   const byteArray = new Uint8Array(buffer);
   const dataSet = dicomParser.parseDicom(byteArray);

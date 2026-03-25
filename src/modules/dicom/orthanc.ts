@@ -136,7 +136,16 @@ async function cleanupOldOrthancStudies() {
 }
 
 export function startOrthancPoller() {
+  let polling = false;
+
   const handle = async () => {
+    // Guard against overlapping poll cycles: if the previous run is still in progress,
+    // skip this tick to avoid processing the same instances concurrently.
+    if (polling) {
+      console.log('orthanc poll: previous cycle still running, skipping tick');
+      return;
+    }
+    polling = true;
     try {
       const studies: string[] = await fetchJson<string[]>('/studies');
       for (const uid of studies) {
@@ -172,6 +181,8 @@ export function startOrthancPoller() {
       }
     } catch (err) {
       console.warn('orthanc poll error', err);
+    } finally {
+      polling = false;
     }
   };
 
