@@ -30,6 +30,26 @@ export const swaggerComponents = {
         state: { type: 'string', nullable: true },
         zipCode: { type: 'string', nullable: true },
         roomId: { type: 'string', nullable: true },
+        roomIds: { type: 'array', items: { type: 'string' } },
+        rooms: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              roomId: { type: 'string' },
+              room: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  branchId: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
         isActive: { type: 'boolean' },
         workingDays: { type: 'array', items: { type: 'string' } },
         workingHoursStart: { type: 'string', nullable: true },
@@ -100,6 +120,7 @@ export const swaggerComponents = {
         state: { type: 'string' },
         zipCode: { type: 'string' },
         roomId: { type: 'string' },
+        roomIds: { type: 'array', items: { type: 'string' } },
         workingDays: { type: 'array', items: { type: 'string' } },
         workingHoursStart: { type: 'string' },
         workingHoursEnd: { type: 'string' },
@@ -157,6 +178,7 @@ export const swaggerComponents = {
         state: { type: 'string' },
         zipCode: { type: 'string' },
         roomId: { type: 'string', nullable: true },
+        roomIds: { type: 'array', items: { type: 'string' } },
         isActive: { type: 'boolean' },
         workingDays: { type: 'array', items: { type: 'string' } },
         workingHoursStart: { type: 'string' },

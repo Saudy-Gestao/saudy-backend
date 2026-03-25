@@ -1,0 +1,2 @@
+ALTER TABLE "branch_settings"
+ADD COLUMN IF NOT EXISTS "noShowToleranceMinutes" INTEGER NOT NULL DEFAULT 30;

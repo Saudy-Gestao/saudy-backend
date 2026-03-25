@@ -84,6 +84,7 @@ model BranchSettings {
     branch                          Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
     requireFacialForReportDelivery  Boolean @default(false)
     requireFacialForPatientRegistration Boolean @default(true)
+    noShowToleranceMinutes          Int     @default(30)
 
     @@map("branch_settings")
 }
@@ -96,6 +97,8 @@ model Sector {
     description String
     users       User[]
     doctors     Doctor[]
+    doctorRooms DoctorRoom[]
+    medicalEquipments MedicalEquipment[]
 
     @@map("sectors")
 }
@@ -196,6 +199,7 @@ model Doctor {
     zipCode           String?  @db.VarChar(8)
     roomId            String?
     room              Sector?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
+    roomLinks         DoctorRoom[]
     isActive          Boolean  @default(true)
     workingDays       String[] @default([])
     workingHoursStart String?
@@ -210,6 +214,20 @@ model Doctor {
     @@unique([crm, crmState])
     @@index([branchId])
     @@map("doctors")
+}
+
+model DoctorRoom {
+    id        String   @id @default(uuid())
+    doctorId  String
+    roomId    String
+    doctor    Doctor   @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+    room      Sector   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+    createdAt DateTime @default(now())
+
+    @@unique([doctorId, roomId])
+    @@index([doctorId])
+    @@index([roomId])
+    @@map("doctor_rooms")
 }
 
 model Patient {
@@ -604,6 +622,9 @@ model TeaPreReservationTimeline {
 model Appointment {
     id              String   @id @default(uuid())
     branchId        String?
+    rescheduledFromAppointmentId String?
+    rescheduledFromAppointment Appointment? @relation("AppointmentReschedule", fields: [rescheduledFromAppointmentId], references: [id], onDelete: SetNull)
+    rescheduledAppointments Appointment[] @relation("AppointmentReschedule")
     patientName     String?
     patientCpf      String?
     patientId       String?
@@ -630,10 +651,31 @@ model Appointment {
     worklistItems   ReportWorklistItem[]
     laudos          Report[]
     mwlEntries      MwlEntry[]
+    attachments     AppointmentAttachment[]
 
     @@index([branchId])
+    @@index([rescheduledFromAppointmentId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
     @@map("appointments")
+}
+
+model AppointmentAttachment {
+    id               String      @id @default(uuid())
+    branchId         String
+    appointmentId    String
+    appointment      Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+    fileName         String
+    mimeType         String?
+    sizeBytes        Int?
+    gcsObjectName    String
+    uploadedByUserId String?
+    uploadedAt       DateTime    @default(now())
+    createdAt        DateTime    @default(now())
+    isActive         Boolean     @default(true)
+
+    @@index([branchId])
+    @@index([appointmentId])
+    @@map("appointment_attachments")
 }
 
 // Modality Worklist entry — created when appointment is confirmed, consumed when DICOM arrives
@@ -977,9 +1019,66 @@ model Procedure {
     doctors            ProcedureDoctor[]
     evolutionTemplates TeaEvolutionTemplate[]
     materials          ProcedureMaterial[]
+    equipmentLinks     MedicalEquipmentProcedure[]
 
     @@index([branchId])
     @@map("procedures")
+}
+
+model MedicalEquipment {
+    id               String   @id @default(uuid())
+    branchId         String?
+    roomId           String?
+    room             Sector?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
+    name             String
+    manufacturer     String?
+    model            String?
+    modality         String?
+    integrationType  String   @default("MWL_BRIDGE")
+    bridgeIdentifier String?
+    aeTitle          String?
+    mwlRemoteAeTitle String?
+    storeRemoteAeTitle String?
+    stationName      String?
+    serialNumber     String?
+    patrimonyCode    String?
+    mwlHost          String?
+    mwlPort          Int?
+    storeHost        String?
+    storePort        Int?
+    dicomWebPath     String?
+    supportsWorklist Boolean  @default(false)
+    supportsStore    Boolean  @default(true)
+    supportsPrint    Boolean  @default(false)
+    status           String   @default("Ativo")
+    observations     String?  @db.Text
+    lastTestStatus   String?
+    lastTestMessage  String?  @db.Text
+    lastTestedAt     DateTime?
+    isActive         Boolean  @default(true)
+    createdAt        DateTime @default(now())
+    updatedAt        DateTime @updatedAt
+
+    procedures MedicalEquipmentProcedure[]
+
+    @@index([branchId])
+    @@index([roomId])
+    @@map("medical_equipments")
+}
+
+model MedicalEquipmentProcedure {
+    id                 String           @id @default(uuid())
+    medicalEquipmentId String
+    procedureId        String
+    createdAt          DateTime         @default(now())
+
+    medicalEquipment MedicalEquipment @relation(fields: [medicalEquipmentId], references: [id], onDelete: Cascade)
+    procedure        Procedure        @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+
+    @@unique([medicalEquipmentId, procedureId])
+    @@index([medicalEquipmentId])
+    @@index([procedureId])
+    @@map("medical_equipment_procedures")
 }
 
 model ProcedureMaterial {
@@ -1102,16 +1201,18 @@ enum WhatsAppMessageType {
 }
 
 model WhatsAppMessageTemplate {
-    id                String              @id @default(uuid())
-    branchId          String
-    type              WhatsAppMessageType
-    name              String
-    message           String              @db.Text
-    hsmTemplateName   String?             // Nome do template HSM no Gupshup (ex: "confirmacao_agendamento")
-    hsmTemplateApproved Boolean           @default(false) // true = aprovado pela Meta
-    isActive          Boolean             @default(true)
-    createdAt         DateTime            @default(now())
-    updatedAt         DateTime            @updatedAt
+    id                  String              @id @default(uuid())
+    branchId            String
+    type                WhatsAppMessageType
+    name                String
+    message             String              @db.Text
+    hsmTemplateName     String?             // Nome do template HSM no Gupshup (ex: "confirmacao_agendamento")
+    hsmTemplateId       String?             // ID interno do template retornado pelo Gupshup
+    hsmTemplateStatus   String?             // Status raw: APPROVED, REJECTED, PENDING, etc.
+    hsmTemplateApproved Boolean             @default(false) // true = aprovado pela Meta
+    isActive            Boolean             @default(true)
+    createdAt           DateTime            @default(now())
+    updatedAt           DateTime            @updatedAt
 
     @@unique([branchId, type])
     @@index([branchId])

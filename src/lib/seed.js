@@ -36,20 +36,6 @@ const modules = [
     icon: 'CalendarCheck',
     category: 'fluxo-paciente',
   },
-  {
-    name: 'anamnese',
-    label: 'Anamnese',
-    description: 'Histórico médico',
-    icon: 'ClipboardList',
-    category: 'fluxo-paciente',
-  },
-  {
-    name: 'enfermagem',
-    label: 'Enfermagem',
-    description: 'Triagem e sinais vitais',
-    icon: 'Heart',
-    category: 'fluxo-paciente',
-  },
   
   // Suporte Clínico
   {
@@ -64,13 +50,6 @@ const modules = [
     label: 'Laudo',
     description: 'Emissão de laudos',
     icon: 'FileText',
-    category: 'suporte-clinico',
-  },
-  {
-    name: 'documentos',
-    label: 'Documentos',
-    description: 'Gestão documental',
-    icon: 'Folder',
     category: 'suporte-clinico',
   },
   {
@@ -159,6 +138,13 @@ const modules = [
     description: 'Salas por filial',
     icon: 'Warehouse',
     category: 'cadastros',
+  },
+  {
+    name: 'cadastro-equipamento',
+    label: 'Cadastro de Equipamentos',
+    description: 'Equipamentos médicos com integração DICOM',
+    icon: 'ScanLine',
+    category: 'cadastros',
   }
 ];
 
@@ -176,10 +162,16 @@ async function main() {
     console.log(`  ✓ ${module.label}`);
   }
 
-  // Remove módulo legado de Envelopamento para não aparecer em permissões/acessos.
-  const removedCount = await prisma.module.deleteMany({ where: { name: 'envelopamento' } });
+  // Remove módulos descontinuados para não aparecerem em permissões/acessos.
+  const removedCount = await prisma.module.deleteMany({
+    where: {
+      name: {
+        in: ['envelopamento', 'anamnese', 'enfermagem', 'documentos'],
+      },
+    },
+  });
   if (removedCount.count > 0) {
-    console.log('  ✓ Envelopamento removido do catálogo de módulos');
+    console.log(`  ✓ ${removedCount.count} módulo(s) descontinuado(s) removido(s) do catálogo`);
   }
 
   console.log('✅ Seed completed!');

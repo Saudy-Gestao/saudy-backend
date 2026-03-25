@@ -3,6 +3,21 @@ import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+
+type QueueStatusSyncItem = {
+  id: string;
+  appointmentId: string | null;
+  status: string | null;
+  notes: string | null;
+};
+
+type QueueStatusAppointment = {
+  id: string;
+  date: string;
+  time: string;
+};
+
 const normalizeStatusKey = (value?: string | null) => String(value || '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
@@ -17,14 +32,165 @@ const canonicalStatus = (value?: string | null) => {
 };
 
 const TRANSITION_RULES: Record<string, string[]> = {
-  NA_FILA_DA_RECEPCAO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'CHECKLIST_EM_ANDAMENTO', 'CANCELADO', 'CANCELADA'],
+  NA_FILA_DA_RECEPCAO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'CHECKLIST_EM_ANDAMENTO', 'ATRASADO', 'NAO_COMPARECEU', 'CANCELADO', 'CANCELADA'],
+  ATRASADO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'CHECKLIST_EM_ANDAMENTO', 'NAO_COMPARECEU', 'CANCELADO', 'CANCELADA'],
   EM_ATENDIMENTO_NA_RECEPCAO: ['CHECKLIST_EM_ANDAMENTO', 'RECEPCAO_CONCLUIDA', 'CANCELADO', 'CANCELADA'],
   CHECKLIST_EM_ANDAMENTO: ['EM_ATENDIMENTO_NA_RECEPCAO', 'RECEPCAO_CONCLUIDA', 'CANCELADO', 'CANCELADA'],
   RECEPCAO_CONCLUIDA: ['FINALIZADO', 'FINALIZADA', 'CANCELADO', 'CANCELADA'],
+  NAO_COMPARECEU: [],
   FINALIZADO: [],
   FINALIZADA: [],
   CANCELADO: [],
   CANCELADA: [],
+};
+
+const ACTIVE_QUEUE_STATUSES = new Set([
+  'NA_FILA_DA_RECEPCAO',
+  'ATRASADO',
+]);
+
+const parseAppointmentDateTime = (date?: string | null, time?: string | null) => {
+  const normalizedDate = String(date || '').trim();
+  const normalizedTime = String(time || '').trim();
+  if (!normalizedDate || !normalizedTime) return null;
+
+  const [year, month, day] = normalizedDate.split('-').map(Number);
+  const [hours, minutes] = normalizedTime.split(':').map(Number);
+  if ([year, month, day, hours, minutes].some((value) => Number.isNaN(value))) return null;
+
+  return new Date(year, month - 1, day, hours, minutes, 0, 0);
+};
+
+const formatNaiveDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatNaiveTime = (date: Date) => {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+};
+
+const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const readPart = (type: string) => parts.find((item) => item.type === type)?.value || '';
+
+  return {
+    year: readPart('year'),
+    month: readPart('month'),
+    day: readPart('day'),
+    hour: readPart('hour'),
+    minute: readPart('minute'),
+  };
+};
+
+const getClinicNowDateTime = () => {
+  const { year, month, day, hour, minute } = getTimeZoneParts(new Date());
+  return {
+    date: `${year}-${month}-${day}`,
+    time: `${hour}:${minute}`,
+  };
+};
+
+const getPreAttendanceTimingStatus = (appointmentDate?: string | null, appointmentTime?: string | null) => {
+  const appointmentAt = parseAppointmentDateTime(appointmentDate, appointmentTime);
+  if (!appointmentAt) return null;
+
+  const clinicNow = getClinicNowDateTime();
+  const appointmentDateIso = formatNaiveDate(appointmentAt);
+  if (clinicNow.date > appointmentDateIso) {
+    return 'Não compareceu';
+  }
+
+  const delayedAt = new Date(appointmentAt.getTime() + (30 * 60 * 1000));
+  const delayedDateIso = formatNaiveDate(delayedAt);
+  const delayedTime = formatNaiveTime(delayedAt);
+
+  if (
+    clinicNow.date > delayedDateIso
+    || (clinicNow.date === delayedDateIso && clinicNow.time > delayedTime)
+  ) {
+    return 'Atrasado';
+  }
+
+  return 'Na fila da recepção';
+};
+
+const syncPreAttendanceTimingStatuses = async (branchId: string, userId?: string | null) => {
+  const queueItems: QueueStatusSyncItem[] = await prisma.preAttendance.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      appointmentId: { not: null },
+    },
+    select: {
+      id: true,
+      appointmentId: true,
+      status: true,
+      notes: true,
+    },
+  });
+
+  const candidates = queueItems.filter((item: QueueStatusSyncItem) => ACTIVE_QUEUE_STATUSES.has(canonicalStatus(item.status)));
+  if (!candidates.length) return;
+
+  const appointmentIds = candidates
+    .map((item) => String(item.appointmentId || '').trim())
+    .filter(Boolean);
+
+  if (!appointmentIds.length) return;
+
+  const appointments: QueueStatusAppointment[] = await prisma.appointment.findMany({
+    where: {
+      id: { in: appointmentIds },
+      branchId,
+    },
+    select: {
+      id: true,
+      date: true,
+      time: true,
+    },
+  });
+
+  const appointmentById = new Map(
+    appointments.map((appointment: QueueStatusAppointment) => [String(appointment.id), appointment]),
+  );
+
+  const updates = candidates
+    .map((item: QueueStatusSyncItem) => {
+      const appointment = appointmentById.get(String(item.appointmentId || ''));
+      if (!appointment) return null;
+
+      const nextStatus = getPreAttendanceTimingStatus(appointment.date, appointment.time);
+      if (!nextStatus || canonicalStatus(nextStatus) === canonicalStatus(item.status)) {
+        return null;
+      }
+
+      return prisma.preAttendance.update({
+        where: { id: item.id },
+        data: {
+          status: nextStatus,
+          notes: appendStatusAudit(item.notes, item.status, nextStatus, userId || null),
+        },
+      });
+    })
+    .filter(Boolean);
+
+  if (updates.length) {
+    await prisma.$transaction(updates);
+  }
 };
 
 const canTransitionStatus = (fromRaw?: string | null, toRaw?: string | null) => {
@@ -85,6 +251,9 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
   }, async (request) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return { items: [], total: 0 };
+    const userId = String((request.user as any)?.id || '');
+
+    await syncPreAttendanceTimingStatuses(branchId, userId || null);
 
     const { search, status, queueType, limit = 50, offset = 0 } = request.query as any;
 

@@ -1,4 +1,4 @@
-import { FastifyInstance } from 'fastify';
+﻿import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
@@ -63,11 +63,86 @@ function buildTherapySignature(therapy: any): string {
   ].join('|');
 }
 
+
 function formatDateToIso(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+function normalizeDoctorName(value?: string | null): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+async function cancelAppointmentsForConvertedReservations(tx: any, reservations: any[], reason: string): Promise<number> {
+  const normalized = reservations
+    .filter((reservation: any) => reservation?.patientId && reservation?.suggestedDate && reservation?.suggestedTime)
+    .map((reservation: any) => ({
+      id: String(reservation.id || ''),
+      patientId: String(reservation.patientId || ''),
+      doctorName: normalizeDoctorName(reservation.professionalName),
+      date: formatDateToIso(new Date(reservation.suggestedDate)),
+      time: String(reservation.suggestedTime || ''),
+    }))
+    .filter((reservation: any) => reservation.id && reservation.patientId && reservation.date && reservation.time);
+
+  if (!normalized.length) return 0;
+
+  const patientIds = Array.from(new Set(normalized.map((reservation: any) => reservation.patientId)));
+  const dates = normalized.map((reservation: any) => reservation.date).sort();
+  const fromDate = dates[0];
+  const toDate = dates[dates.length - 1];
+  const signatures = new Set(
+    normalized.map((reservation: any) => `${reservation.patientId}#${reservation.doctorName}#${reservation.date}#${reservation.time}`),
+  );
+  const reservationIds = normalized.map((reservation: any) => reservation.id).filter(Boolean);
+
+  const candidates = await tx.appointment.findMany({
+    where: {
+      isActive: true,
+      type: 'RETORNO TEA',
+      patientId: { in: patientIds },
+      date: { gte: fromDate, lte: toDate },
+      NOT: [
+        { status: 'CANCELED' },
+        { status: 'CANCELADO' },
+        { status: 'COMPLETED' },
+        { status: 'CONCLUIDO' },
+      ],
+    },
+    select: {
+      id: true,
+      patientId: true,
+      doctorName: true,
+      date: true,
+      time: true,
+      observations: true,
+    },
+  });
+
+  const appointmentIdsToCancel = candidates
+    .filter((appointment: any) => {
+      const observationText = String(appointment?.observations || '');
+      const matchesObservation = reservationIds.some((reservationId) => observationText.includes(reservationId));
+      if (matchesObservation) return true;
+      const signature = `${String(appointment?.patientId || '')}#${normalizeDoctorName(appointment?.doctorName)}#${String(appointment?.date || '')}#${String(appointment?.time || '')}`;
+      return signatures.has(signature);
+    })
+    .map((appointment: any) => String(appointment.id))
+    .filter(Boolean);
+
+  if (!appointmentIdsToCancel.length) return 0;
+
+  const updateResult = await tx.appointment.updateMany({
+    where: { id: { in: appointmentIdsToCancel } },
+    data: {
+      status: 'CANCELED',
+      isActive: false,
+      observations: reason,
+    },
+  });
+
+  return Number(updateResult?.count || appointmentIdsToCancel.length || 0);
 }
 
 function normalizeStrategies(value: unknown): string[] {
@@ -288,12 +363,12 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       const normalizedEmail = normalizeEmail(patientPayload?.email);
 
       const fieldErrors: Record<string, string> = {};
-      if (!patientPayload?.name) fieldErrors.name = 'Nome é obrigatório para criar paciente base';
-      if (!isValidCpf(cpf)) fieldErrors.cpf = 'CPF inválido';
-      if (!patientPayload?.birthDate || Number.isNaN(new Date(patientPayload.birthDate).getTime())) fieldErrors.birthDate = 'Data de nascimento válida é obrigatória';
-      if (!gender) fieldErrors.gender = 'Gênero é obrigatório (MALE/FEMALE/OTHER)';
-      if (!patientPayload?.cellphone) fieldErrors.cellphone = 'Celular é obrigatório';
-      if (patientPayload?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
+      if (!patientPayload?.name) fieldErrors.name = 'Nome Ã© obrigatÃ³rio para criar paciente base';
+      if (!isValidCpf(cpf)) fieldErrors.cpf = 'CPF invÃ¡lido';
+      if (!patientPayload?.birthDate || Number.isNaN(new Date(patientPayload.birthDate).getTime())) fieldErrors.birthDate = 'Data de nascimento vÃ¡lida Ã© obrigatÃ³ria';
+      if (!gender) fieldErrors.gender = 'GÃªnero Ã© obrigatÃ³rio (MALE/FEMALE/OTHER)';
+      if (!patientPayload?.cellphone) fieldErrors.cellphone = 'Celular Ã© obrigatÃ³rio';
+      if (patientPayload?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email invÃ¡lido';
 
       if (Object.keys(fieldErrors).length > 0) {
         return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
@@ -324,7 +399,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       if (patientPayload?.cellphone) updateData.cellphone = String(patientPayload.cellphone);
       if (patientPayload?.email !== undefined) {
         if (normalizedEmail && !isValidEmail(normalizedEmail)) {
-          return reply.code(400).send({ error: 'Validation failed', fields: { email: 'Email inválido' } });
+          return reply.code(400).send({ error: 'Validation failed', fields: { email: 'Email invÃ¡lido' } });
         }
         updateData.email = normalizedEmail || null;
       }
@@ -465,7 +540,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     if (!data?.title || String(data.title).trim() === '') {
-      return reply.code(400).send({ error: 'Validation failed', fields: { title: 'Título é obrigatório' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { title: 'TÃ­tulo Ã© obrigatÃ³rio' } });
     }
 
     const responsibleDoctorId = data.responsibleDoctorId ? String(data.responsibleDoctorId) : null;
@@ -474,7 +549,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       : null;
 
     if (responsibleDoctorId && !resolvedResponsibleProfessional) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { responsibleDoctorId: 'Médico responsável inválido' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { responsibleDoctorId: 'MÃ©dico responsÃ¡vel invÃ¡lido' } });
     }
 
     const plan = await prisma.teaTherapeuticPlan.create({
@@ -482,7 +557,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
         teaProfileId,
         title: String(data.title).trim(),
         objective: data.objective || null,
-        priority: data.priority || 'Média',
+        priority: data.priority || 'MÃ©dia',
         status: data.status || 'Ativo',
         responsibleDoctorId,
         responsibleProfessional: resolvedResponsibleProfessional || data.responsibleProfessional || null,
@@ -526,7 +601,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       if (responsibleDoctorId) {
         const resolvedResponsibleProfessional = await resolveDoctorNameById(responsibleDoctorId, branchId);
         if (!resolvedResponsibleProfessional) {
-          return reply.code(400).send({ error: 'Validation failed', fields: { responsibleDoctorId: 'Médico responsável inválido' } });
+          return reply.code(400).send({ error: 'Validation failed', fields: { responsibleDoctorId: 'MÃ©dico responsÃ¡vel invÃ¡lido' } });
         }
         updateData.responsibleDoctorId = responsibleDoctorId;
         updateData.responsibleProfessional = resolvedResponsibleProfessional;
@@ -651,14 +726,14 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     }
 
     if (!String(data?.sessionGoal || '').trim()) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { sessionGoal: 'Objetivo da sessão é obrigatório' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { sessionGoal: 'Objetivo da sessÃ£o Ã© obrigatÃ³rio' } });
     }
     if (!String(data?.interventionSummary || '').trim()) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { interventionSummary: 'Intervenção realizada é obrigatória' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { interventionSummary: 'IntervenÃ§Ã£o realizada Ã© obrigatÃ³ria' } });
     }
     const parsedStrategies = normalizeStrategies(data?.strategiesUsed);
     if (!parsedStrategies.length) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { strategiesUsed: 'Informe ao menos uma estratégia utilizada' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { strategiesUsed: 'Informe ao menos uma estratÃ©gia utilizada' } });
     }
 
     const appointmentId = data?.appointmentId ? String(data.appointmentId) : null;
@@ -673,7 +748,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
         select: { id: true },
       });
       if (!appointment) {
-        return reply.code(400).send({ error: 'Validation failed', fields: { appointmentId: 'Agendamento inválido para este paciente' } });
+        return reply.code(400).send({ error: 'Validation failed', fields: { appointmentId: 'Agendamento invÃ¡lido para este paciente' } });
       }
     }
 
@@ -682,7 +757,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       ? await resolveDoctorNameById(professionalDoctorId, branchId)
       : null;
     if (professionalDoctorId && !resolvedProfessionalName) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'Médico inválido' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'MÃ©dico invÃ¡lido' } });
     }
 
     const item = await prisma.teaEvolution.create({
@@ -769,17 +844,17 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (!existing) return reply.code(404).send({ error: 'Evolution not found' });
 
     if (!String(data?.editReason || '').trim()) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { editReason: 'Motivo da retificação é obrigatório' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { editReason: 'Motivo da retificaÃ§Ã£o Ã© obrigatÃ³rio' } });
     }
     if (!String(data?.sessionGoal || '').trim()) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { sessionGoal: 'Objetivo da sessão é obrigatório' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { sessionGoal: 'Objetivo da sessÃ£o Ã© obrigatÃ³rio' } });
     }
     if (!String(data?.interventionSummary || '').trim()) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { interventionSummary: 'Intervenção realizada é obrigatória' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { interventionSummary: 'IntervenÃ§Ã£o realizada Ã© obrigatÃ³ria' } });
     }
     const parsedStrategies = normalizeStrategies(data?.strategiesUsed);
     if (!parsedStrategies.length) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { strategiesUsed: 'Informe ao menos uma estratégia utilizada' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { strategiesUsed: 'Informe ao menos uma estratÃ©gia utilizada' } });
     }
 
     const appointmentId = data?.appointmentId ? String(data.appointmentId) : null;
@@ -794,7 +869,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
         select: { id: true },
       });
       if (!appointment) {
-        return reply.code(400).send({ error: 'Validation failed', fields: { appointmentId: 'Agendamento inválido para este paciente' } });
+        return reply.code(400).send({ error: 'Validation failed', fields: { appointmentId: 'Agendamento invÃ¡lido para este paciente' } });
       }
     }
 
@@ -810,7 +885,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       ? await resolveDoctorNameById(professionalDoctorId, branchId)
       : null;
     if (professionalDoctorId && !resolvedProfessionalName) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'Médico inválido' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'MÃ©dico invÃ¡lido' } });
     }
 
     const updated = await prisma.teaEvolution.update({
@@ -1067,7 +1142,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       });
 
       if (alreadyInactivePit) {
-        return { message: 'PIT já estava inativo' };
+        return { message: 'PIT jÃ¡ estava inativo' };
       }
 
       return reply.code(404).send({ error: 'PIT not found' });
@@ -1109,7 +1184,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           data: idsToCancel.map((preReservationId: string) => ({
             preReservationId,
             eventType: 'PIT_DEACTIVATED',
-            eventLabel: 'Pré-reserva cancelada por exclusão do PIT',
+            eventLabel: 'PrÃ©-reserva cancelada por exclusÃ£o do PIT',
             actor,
             payload: { source: 'pit-delete' },
           })),
@@ -1123,47 +1198,23 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
           suggestedDate: { gte: new Date(`${todayIso}T00:00:00`) },
         },
         select: {
+          id: true,
           patientId: true,
           suggestedDate: true,
           suggestedTime: true,
           professionalName: true,
-          procedureName: true,
         },
       });
 
-      for (const reservation of convertedFutureReservations) {
-        if (!reservation?.suggestedDate || !reservation?.suggestedTime) continue;
-        const appointmentDate = formatDateToIso(new Date(reservation.suggestedDate));
-        const conflictClauses: any[] = [
-          { patientId: reservation.patientId },
-        ];
-        if (reservation.professionalName) {
-          conflictClauses.push({ doctorName: reservation.professionalName });
-        }
+      await cancelAppointmentsForConvertedReservations(
+        tx,
+        convertedFutureReservations,
+        'Cancelamento em lote TEA: PIT excluído',
+      );
 
-        await tx.appointment.updateMany({
-          where: {
-            isActive: true,
-            date: appointmentDate,
-            time: reservation.suggestedTime,
-            type: 'RETORNO TEA',
-            OR: conflictClauses,
-            NOT: [
-              { status: 'CANCELED' },
-              { status: 'CANCELADO' },
-              { status: 'COMPLETED' },
-              { status: 'CONCLUIDO' },
-            ],
-          },
-          data: {
-            status: 'CANCELED',
-            isActive: false,
-          },
-        });
-      }
     });
 
-    return { message: 'PIT excluído com sucesso' };
+    return { message: 'PIT excluÃ­do com sucesso' };
   });
 
   app.post('/:teaProfileId/pit/upsert', {
@@ -1234,7 +1285,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (!teaProfile) return reply.code(404).send({ error: 'TEA profile not found' });
 
     if (!data?.title || String(data.title).trim() === '') {
-      return reply.code(400).send({ error: 'Validation failed', fields: { title: 'Título do PIT é obrigatório' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { title: 'TÃ­tulo do PIT Ã© obrigatÃ³rio' } });
     }
 
     const therapies = Array.isArray(data?.therapies)
@@ -1283,15 +1334,15 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
       : [];
 
     if (Array.isArray(therapies) && therapies.some((t: any) => t === null)) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { therapies: 'Terapia inválida' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { therapies: 'Terapia invÃ¡lida' } });
     }
 
     if (Array.isArray(therapies) && therapies.some((t: any) => t?.__invalidProcedure)) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { procedureId: 'Procedimento inválido nas terapias' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { procedureId: 'Procedimento invÃ¡lido nas terapias' } });
     }
 
     if (Array.isArray(therapies) && therapies.some((t: any) => t?.__invalidProfessional)) {
-      return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'Médico inválido nas terapias' } });
+      return reply.code(400).send({ error: 'Validation failed', fields: { professionalDoctorId: 'MÃ©dico invÃ¡lido nas terapias' } });
     }
 
     const safeTherapies = (therapies || []).filter((item: any) => item && !item.__invalidProcedure && !item.__invalidProfessional);
@@ -1363,7 +1414,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     if (invalidIncomingId) {
       return reply.code(400).send({
         error: 'Validation failed',
-        fields: { therapies: 'Uma ou mais terapias referenciadas não pertencem ao PIT atual' },
+        fields: { therapies: 'Uma ou mais terapias referenciadas nÃ£o pertencem ao PIT atual' },
       });
     }
 
@@ -1533,7 +1584,7 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
             data: idsToCancel.map((preReservationId: string) => ({
               preReservationId,
               eventType: 'PIT_UPDATED_THERAPY_REMOVED',
-              eventLabel: 'Pré-reserva cancelada por remoção/inativação de terapia no PIT',
+              eventLabel: 'PrÃ©-reserva cancelada por remoÃ§Ã£o/inativaÃ§Ã£o de terapia no PIT',
               actor,
               payload: { source: 'pit-upsert-reconciliation' },
             })),
@@ -1557,40 +1608,14 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
               suggestedDate: true,
               suggestedTime: true,
               professionalName: true,
-              procedureName: true,
             },
           });
 
-          for (const reservation of convertedFutureReservations) {
-            if (!reservation?.suggestedDate || !reservation?.suggestedTime) continue;
-            const appointmentDate = formatDateToIso(new Date(reservation.suggestedDate));
-            const conflictClauses: any[] = [
-              { patientId: reservation.patientId },
-            ];
-            if (reservation.professionalName) {
-              conflictClauses.push({ doctorName: reservation.professionalName });
-            }
-
-            await tx.appointment.updateMany({
-              where: {
-                isActive: true,
-                date: appointmentDate,
-                time: reservation.suggestedTime,
-                type: 'RETORNO TEA',
-                OR: conflictClauses,
-                NOT: [
-                  { status: 'CANCELED' },
-                  { status: 'CANCELADO' },
-                  { status: 'COMPLETED' },
-                  { status: 'CONCLUIDO' },
-                ],
-              },
-              data: {
-                status: 'CANCELED',
-                isActive: false,
-              },
-            });
-          }
+          await cancelAppointmentsForConvertedReservations(
+            tx,
+            convertedFutureReservations,
+            'Cancelamento em lote TEA: terapia removida ou inativada no PIT',
+          );
         }
       }
 
@@ -1608,3 +1633,5 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     return reply.code(201).send(resultPit);
   });
 }
+
+

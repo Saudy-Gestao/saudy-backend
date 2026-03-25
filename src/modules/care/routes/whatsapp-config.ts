@@ -123,7 +123,9 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       tags: ['WhatsApp'],
       response: {
         200: { type: 'object' },
+        400: { type: 'object' },
         403: { type: 'object' },
+        404: { type: 'object' },
       },
     },
   }, async (request, reply) => {
@@ -176,9 +178,9 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         },
       },
       response: {
-        200: { type: 'object' },
-        400: { type: 'object' },
-        403: { type: 'object' },
+        200: { type: 'object', additionalProperties: true },
+        400: { type: 'object', additionalProperties: true },
+        403: { type: 'object', additionalProperties: true },
       },
     },
   }, async (request, reply) => {
@@ -197,6 +199,21 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       });
     }
 
+    const existingTemplate = await prisma.whatsAppMessageTemplate.findUnique({
+      where: {
+        branchId_type: {
+          branchId,
+          type: data.type,
+        },
+      },
+    });
+
+    const nextHsmTemplateName = data.hsmTemplateName !== undefined ? (data.hsmTemplateName || null) : undefined;
+    const shouldResetHsmSyncFields =
+      nextHsmTemplateName !== undefined
+      && existingTemplate
+      && (existingTemplate.hsmTemplateName || null) !== nextHsmTemplateName;
+
     const template = await prisma.whatsAppMessageTemplate.upsert({
       where: {
         branchId_type: {
@@ -210,12 +227,22 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         name: data.name,
         message: data.message,
         hsmTemplateName: data.hsmTemplateName || null,
+        hsmTemplateId: null,
+        hsmTemplateStatus: null,
+        hsmTemplateApproved: false,
         isActive: data.isActive ?? true,
       },
       update: {
         name: data.name,
         message: data.message,
-        hsmTemplateName: data.hsmTemplateName !== undefined ? (data.hsmTemplateName || null) : undefined,
+        hsmTemplateName: nextHsmTemplateName,
+        ...(shouldResetHsmSyncFields
+          ? {
+              hsmTemplateId: null,
+              hsmTemplateStatus: null,
+              hsmTemplateApproved: false,
+            }
+          : {}),
         isActive: data.isActive,
       },
     });
@@ -266,7 +293,9 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       },
       response: {
         200: { type: 'object' },
+        400: { type: 'object' },
         403: { type: 'object' },
+        404: { type: 'object' },
       },
     },
   }, async (request, reply) => {
@@ -275,11 +304,172 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
 
-    await prisma.whatsAppMessageTemplate.deleteMany({
+    const template = await prisma.whatsAppMessageTemplate.findFirst({
       where: { id, branchId },
     });
 
+    if (!template) {
+      return reply.code(404).send({ error: 'Template not found' });
+    }
+
+    // Se existir vínculo HSM, exige remover no Gupshup antes de remover local
+    if (template.hsmTemplateId || template.hsmTemplateName) {
+      const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+      const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
+      const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+
+      if (!gupshupAppId || !apiKey) {
+        return reply.code(400).send({
+          error: 'Não foi possível excluir o template no Gupshup: App ID/API Key não configurados.',
+        });
+      }
+
+      const encodedTemplateId = template.hsmTemplateId ? encodeURIComponent(template.hsmTemplateId) : null;
+      const encodedElementName = template.hsmTemplateName ? encodeURIComponent(template.hsmTemplateName) : null;
+      const deleteAttempts: string[] = [];
+
+      const candidates: string[] = [
+        // Endpoint principal com query params (templateId + elementName)
+        `https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template?${new URLSearchParams({
+          ...(template.hsmTemplateId ? { templateId: template.hsmTemplateId } : {}),
+          ...(template.hsmTemplateName ? { elementName: template.hsmTemplateName } : {}),
+        }).toString()}`,
+        // Variação por path com templateId
+        ...(encodedTemplateId
+          ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedTemplateId}${encodedElementName ? `?elementName=${encodedElementName}` : ''}`]
+          : []),
+        // Variação por path com elementName
+        ...(encodedElementName
+          ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedElementName}`]
+          : []),
+      ];
+
+      let deletedInGupshup = false;
+      for (const url of candidates) {
+        const gupshupRes = await fetch(url, {
+          method: 'DELETE',
+          headers: { apikey: apiKey },
+        });
+
+        const responseBody = await gupshupRes.text();
+        const shortBody = responseBody.length > 600 ? `${responseBody.slice(0, 600)}...` : responseBody;
+        deleteAttempts.push(`[${gupshupRes.status}] ${url} => ${shortBody}`);
+
+        // 404 significa que já não existe no provedor; podemos seguir com cleanup local
+        if (gupshupRes.ok || gupshupRes.status === 404) {
+          deletedInGupshup = true;
+          break;
+        }
+      }
+
+      if (!deletedInGupshup) {
+        return reply.code(400).send({
+          error: 'Falha ao excluir template no Gupshup. O template local não foi removido.',
+          details: deleteAttempts,
+        });
+      }
+    }
+
+    await prisma.whatsAppMessageTemplate.delete({ where: { id: template.id } });
+
     return { success: true };
+  });
+
+  // ===== Enviar template para o Gupshup =====
+
+  app.post('/whatsapp/templates/:id/push-to-gupshup', {
+    schema: {
+      summary: 'Create HSM template in Gupshup via API',
+      tags: ['WhatsApp'],
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      response: {
+        200: { type: 'object', additionalProperties: true },
+        400: { type: 'object' },
+        403: { type: 'object' },
+        404: { type: 'object' },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+
+    const template = await prisma.whatsAppMessageTemplate.findFirst({ where: { id, branchId } });
+    if (!template) return reply.code(404).send({ error: 'Template não encontrado' });
+
+    if (!template.hsmTemplateName) {
+      return reply.code(400).send({
+        error: 'Preencha o campo "Nome do Template (Gupshup/Meta HSM)" antes de enviar para o Gupshup.',
+      });
+    }
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
+    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+
+    if (!gupshupAppId || !apiKey) {
+      return reply.code(400).send({
+        error: 'App ID do Gupshup não configurado. Preencha o campo App ID nas configurações de credenciais.',
+      });
+    }
+
+    // Converter variáveis nomeadas ({{paciente_nome}}) em numeradas ({{1}}, {{2}}, ...)
+    let varIndex = 1;
+    const numberedContent = template.message.replace(/\{\{[^}]+\}\}/g, () => `{{${varIndex++}}}`);
+
+    // Montar exemplo com valores fictícios
+    const exampleMessage = template.message
+      .replace(/\{\{paciente_nome\}\}/gi, 'João Silva')
+      .replace(/\{\{paciente_cpf\}\}/gi, '123.456.789-00')
+      .replace(/\{\{medico_nome\}\}/gi, 'Dr. Carlos')
+      .replace(/\{\{especialidade\}\}/gi, 'Cardiologia')
+      .replace(/\{\{data\}\}/gi, '18/03/2026 (Quarta-feira)')
+      .replace(/\{\{hora\}\}/gi, '14:00')
+      .replace(/\{\{convenio\}\}/gi, 'Plano Saúdy')
+      .replace(/\{\{observacoes\}\}/gi, '-');
+
+    const body = new URLSearchParams({
+      elementName: template.hsmTemplateName,
+      languageCode: 'pt_BR',
+      content: numberedContent,
+      category: 'UTILITY',
+      templateType: 'TEXT',
+      vertical: 'Healthcare',
+      example: exampleMessage,
+      enableSample: 'true',
+    });
+
+    console.log('[push-to-gupshup] sending body:', body.toString());
+
+    const gupshupRes = await fetch(
+      `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          apikey: apiKey,
+        },
+        body: body.toString(),
+      },
+    );
+
+    const rawText = await gupshupRes.text();
+    let parsed: any;
+    try { parsed = JSON.parse(rawText); } catch { parsed = rawText; }
+
+    if (!gupshupRes.ok) {
+      return reply.code(400).send({
+        error: `Erro ao criar template no Gupshup (${gupshupRes.status}): ${rawText}`,
+        detail: parsed,
+      });
+    }
+
+    return { success: true, gupshupResponse: parsed };
   });
 
   // ===== Notification Config =====
@@ -404,10 +594,20 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     }
 
     const gupshupData = await gupshupRes.json() as { status: string; templates: any[] };
-    // Map: elementName (lowercase) -> status
-    const gupshupTemplates: Record<string, string> = {};
+    // Map: elementName (lowercase) -> { status, id }
+    const gupshupTemplates: Record<string, { status: string; id: string | null }> = {};
     for (const t of (gupshupData.templates || [])) {
-      if (t.elementName) gupshupTemplates[t.elementName.toLowerCase()] = t.status;
+      if (!t.elementName) continue;
+      const templateId =
+        t.id
+        ?? t.templateId
+        ?? t.templateID
+        ?? t.elementId
+        ?? null;
+      gupshupTemplates[t.elementName.toLowerCase()] = {
+        status: String(t.status || ''),
+        id: templateId ? String(templateId) : null,
+      };
     }
 
     // Atualizar templates locais
@@ -416,12 +616,23 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     for (const tmpl of localTemplates) {
       if (!tmpl.hsmTemplateName) continue;
-      const gupshupStatus = gupshupTemplates[tmpl.hsmTemplateName.toLowerCase()];
+      const gupshupTemplate = gupshupTemplates[tmpl.hsmTemplateName.toLowerCase()];
+      const gupshupStatus = gupshupTemplate?.status || null;
       const approved = gupshupStatus === 'APPROVED';
-      if (tmpl.hsmTemplateApproved !== approved) {
+      const hsmTemplateId = gupshupTemplate?.id || null;
+      const shouldUpdate =
+        tmpl.hsmTemplateApproved !== approved
+        || (tmpl.hsmTemplateStatus || null) !== gupshupStatus
+        || (tmpl.hsmTemplateId || null) !== hsmTemplateId;
+
+      if (shouldUpdate) {
         await prisma.whatsAppMessageTemplate.update({
           where: { id: tmpl.id },
-          data: { hsmTemplateApproved: approved },
+          data: {
+            hsmTemplateApproved: approved,
+            hsmTemplateStatus: gupshupStatus,
+            hsmTemplateId,
+          },
         });
         updated++;
       }
