@@ -725,6 +725,17 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     try {
       const existing = await prisma.appointment.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Appointment not found' });
+      const notificationRelevantFields: Array<keyof typeof existing> = [
+        'patientName',
+        'doctorName',
+        'specialty',
+        'date',
+        'time',
+      ];
+      const shouldResendAppointmentNotification = notificationRelevantFields.some((field) => (
+        field in (data || {})
+        && (data?.[field] ?? existing[field]) !== existing[field]
+      ));
 
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const updateData = Object.fromEntries(
@@ -787,6 +798,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         await syncMwlFromAppointment(tx, updated, branchId);
         return updated;
       });
+      if (shouldResendAppointmentNotification) {
+        WhatsAppAutoSender.sendAppointmentCreatedMessage(branchId, item.id);
+      }
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update appointment');
