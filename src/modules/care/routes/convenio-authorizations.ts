@@ -371,6 +371,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
   });
 
   app.post('/:sourceType/:id/attachments', {
+    bodyLimit: 10 * 1024 * 1024,
     schema: {
       summary: 'Upload attachment for authorization item',
       tags: ['ConvenioAuthorization'],
@@ -596,3 +597,4 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     return reply.code(400).send({ error: 'Invalid sourceType. Use APPOINTMENT or TEA.' });
   });
 }
+
