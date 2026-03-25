@@ -120,7 +120,7 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
             isActive: true,
           },
           OR: [
-            { status: { in: ['PROPOSED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+            { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
             {
               AND: [
                 { status: 'CANCELED' as any },
