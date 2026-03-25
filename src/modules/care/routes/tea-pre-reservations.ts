@@ -112,6 +112,16 @@ function buildCoveredTimeSlots(startTime: string, durationMinutes?: number | nul
   return Array.from(new Set(slots));
 }
 
+function canPlaceSessionAtSlot(
+  date: string,
+  startTime: string,
+  durationMinutes: number | null | undefined,
+  occupied: Set<string>,
+): boolean {
+  const coveredSlots = buildCoveredTimeSlots(startTime, durationMinutes);
+  return coveredSlots.every((coveredTime) => !occupied.has(`${date}#${coveredTime}`));
+}
+
 function timeRangesOverlap(
   startA: string,
   durationA: number | null | undefined,
@@ -1201,7 +1211,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             { status: 'CONCLUIDO' },
           ],
         },
-        select: { date: true, time: true },
+        select: { date: true, time: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1214,7 +1224,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1227,18 +1237,38 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             lte: new Date(`${rangeEnd}T23:59:59`),
           },
         },
-        select: { suggestedDate: true, suggestedTime: true },
+        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
     ]);
 
     const occupied = new Set<string>();
 
-    // The manual grid should reflect real agenda occupancy only.
-    // Open pre-reservations are still proposals and must not block manual selection.
     [...doctorAppointments].forEach((item: any) => {
       const date = String(item.date || '').trim();
       const time = String(item.time || '').trim();
       if (!date || !time) return;
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
+    });
+
+    [...patientAppointments].forEach((item: any) => {
+      const date = String(item.date || '').trim();
+      const time = String(item.time || '').trim();
+      if (!date || !time) return;
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
+    });
+
+    [...doctorReservations, ...patientReservations].forEach((item: any) => {
+      const time = String(item?.suggestedTime || '').trim();
+      const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
+      if (!date || !time) return;
+
+      // Do not block the therapy's own open slots during regeneration.
+      if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
+
       buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
         occupied.add(`${date}#${coveredTime}`);
       });
@@ -1270,6 +1300,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
          const suggestionSignature = `${suggestionIso}#${time}`;
          // Suggest only truly available slots. This avoids offering times that will be dropped later.
          if (occupied.has(originalSignature) || occupied.has(suggestionSignature)) continue;
+         if (!canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied)) continue;
+         if (!canPlaceSessionAtSlot(suggestionIso, time, slotDurationMinutes, occupied)) continue;
          if (excludedSlots.has(originalSignature) || excludedSlots.has(suggestionSignature)) continue;
          suggestions.push({
            date: suggestionIso,
@@ -1417,7 +1449,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             { status: 'CONCLUIDO' },
           ],
         },
-        select: { date: true, time: true },
+        select: { date: true, time: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1450,6 +1482,15 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const occupied = new Set<string>();
 
     [...doctorAppointments].forEach((item: any) => {
+      const date = String(item.date || '').trim();
+      const time = String(item.time || '').trim();
+      if (!date || !time) return;
+      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+        occupied.add(`${date}#${coveredTime}`);
+      });
+    });
+
+    [...patientAppointments].forEach((item: any) => {
       const date = String(item.date || '').trim();
       const time = String(item.time || '').trim();
       if (!date || !time) return;
@@ -1492,7 +1533,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         slots: daySlots.map((time) => ({
           time,
           occupied: isDayEnabled ? occupied.has(`${date}#${time}`) : false,
-          selectable: isDayEnabled && !occupied.has(`${date}#${time}`),
+          selectable: isDayEnabled && canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied),
         })),
       };
     });
