@@ -652,6 +652,7 @@ model Appointment {
     laudos          Report[]
     mwlEntries      MwlEntry[]
     attachments     AppointmentAttachment[]
+    consultations   Consultation[]
 
     @@index([branchId])
     @@index([rescheduledFromAppointmentId])
@@ -726,16 +727,55 @@ model PreSchedulingFlow {
     patientVerifiedCpf    String?
     patientVerifiedName   String?
     patientVerifiedTrust  Float?
+    patientAccessExpiresAt DateTime?
+    anamnesisSentAt       DateTime?
+    anamnesisSentByUserId String?
     patientSubmittedAt    DateTime?
     completedAt           DateTime?
     createdAt             DateTime            @default(now())
     updatedAt             DateTime            @updatedAt
     documents             PreSchedulingDocument[]
+    anamnesisResponse     PreSchedulingAnamnesisResponse?
 
     @@index([branchId])
     @@index([status])
     @@index([patientCpf])
     @@map("pre_scheduling_flows")
+}
+
+model PreSchedulingAnamnesisResponse {
+    id            String   @id @default(uuid())
+    flowId        String   @unique
+    flow          PreSchedulingFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+    templateId    String?
+    templateName  String?
+    submittedAt   DateTime @default(now())
+    createdAt     DateTime @default(now())
+    updatedAt     DateTime @updatedAt
+
+    answers PreSchedulingAnamnesisAnswer[]
+
+    @@index([flowId])
+    @@map("pre_scheduling_anamnesis_responses")
+}
+
+model PreSchedulingAnamnesisAnswer {
+    id            String   @id @default(uuid())
+    responseId    String
+    response      PreSchedulingAnamnesisResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+    questionId    String?
+    questionLabel String
+    responseType  String
+    answerText    String?  @db.Text
+    answerValues  String[] @default([])
+    answerBoolean Boolean?
+    answerNumber  Float?
+    orderIndex    Int      @default(0)
+    createdAt     DateTime @default(now())
+    updatedAt     DateTime @updatedAt
+
+    @@index([responseId])
+    @@map("pre_scheduling_anamnesis_answers")
 }
 
 model PreSchedulingDocument {
@@ -782,6 +822,7 @@ model Consultation {
     branchId         String?
     doctorId         String?
     appointmentId    String?
+    appointment      Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
     doctorName       String?
     patientName      String?
     convenio         String?
@@ -807,9 +848,12 @@ model Consultation {
     antecedentes     String?
     pregnant         String?
     triageNotes      String?
+    triageCompletedAt DateTime?
     createdAt        DateTime @default(now())
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
+
+    nursingResponse ConsultationNursingResponse?
 
     @@index([doctorId])
     @@index([branchId])
@@ -1008,6 +1052,7 @@ model Procedure {
     branchId           String?
     name               String
     description        String?
+    appointmentType    String            @default("CONSULTA")
     price              Decimal?          @db.Decimal(10, 2)
     durationMinutes    Int?
     acceptsInsurance   Boolean           @default(false)
@@ -1018,6 +1063,8 @@ model Procedure {
     updatedAt          DateTime          @updatedAt
     doctors            ProcedureDoctor[]
     evolutionTemplates TeaEvolutionTemplate[]
+    anamnesisTemplates ProcedureAnamnesisTemplate[]
+    nursingTemplates   ProcedureNursingTemplate[]
     materials          ProcedureMaterial[]
     equipmentLinks     MedicalEquipmentProcedure[]
 
@@ -1118,6 +1165,153 @@ model TeaEvolutionTemplate {
     @@index([branchId])
     @@index([procedureId])
     @@map("tea_evolution_templates")
+}
+
+model ProcedureAnamnesisTemplate {
+    id          String   @id @default(uuid())
+    branchId    String
+    procedureId String
+    procedure   Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+    name        String
+    description String?  @db.Text
+    isActive    Boolean  @default(true)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    questions ProcedureAnamnesisQuestion[]
+
+    @@unique([branchId, procedureId])
+    @@index([branchId])
+    @@index([procedureId])
+    @@map("procedure_anamnesis_templates")
+}
+
+model ProcedureAnamnesisQuestion {
+    id             String   @id @default(uuid())
+    templateId     String
+    template       ProcedureAnamnesisTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+    label          String
+    helpText       String?  @db.Text
+    responseType   String
+    placeholder    String?
+    isRequired     Boolean  @default(false)
+    orderIndex     Int      @default(0)
+    createdAt      DateTime @default(now())
+    updatedAt      DateTime @updatedAt
+
+    options ProcedureAnamnesisQuestionOption[]
+
+    @@index([templateId])
+    @@map("procedure_anamnesis_questions")
+}
+
+model ProcedureAnamnesisQuestionOption {
+    id          String   @id @default(uuid())
+    questionId  String
+    question    ProcedureAnamnesisQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+    label       String
+    value       String
+    orderIndex  Int      @default(0)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    @@index([questionId])
+    @@map("procedure_anamnesis_question_options")
+}
+
+model ProcedureNursingTemplate {
+    id                     String   @id @default(uuid())
+    branchId               String
+    procedureId            String
+    procedure              Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+    name                   String
+    description            String?  @db.Text
+    collectHeight          Boolean  @default(false)
+    collectWeight          Boolean  @default(false)
+    collectBloodPressure   Boolean  @default(false)
+    collectTemperature     Boolean  @default(false)
+    collectHeartRate       Boolean  @default(false)
+    collectOxygenSaturation Boolean @default(false)
+    collectGlucose         Boolean  @default(false)
+    collectPregnancyCheck  Boolean  @default(false)
+    isActive               Boolean  @default(true)
+    createdAt              DateTime @default(now())
+    updatedAt              DateTime @updatedAt
+
+    questions ProcedureNursingQuestion[]
+
+    @@unique([branchId, procedureId])
+    @@index([branchId])
+    @@index([procedureId])
+    @@map("procedure_nursing_templates")
+}
+
+model ProcedureNursingQuestion {
+    id             String   @id @default(uuid())
+    templateId     String
+    template       ProcedureNursingTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+    label          String
+    helpText       String?  @db.Text
+    responseType   String
+    placeholder    String?
+    isRequired     Boolean  @default(false)
+    orderIndex     Int      @default(0)
+    createdAt      DateTime @default(now())
+    updatedAt      DateTime @updatedAt
+
+    options ProcedureNursingQuestionOption[]
+
+    @@index([templateId])
+    @@map("procedure_nursing_questions")
+}
+
+model ProcedureNursingQuestionOption {
+    id          String   @id @default(uuid())
+    questionId  String
+    question    ProcedureNursingQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+    label       String
+    value       String
+    orderIndex  Int      @default(0)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    @@index([questionId])
+    @@map("procedure_nursing_question_options")
+}
+
+model ConsultationNursingResponse {
+    id            String   @id @default(uuid())
+    consultationId String  @unique
+    consultation   Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+    templateId     String?
+    templateName   String?
+    submittedAt    DateTime @default(now())
+    createdAt      DateTime @default(now())
+    updatedAt      DateTime @updatedAt
+
+    answers ConsultationNursingAnswer[]
+
+    @@index([consultationId])
+    @@map("consultation_nursing_responses")
+}
+
+model ConsultationNursingAnswer {
+    id            String   @id @default(uuid())
+    responseId     String
+    response       ConsultationNursingResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+    questionId     String?
+    questionLabel  String
+    responseType   String
+    answerText     String? @db.Text
+    answerValues   String[] @default([])
+    answerBoolean  Boolean?
+    answerNumber   Float?
+    orderIndex     Int      @default(0)
+    createdAt      DateTime @default(now())
+    updatedAt      DateTime @updatedAt
+
+    @@index([responseId])
+    @@map("consultation_nursing_answers")
 }
 
 model ProcedureDoctor {

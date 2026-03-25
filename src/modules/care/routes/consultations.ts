@@ -15,6 +15,12 @@ const canonicalClinicalQueueStatus = (value?: string | null) => {
 
 const CLINICAL_QUEUE_TRANSITION_RULES: Record<string, string[]> = {
   AGUARDANDO_ATENDIMENTO: ['CHAMADO_PARA_ATENDIMENTO', 'CANCELADO', 'CANCELADA'],
+  AGUARDANDO_TRIAGEM: ['EM_TRIAGEM', 'CANCELADO', 'CANCELADA'],
+  EM_TRIAGEM: ['AGUARDANDO_EXAME', 'CANCELADO', 'CANCELADA'],
+  AGUARDANDO_EXAME: ['CHAMADO_PARA_EXAME', 'CANCELADO', 'CANCELADA'],
+  CHAMADO_PARA_EXAME: ['EM_EXAME', 'CANCELADO', 'CANCELADA'],
+  EM_EXAME: ['EXAME_CONCLUIDO', 'CANCELADO', 'CANCELADA'],
+  EXAME_CONCLUIDO: [],
   CHAMADO_PARA_ATENDIMENTO: ['EM_ATENDIMENTO', 'CANCELADO', 'CANCELADA'],
   EM_ATENDIMENTO: ['ATENDIMENTO_CONCLUIDO', 'CANCELADO', 'CANCELADA'],
   ATENDIMENTO_CONCLUIDO: [],
@@ -50,6 +56,17 @@ const appendQueueStatusAudit = (
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED', 'AGENDADO', 'SCHEDULED']);
 const DIGITS_ONLY_REGEX = /\D/g;
+const QUESTION_TYPES = new Set([
+  'TEXT',
+  'TEXTAREA',
+  'NUMBER',
+  'DATE',
+  'TIME',
+  'DATETIME',
+  'BOOLEAN',
+  'SINGLE_CHOICE',
+  'MULTIPLE_CHOICE',
+]);
 
 const getTodayDateString = () => {
   const now = new Date();
@@ -72,6 +89,112 @@ const parseAgendaSummary = (value?: string | null) => {
 };
 
 const normalizePatientName = (value?: string | null) => String(value || '').trim().toLowerCase();
+const normalizeAppointmentType = (value?: string | null) => String(value || '').trim().toUpperCase();
+
+const isExamAppointment = (value?: string | null) => {
+  const normalized = normalizeAppointmentType(value);
+  return normalized === 'EXAME' || normalized === 'EXAM';
+};
+
+const normalizeNursingAnswers = (answers: unknown) => {
+  if (!Array.isArray(answers)) return [];
+
+  return answers
+    .map((answer: any, index: number) => {
+      const questionLabel = String(answer?.questionLabel || '').trim();
+      const responseType = String(answer?.responseType || 'TEXT').trim().toUpperCase();
+      if (!questionLabel || !QUESTION_TYPES.has(responseType)) return null;
+
+      const answerValues = Array.isArray(answer?.answerValues)
+        ? answer.answerValues.map((value: any) => String(value).trim()).filter(Boolean)
+        : [];
+
+      return {
+        questionId: answer?.questionId ? String(answer.questionId) : null,
+        questionLabel,
+        responseType,
+        answerText: answer?.answerText !== undefined && answer?.answerText !== null ? String(answer.answerText) : null,
+        answerValues,
+        answerBoolean: typeof answer?.answerBoolean === 'boolean' ? answer.answerBoolean : null,
+        answerNumber: Number.isFinite(Number(answer?.answerNumber)) ? Number(answer.answerNumber) : null,
+        orderIndex: Number.isFinite(Number(answer?.orderIndex)) ? Number(answer.orderIndex) : index,
+      };
+    })
+    .filter(Boolean);
+};
+
+const sortTemplate = (item: any) => ({
+  ...item,
+  questions: (item?.questions || [])
+    .slice()
+    .sort((a: any, b: any) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
+    .map((question: any) => ({
+      ...question,
+      options: (question?.options || [])
+        .slice()
+        .sort((a: any, b: any) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0)),
+    })),
+});
+
+const resolveNursingTemplateForAppointment = async (branchId: string, appointment: any) => {
+  if (!appointment || !isExamAppointment(appointment?.type)) return null;
+
+  const specialty = String(appointment?.specialty || '').trim();
+  if (!specialty) return null;
+
+  const normalizedSpecialty = specialty
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  const procedures = await prisma.procedure.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      OR: [
+        { name: { equals: specialty, mode: 'insensitive' } },
+        { name: { contains: specialty, mode: 'insensitive' } },
+      ],
+    },
+    include: {
+      nursingTemplates: {
+        where: { isActive: true },
+        include: {
+          questions: { include: { options: true } },
+        },
+      },
+    },
+  });
+
+  const matchedProcedure = procedures.find((procedure: any) => {
+    const normalizedProcedureName = String(procedure?.name || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+    return normalizedProcedureName === normalizedSpecialty
+      || normalizedProcedureName.includes(normalizedSpecialty)
+      || normalizedSpecialty.includes(normalizedProcedureName);
+  }) || procedures[0];
+
+  const template = matchedProcedure?.nursingTemplates?.[0];
+  return template ? sortTemplate(template) : null;
+};
+
+const toConsultationView = (item: any) => ({
+  ...item,
+  appointmentType: item?.appointment?.type || null,
+  triageRequired: Boolean(item?.nursingTemplate),
+  nursingTemplate: item?.nursingTemplate || null,
+  nursingResponse: item?.nursingResponse
+    ? {
+        ...item.nursingResponse,
+        answers: (item.nursingResponse.answers || [])
+          .slice()
+          .sort((a: any, b: any) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0)),
+      }
+    : null,
+});
 
 const findTodayAppointmentCandidate = async (params: {
   branchId: string;
@@ -200,11 +323,49 @@ export default async function consultationRoutes(app: FastifyInstance) {
     }
 
     const [items, total] = await Promise.all([
-      prisma.consultation.findMany({ where, take: limit, skip: offset, orderBy: { createdAt: 'desc' } }),
+      prisma.consultation.findMany({
+        where,
+        take: limit,
+        skip: offset,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          appointment: {
+            select: { id: true, specialty: true, type: true, date: true, time: true },
+          },
+          nursingResponse: {
+            include: { answers: true },
+          },
+        },
+      }),
       prisma.consultation.count({ where }),
     ]);
 
-    return { items, total };
+    const enriched = await Promise.all(items.map(async (item: any) => {
+      const nursingTemplate = item.appointment
+        ? await resolveNursingTemplateForAppointment(branchId, item.appointment)
+        : null;
+      return toConsultationView({
+        ...item,
+        nursingTemplate: nursingTemplate
+          ? {
+              id: nursingTemplate.id,
+              name: nursingTemplate.name,
+              description: nursingTemplate.description,
+              collectHeight: nursingTemplate.collectHeight,
+              collectWeight: nursingTemplate.collectWeight,
+              collectBloodPressure: nursingTemplate.collectBloodPressure,
+              collectTemperature: nursingTemplate.collectTemperature,
+              collectHeartRate: nursingTemplate.collectHeartRate,
+              collectOxygenSaturation: nursingTemplate.collectOxygenSaturation,
+              collectGlucose: nursingTemplate.collectGlucose,
+              collectPregnancyCheck: nursingTemplate.collectPregnancyCheck,
+              questions: nursingTemplate.questions || [],
+            }
+          : null,
+      });
+    }));
+
+    return { items: enriched, total };
   });
 
   app.get('/:id', {
@@ -232,9 +393,38 @@ export default async function consultationRoutes(app: FastifyInstance) {
             }
           : {}),
       },
+      include: {
+        appointment: {
+          select: { id: true, specialty: true, type: true, date: true, time: true },
+        },
+        nursingResponse: {
+          include: { answers: true },
+        },
+      },
     });
     if (!item) return reply.code(404).send({ error: 'Consultation not found' });
-    return item;
+    const nursingTemplate = item.appointment
+      ? await resolveNursingTemplateForAppointment(branchId, item.appointment)
+      : null;
+    return toConsultationView({
+      ...item,
+      nursingTemplate: nursingTemplate
+        ? {
+            id: nursingTemplate.id,
+            name: nursingTemplate.name,
+            description: nursingTemplate.description,
+            collectHeight: nursingTemplate.collectHeight,
+            collectWeight: nursingTemplate.collectWeight,
+            collectBloodPressure: nursingTemplate.collectBloodPressure,
+            collectTemperature: nursingTemplate.collectTemperature,
+            collectHeartRate: nursingTemplate.collectHeartRate,
+            collectOxygenSaturation: nursingTemplate.collectOxygenSaturation,
+            collectGlucose: nursingTemplate.collectGlucose,
+            collectPregnancyCheck: nursingTemplate.collectPregnancyCheck,
+            questions: nursingTemplate.questions || [],
+          }
+        : null,
+    });
   });
 
   app.post('/', {
@@ -286,6 +476,20 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
     const data = request.body as any;
     try {
+      const linkedAppointment = data?.appointmentId
+        ? await prisma.appointment.findFirst({
+            where: { id: String(data.appointmentId), branchId, isActive: true },
+            select: { id: true, specialty: true, type: true, date: true, time: true },
+          })
+        : null;
+      const nursingTemplate = linkedAppointment
+        ? await resolveNursingTemplateForAppointment(branchId, linkedAppointment)
+        : null;
+      const defaultQueue = isExamAppointment(linkedAppointment?.type)
+        ? (nursingTemplate ? 'Aguardando triagem' : 'Aguardando exame')
+        : 'Aguardando atendimento';
+      const resolvedQueue = nursingTemplate ? defaultQueue : (data.queue || defaultQueue);
+
       const isClinicalQueueCreate = canonicalClinicalQueueStatus(data?.queueType) === 'FILA_CLINICA';
       if (isClinicalQueueCreate) {
         if (data?.appointmentId) {
@@ -336,7 +540,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
         queueType: data.queueType || null,
         agenda: data.agenda || null,
         totem: data.totem || null,
-        queue: data.queue || null,
+        queue: resolvedQueue,
         bloodPressure: data.bloodPressure || null,
         heartRate: data.heartRate || null,
         temperature: data.temperature || null,
@@ -360,6 +564,146 @@ export default async function consultationRoutes(app: FastifyInstance) {
       request.log.error({ err }, 'Failed to create consultation');
       return reply.code(400).send({ error: 'Failed to create consultation', details: err.message });
     }
+  });
+
+  app.post('/:id/nursing-triage', {
+    schema: {
+      summary: 'Submit nursing triage for consultation',
+      tags: ['Consultations'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: { type: 'object' },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const data = request.body as any;
+
+    const consultation = await prisma.consultation.findFirst({
+      where: { id, branchId, isActive: true },
+      include: {
+        appointment: {
+          select: { id: true, specialty: true, type: true, date: true, time: true },
+        },
+        nursingResponse: true,
+      },
+    });
+    if (!consultation) return reply.code(404).send({ error: 'Consultation not found' });
+    if (!consultation.appointment || !isExamAppointment(consultation.appointment.type)) {
+      return reply.code(400).send({ error: 'A triagem de enfermagem só está disponível para agendamentos de exame' });
+    }
+
+    const nursingTemplate = await resolveNursingTemplateForAppointment(branchId, consultation.appointment);
+    if (!nursingTemplate) {
+      return reply.code(404).send({ error: 'Não há triagem cadastrada para este procedimento' });
+    }
+
+    const answers = normalizeNursingAnswers(data?.answers);
+    const answerLabels = new Set(answers.map((answer: any) => answer.questionLabel));
+
+    const missingQuestions = (nursingTemplate.questions || []).filter((question: any) => {
+      if (!question?.isRequired) return false;
+      return !answerLabels.has(String(question.label || ''));
+    });
+
+    const missingStandardFields = [
+      nursingTemplate.collectBloodPressure && !String(data?.bloodPressure || consultation.bloodPressure || '').trim() ? 'pressão arterial' : null,
+      nursingTemplate.collectHeartRate && !String(data?.heartRate || consultation.heartRate || '').trim() ? 'frequência cardíaca' : null,
+      nursingTemplate.collectTemperature && !String(data?.temperature || consultation.temperature || '').trim() ? 'temperatura' : null,
+      nursingTemplate.collectOxygenSaturation && !String(data?.oxygenSaturation || consultation.oxygenSaturation || '').trim() ? 'saturação' : null,
+      nursingTemplate.collectWeight && !String(data?.weight || consultation.weight || '').trim() ? 'peso' : null,
+      nursingTemplate.collectHeight && !String(data?.height || consultation.height || '').trim() ? 'altura' : null,
+      nursingTemplate.collectGlucose && !String(data?.glucose || consultation.glucose || '').trim() ? 'glicemia' : null,
+      nursingTemplate.collectPregnancyCheck && !String(data?.pregnant || consultation.pregnant || '').trim() ? 'checagem de gestação' : null,
+    ].filter(Boolean);
+
+    if (missingQuestions.length > 0 || missingStandardFields.length > 0) {
+      return reply.code(400).send({
+        error: 'Preencha todos os campos obrigatórios da triagem antes de concluir',
+        missingQuestions: missingQuestions.map((question: any) => question.label),
+        missingStandardFields,
+      });
+    }
+
+    const item = await prisma.$transaction(async (tx: any) => {
+      if (consultation.nursingResponse?.id) {
+        await tx.consultationNursingAnswer.deleteMany({
+          where: { responseId: consultation.nursingResponse.id },
+        });
+        await tx.consultationNursingResponse.delete({
+          where: { id: consultation.nursingResponse.id },
+        });
+      }
+
+      const response = await tx.consultationNursingResponse.create({
+        data: {
+          consultationId: consultation.id,
+          templateId: nursingTemplate.id,
+          templateName: nursingTemplate.name,
+        },
+      });
+
+      if (answers.length > 0) {
+        await tx.consultationNursingAnswer.createMany({
+          data: answers.map((answer: any) => ({
+            responseId: response.id,
+            questionId: answer.questionId,
+            questionLabel: answer.questionLabel,
+            responseType: answer.responseType,
+            answerText: answer.answerText,
+            answerValues: answer.answerValues,
+            answerBoolean: answer.answerBoolean,
+            answerNumber: answer.answerNumber,
+            orderIndex: answer.orderIndex,
+          })),
+        });
+      }
+
+      return tx.consultation.update({
+        where: { id: consultation.id },
+        data: {
+          bloodPressure: data?.bloodPressure !== undefined ? (data.bloodPressure || null) : consultation.bloodPressure,
+          heartRate: data?.heartRate !== undefined ? (data.heartRate || null) : consultation.heartRate,
+          temperature: data?.temperature !== undefined ? (data.temperature || null) : consultation.temperature,
+          oxygenSaturation: data?.oxygenSaturation !== undefined ? (data.oxygenSaturation || null) : consultation.oxygenSaturation,
+          weight: data?.weight !== undefined ? (data.weight || null) : consultation.weight,
+          height: data?.height !== undefined ? (data.height || null) : consultation.height,
+          glucose: data?.glucose !== undefined ? (data.glucose || null) : consultation.glucose,
+          pregnant: data?.pregnant !== undefined ? (data.pregnant || null) : consultation.pregnant,
+          triageNotes: data?.triageNotes !== undefined ? (data.triageNotes || null) : consultation.triageNotes,
+          triageCompletedAt: new Date(),
+          queue: 'Aguardando exame',
+        },
+        include: {
+          appointment: {
+            select: { id: true, specialty: true, type: true, date: true, time: true },
+          },
+          nursingResponse: {
+            include: { answers: true },
+          },
+        },
+      });
+    });
+
+    return toConsultationView({
+      ...item,
+      nursingTemplate: {
+        id: nursingTemplate.id,
+        name: nursingTemplate.name,
+        description: nursingTemplate.description,
+        collectHeight: nursingTemplate.collectHeight,
+        collectWeight: nursingTemplate.collectWeight,
+        collectBloodPressure: nursingTemplate.collectBloodPressure,
+        collectTemperature: nursingTemplate.collectTemperature,
+        collectHeartRate: nursingTemplate.collectHeartRate,
+        collectOxygenSaturation: nursingTemplate.collectOxygenSaturation,
+        collectGlucose: nursingTemplate.collectGlucose,
+        collectPregnancyCheck: nursingTemplate.collectPregnancyCheck,
+        questions: nursingTemplate.questions || [],
+      },
+    });
   });
 
   app.put('/:id', {
@@ -419,7 +763,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
       const item = await prisma.consultation.update({ where: { id }, data: nextData });
 
       const movedToDone = hasQueueStatusChange
-        && canonicalClinicalQueueStatus(data.queue) === 'ATENDIMENTO_CONCLUIDO';
+        && ['ATENDIMENTO_CONCLUIDO', 'EXAME_CONCLUIDO'].includes(canonicalClinicalQueueStatus(data.queue));
 
       if (movedToDone) {
         try {

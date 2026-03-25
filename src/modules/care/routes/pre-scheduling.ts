@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
+import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { getAnexosStorage } from '../../../lib/storage';
 
@@ -22,6 +23,111 @@ const decodeBase64 = (raw: string): Buffer => {
 };
 
 const makePublicToken = () => randomBytes(24).toString('hex');
+const PUBLIC_FLOW_WINDOW_MINUTES = 30;
+
+const normalizeComparableText = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase();
+
+const shouldUseAnswerValues = (responseType?: string | null) => {
+  const normalized = String(responseType || '').trim().toUpperCase();
+  return normalized === 'SINGLE_CHOICE' || normalized === 'MULTIPLE_CHOICE';
+};
+
+const isPatientInteractionCompleted = (flow: any) => {
+  const status = normalizeStatus(flow?.status);
+  return status === 'DOCUMENTS_RECEIVED' || status === 'COMPLETED' || Boolean(flow?.patientSubmittedAt);
+};
+
+const isPublicFlowExpired = (flow: any) => {
+  if (!flow?.patientAccessExpiresAt) return false;
+  if (isPatientInteractionCompleted(flow)) return false;
+  return new Date(flow.patientAccessExpiresAt).getTime() <= Date.now();
+};
+
+const ensureActivePublicFlow = (flow: any, reply: any) => {
+  if (!flow) {
+    reply.code(404).send({ error: 'Link inválido ou expirado' });
+    return false;
+  }
+
+  if (isPublicFlowExpired(flow)) {
+    reply.code(410).send({
+      error: 'Este link expirou. Solicite um novo envio à clínica.',
+      code: 'PUBLIC_LINK_EXPIRED',
+      expiredAt: flow.patientAccessExpiresAt,
+    });
+    return false;
+  }
+
+  return true;
+};
+
+const resolveAnamnesisTemplateForAppointment = async (branchId: string, appointment: any) => {
+  const appointmentType = String(appointment?.type || '').trim().toUpperCase();
+  if (appointmentType === 'EXAME' || appointmentType === 'EXAM') return null;
+
+  const specialtyName = String(appointment?.specialty || '').trim();
+  if (!specialtyName) return null;
+
+  const procedures = await prisma.procedure.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      anamnesisTemplates: {
+        some: { isActive: true },
+      },
+    },
+    include: {
+      anamnesisTemplates: {
+        where: { isActive: true },
+        include: {
+          questions: {
+            include: { options: true },
+          },
+        },
+      },
+    },
+  });
+
+  const normalizedSpecialty = normalizeComparableText(specialtyName);
+  const matchedProcedure = procedures.find((procedure: any) => normalizeComparableText(procedure.name) === normalizedSpecialty);
+  if (!matchedProcedure) return null;
+
+  const template = matchedProcedure.anamnesisTemplates?.[0];
+  if (!template) return null;
+
+  return {
+    id: template.id,
+    procedureId: matchedProcedure.id,
+    procedureName: matchedProcedure.name,
+    name: template.name,
+    description: template.description || null,
+    questions: (template.questions || [])
+      .slice()
+      .sort((a: any, b: any) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
+      .map((question: any) => ({
+        id: question.id,
+        label: question.label,
+        helpText: question.helpText || null,
+        responseType: question.responseType,
+        placeholder: question.placeholder || null,
+        isRequired: Boolean(question.isRequired),
+        orderIndex: Number(question.orderIndex || 0),
+        options: (question.options || [])
+          .slice()
+          .sort((a: any, b: any) => Number(a.orderIndex || 0) - Number(b.orderIndex || 0))
+          .map((option: any) => ({
+            id: option.id,
+            label: option.label,
+            value: option.value,
+            orderIndex: Number(option.orderIndex || 0),
+          })),
+      })),
+  };
+};
 
 export default async function preSchedulingRoutes(app: FastifyInstance) {
   const getLoggedUser = async (request: any) => {
@@ -149,7 +255,14 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     const flows = appointmentIds.length
       ? await prisma.preSchedulingFlow.findMany({
           where: { appointmentId: { in: appointmentIds } },
-          include: { documents: true },
+          include: {
+            documents: true,
+            anamnesisResponse: {
+              include: {
+                answers: true,
+              },
+            },
+          },
         })
       : [];
 
@@ -158,9 +271,10 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       flowByAppointmentId.set(String(flow.appointmentId), flow);
     });
 
-    const items = appointments
-      .map((appointment: any) => {
+    const mappedItems = await Promise.all(appointments
+      .map(async (appointment: any) => {
         const flow = flowByAppointmentId.get(String(appointment.id));
+        const anamnesisTemplate = await resolveAnamnesisTemplateForAppointment(branchId, appointment);
         const itemStatus = String(flow?.status || 'PENDING').toUpperCase();
         const hasPreAuthorization = Boolean(flow?.preAuthorizedAt);
         const docsApproved = itemStatus === 'COMPLETED';
@@ -185,11 +299,15 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
           preAuthorizedAt: flow?.preAuthorizedAt || null,
           guideNumber: flow?.guideNumber || null,
           docsCount: Array.isArray(flow?.documents) ? flow.documents.length : 0,
+          hasAnamnesis: Boolean(anamnesisTemplate),
+          anamnesisAnswered: Boolean(flow?.anamnesisResponse?.submittedAt),
+          anamnesisAnswersCount: Array.isArray(flow?.anamnesisResponse?.answers) ? flow.anamnesisResponse.answers.length : 0,
           tokenAvailable: Boolean(flow?.publicToken),
           isResolved,
         };
-      })
-      .filter((item: any) => {
+      }));
+
+    const items = mappedItems.filter((item: any) => {
         if (resolvedOnlyFlag && !item.isResolved) return false;
         if (!includeResolvedFlag && !resolvedOnlyFlag && item.isResolved) return false;
         if (statusFilter && item.preSchedulingStatus !== statusFilter) return false;
@@ -301,16 +419,19 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     }
 
     const { flow, appointment } = ensured as any;
+    const anamnesisTemplate = await resolveAnamnesisTemplateForAppointment(branchId, appointment);
     if (String(flow?.status || '').toUpperCase() === 'COMPLETED') {
       return reply.code(400).send({ error: 'Fluxo já concluído. Não é possível reenviar link.' });
     }
 
-    const token = flow.publicToken || makePublicToken();
+    const token = makePublicToken();
     const publicBase = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
     const publicUrl = `${publicBase}/pre-agendamento/documentos/${token}`;
     const mockMessage = [
       `Olá ${flow.patientName || appointment.patientName || 'paciente'}!`,
-      'Para adiantar seu atendimento, envie seus documentos neste link:',
+      anamnesisTemplate
+        ? 'Para adiantar seu atendimento, valide sua identidade e envie seus documentos, além de responder a anamnese neste link:'
+        : 'Para adiantar seu atendimento, envie seus documentos neste link:',
       publicUrl,
       notes ? `Observação: ${notes}` : null,
     ].filter(Boolean).join(' ');
@@ -322,6 +443,14 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         publicToken: token,
         linkSentAt: new Date(),
         linkSentByUserId: userId || null,
+        patientVerifiedAt: null,
+        patientVerifiedCpf: null,
+        patientVerifiedName: null,
+        patientVerifiedTrust: null,
+        patientAccessExpiresAt: null,
+        patientSubmittedAt: null,
+        anamnesisSentAt: anamnesisTemplate ? new Date() : flow.anamnesisSentAt || null,
+        anamnesisSentByUserId: anamnesisTemplate ? (userId || null) : flow.anamnesisSentByUserId || null,
         linkMockMessage: mockMessage,
       },
     });
@@ -335,6 +464,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         message: mockMessage,
       },
       publicUrl,
+      hasAnamnesis: Boolean(anamnesisTemplate),
     });
   });
 
@@ -363,10 +493,22 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         documents: {
           orderBy: { uploadedAt: 'desc' },
         },
+        appointment: true,
+        anamnesisResponse: {
+          include: {
+            answers: {
+              orderBy: { orderIndex: 'asc' },
+            },
+          },
+        },
       },
     });
 
-    if (!flow) return reply.send({ items: [] });
+    if (!flow) return reply.send({ items: [], anamnesis: null });
+
+    const anamnesisTemplate = flow.appointment
+      ? await resolveAnamnesisTemplateForAppointment(branchId, flow.appointment)
+      : null;
 
     return reply.send({
       items: flow.documents.map((doc: any) => ({
@@ -377,6 +519,22 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         sizeBytes: doc.sizeBytes,
         uploadedAt: doc.uploadedAt,
       })),
+      anamnesis: anamnesisTemplate ? {
+        templateId: anamnesisTemplate.id,
+        templateName: anamnesisTemplate.name,
+        answered: Boolean(flow.anamnesisResponse?.submittedAt),
+        answeredAt: flow.anamnesisResponse?.submittedAt || null,
+        answers: (flow.anamnesisResponse?.answers || []).map((answer: any) => ({
+          id: answer.id,
+          questionLabel: answer.questionLabel,
+          responseType: answer.responseType,
+          answerText: answer.answerText || null,
+          answerValues: answer.answerValues || [],
+          answerBoolean: answer.answerBoolean,
+          answerNumber: answer.answerNumber,
+          orderIndex: answer.orderIndex,
+        })),
+      } : null,
     });
   });
 
@@ -456,12 +614,20 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       where: { appointmentId, branchId },
       include: {
         documents: { select: { id: true } },
+        appointment: true,
+        anamnesisResponse: { select: { id: true } },
       },
     });
 
     if (!flow) return reply.code(404).send({ error: 'Fluxo de pré-agendamento não encontrado' });
-    if (!Array.isArray(flow.documents) || flow.documents.length === 0) {
-      return reply.code(400).send({ error: 'Não há documentos para revisar' });
+    const anamnesisTemplate = flow.appointment
+      ? await resolveAnamnesisTemplateForAppointment(branchId, flow.appointment)
+      : null;
+    const hasDocuments = Array.isArray(flow.documents) && flow.documents.length > 0;
+    const hasAnamnesisResponse = Boolean(flow.anamnesisResponse?.id);
+
+    if (!hasDocuments && !(anamnesisTemplate && hasAnamnesisResponse)) {
+      return reply.code(400).send({ error: 'Não há documentos ou anamnese respondida para revisar' });
     }
 
     const nextStatus = action === 'APPROVE'
@@ -503,10 +669,21 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         documents: {
           orderBy: { uploadedAt: 'desc' },
         },
+        anamnesisResponse: {
+          include: {
+            answers: {
+              orderBy: { orderIndex: 'asc' },
+            },
+          },
+        },
       },
     });
 
-    if (!flow) return reply.code(404).send({ error: 'Link inválido ou expirado' });
+    if (!ensureActivePublicFlow(flow, reply)) return;
+
+    const anamnesisTemplate = flow.appointment
+      ? await resolveAnamnesisTemplateForAppointment(String(flow.branchId || ''), flow.appointment)
+      : null;
 
     return reply.send({
       id: flow.id,
@@ -520,6 +697,8 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       },
       status: flow.status,
       verified: Boolean(flow.patientVerifiedAt),
+      verificationExpiresAt: flow.patientAccessExpiresAt || null,
+      interactionCompleted: isPatientInteractionCompleted(flow),
       documentsCount: flow.documents.length,
       documents: flow.documents.map((doc: any) => ({
         id: doc.id,
@@ -527,6 +706,24 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         fileName: doc.fileName,
         uploadedAt: doc.uploadedAt,
       })),
+      anamnesis: anamnesisTemplate ? {
+        templateId: anamnesisTemplate.id,
+        name: anamnesisTemplate.name,
+        description: anamnesisTemplate.description,
+        answered: Boolean(flow.anamnesisResponse?.submittedAt),
+        answeredAt: flow.anamnesisResponse?.submittedAt || null,
+        questions: anamnesisTemplate.questions,
+        answers: (flow.anamnesisResponse?.answers || []).map((answer: any) => ({
+          questionId: answer.questionId || null,
+          questionLabel: answer.questionLabel,
+          responseType: answer.responseType,
+          answerText: answer.answerText || null,
+          answerValues: answer.answerValues || [],
+          answerBoolean: answer.answerBoolean,
+          answerNumber: answer.answerNumber,
+          orderIndex: answer.orderIndex,
+        })),
+      } : null,
     });
   });
 
@@ -566,7 +763,11 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       include: { appointment: true },
     });
 
-    if (!flow) return reply.code(404).send({ error: 'Link inválido ou expirado' });
+    if (!ensureActivePublicFlow(flow, reply)) return;
+
+    if (flow.patientVerifiedAt) {
+      return reply.code(400).send({ error: 'A identidade já foi validada para este link' });
+    }
 
     const normalizedRecognizedCpf = normalizeCpf(recognizedCpf);
     if (!normalizedRecognizedCpf) {
@@ -584,6 +785,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         patientVerifiedCpf: normalizedRecognizedCpf,
         patientVerifiedName: recognizedName || null,
         patientVerifiedTrust: Number.isFinite(Number(recognizedTrust)) ? Number(recognizedTrust) : null,
+        patientAccessExpiresAt: new Date(Date.now() + (PUBLIC_FLOW_WINDOW_MINUTES * 60 * 1000)),
         status: flow.status === 'PENDING' ? 'WAITING_PATIENT_DOCUMENTS' : flow.status,
       },
     });
@@ -592,6 +794,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       verified: true,
       trust: updated.patientVerifiedTrust,
       patientName: updated.patientVerifiedName,
+      verificationExpiresAt: updated.patientAccessExpiresAt,
     });
   });
 
@@ -630,7 +833,11 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       where: { publicToken: token },
     });
 
-    if (!flow) return reply.code(404).send({ error: 'Link inválido ou expirado' });
+    if (!ensureActivePublicFlow(flow, reply)) return;
+
+    if (isPatientInteractionCompleted(flow)) {
+      return reply.code(400).send({ error: 'Este envio já foi finalizado e não pode receber novos anexos' });
+    }
 
     const normalizedCpf = normalizeCpf(payload.cpf || flow.patientVerifiedCpf || '');
     if (!normalizedCpf) return reply.code(400).send({ error: 'Validação facial pendente para identificar CPF' });
@@ -687,6 +894,152 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     });
   });
 
+  app.post('/public/:token/anamnesis', {
+    schema: {
+      summary: 'Submit public pre-scheduling anamnesis answers',
+      tags: ['PreSchedulingPublic'],
+      params: {
+        type: 'object',
+        required: ['token'],
+        properties: { token: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['answers'],
+        properties: {
+          answers: { type: 'array' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { token } = request.params as { token: string };
+    const { answers } = request.body as { answers: any[] };
+
+    const flow = await prisma.preSchedulingFlow.findFirst({
+      where: { publicToken: token },
+      include: {
+        appointment: true,
+      },
+    });
+
+    if (!ensureActivePublicFlow(flow, reply)) return;
+    if (!flow.patientVerifiedAt) {
+      return reply.code(400).send({ error: 'Validação de identidade pendente' });
+    }
+    if (isPatientInteractionCompleted(flow)) {
+      return reply.code(400).send({ error: 'Esta anamnese já foi finalizada e não pode ser alterada' });
+    }
+
+    const template = flow.appointment
+      ? await resolveAnamnesisTemplateForAppointment(String(flow.branchId || ''), flow.appointment)
+      : null;
+    if (!template) {
+      return reply.code(404).send({ error: 'Não há anamnese configurada para este procedimento' });
+    }
+    if (flow.anamnesisResponse) {
+      return reply.code(400).send({ error: 'A anamnese já foi respondida para este link' });
+    }
+
+    const answerMap = new Map<string, any>();
+    if (Array.isArray(answers)) {
+      answers.forEach((answer: any) => {
+        const questionId = String(answer?.questionId || '').trim();
+        if (questionId) answerMap.set(questionId, answer);
+      });
+    }
+
+    for (const question of template.questions) {
+      const payload = answerMap.get(String(question.id));
+      if (!question.isRequired) continue;
+
+      const hasText = String(payload?.answerText || '').trim().length > 0;
+      const hasValues = Array.isArray(payload?.answerValues) && payload.answerValues.some((value: any) => String(value || '').trim().length > 0);
+      const hasBoolean = typeof payload?.answerBoolean === 'boolean';
+      const hasNumber = Number.isFinite(Number(payload?.answerNumber));
+
+      const isFilled = shouldUseAnswerValues(question.responseType)
+        ? hasValues
+        : question.responseType === 'BOOLEAN'
+          ? hasBoolean
+          : question.responseType === 'NUMBER'
+            ? hasNumber
+            : hasText;
+
+      if (!isFilled) {
+        return reply.code(400).send({ error: `A pergunta obrigatória "${question.label}" precisa ser respondida` });
+      }
+    }
+
+    const saved = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      await tx.preSchedulingAnamnesisAnswer.deleteMany({
+        where: {
+          response: {
+            flowId: flow.id,
+          },
+        },
+      });
+
+      const response = await tx.preSchedulingAnamnesisResponse.upsert({
+        where: { flowId: flow.id },
+        update: {
+          templateId: template.id,
+          templateName: template.name,
+          submittedAt: new Date(),
+        },
+        create: {
+          flowId: flow.id,
+          templateId: template.id,
+          templateName: template.name,
+          submittedAt: new Date(),
+        },
+      });
+
+      for (const question of template.questions) {
+        const payload = answerMap.get(String(question.id)) || {};
+        const answerValues = shouldUseAnswerValues(question.responseType)
+          ? (Array.isArray(payload?.answerValues) ? payload.answerValues.map((value: any) => String(value).trim()).filter(Boolean) : [])
+          : [];
+
+        await tx.preSchedulingAnamnesisAnswer.create({
+          data: {
+            responseId: response.id,
+            questionId: question.id,
+            questionLabel: question.label,
+            responseType: question.responseType,
+            answerText: !shouldUseAnswerValues(question.responseType) && payload?.answerText !== undefined
+              ? String(payload.answerText || '').trim() || null
+              : null,
+            answerValues,
+            answerBoolean: typeof payload?.answerBoolean === 'boolean' ? payload.answerBoolean : null,
+            answerNumber: Number.isFinite(Number(payload?.answerNumber)) ? Number(payload.answerNumber) : null,
+            orderIndex: Number(question.orderIndex || 0),
+          },
+        });
+      }
+
+      await tx.preSchedulingFlow.update({
+        where: { id: flow.id },
+        data: {
+          status: flow.status === 'PENDING' ? 'WAITING_PATIENT_DOCUMENTS' : flow.status,
+        },
+      });
+
+      return tx.preSchedulingAnamnesisResponse.findUnique({
+        where: { id: response.id },
+        include: {
+          answers: {
+            orderBy: { orderIndex: 'asc' },
+          },
+        },
+      });
+    });
+
+    return reply.send({
+      message: 'Anamnese enviada com sucesso',
+      item: saved,
+    });
+  });
+
   app.post('/public/:token/finalize', {
     schema: {
       summary: 'Finalize patient document sending for pre-scheduling flow',
@@ -704,17 +1057,32 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       where: { publicToken: token },
       include: {
         documents: { select: { id: true } },
+        appointment: true,
+        anamnesisResponse: { select: { id: true } },
       },
     });
 
-    if (!flow) return reply.code(404).send({ error: 'Link inválido ou expirado' });
+    if (!ensureActivePublicFlow(flow, reply)) return;
 
     if (!flow.patientVerifiedAt) {
       return reply.code(400).send({ error: 'Validação de identidade pendente' });
     }
+    if (isPatientInteractionCompleted(flow)) {
+      return reply.code(400).send({ error: 'Este envio já foi finalizado' });
+    }
 
-    if (!Array.isArray(flow.documents) || flow.documents.length === 0) {
-      return reply.code(400).send({ error: 'Envie ao menos um documento antes de finalizar' });
+    const hasDocuments = Array.isArray(flow.documents) && flow.documents.length > 0;
+    const anamnesisTemplate = flow.appointment
+      ? await resolveAnamnesisTemplateForAppointment(String(flow.branchId || ''), flow.appointment)
+      : null;
+    const hasAnamnesisResponse = Boolean(flow.anamnesisResponse?.id);
+
+    if (anamnesisTemplate && !hasAnamnesisResponse) {
+      return reply.code(400).send({ error: 'Responda a anamnese antes de finalizar' });
+    }
+
+    if (!hasDocuments && !hasAnamnesisResponse) {
+      return reply.code(400).send({ error: 'Envie ao menos um documento ou responda a anamnese antes de finalizar' });
     }
 
     const updated = await prisma.preSchedulingFlow.update({
