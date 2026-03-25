@@ -44,6 +44,11 @@ const normalizeProcedureMaterials = (data: any) => {
     .filter(Boolean) as { inventoryItemId: string; quantity: number }[];
 };
 
+const normalizeProcedureAppointmentType = (value: unknown): string => {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized === 'EXAME' ? 'EXAME' : 'CONSULTA';
+};
+
 export default async function procedureRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -139,6 +144,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         properties: {
           name: { type: "string" },
           description: { type: "string" },
+          appointmentType: { type: "string", enum: ["CONSULTA", "EXAME"] },
           price: { type: ["number", "string"] },
           durationMinutes: { type: "number" },
           acceptsInsurance: { type: "boolean" },
@@ -182,6 +188,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const acceptedInsurances = normalizeStringArray(data.acceptedInsurances) || [];
     const modalities = normalizeStringArray(data.modalities) || [];
     const acceptsInsurance = Boolean(data.acceptsInsurance);
+    const appointmentType = normalizeProcedureAppointmentType(data.appointmentType);
 
     try {
       const item = await prisma.procedure.create({
@@ -189,6 +196,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
           branchId,
           name: data.name,
           description: data.description || null,
+          appointmentType,
           price: data.price ?? null,
           durationMinutes: data.durationMinutes !== undefined && data.durationMinutes !== null
             ? Number(data.durationMinutes)
@@ -254,6 +262,9 @@ export default async function procedureRoutes(app: FastifyInstance) {
       const updateData: any = {};
       if (data.name !== undefined) updateData.name = data.name;
       if (data.description !== undefined) updateData.description = data.description || null;
+      if (data.appointmentType !== undefined) {
+        updateData.appointmentType = normalizeProcedureAppointmentType(data.appointmentType);
+      }
       if (data.price !== undefined) updateData.price = data.price;
       if (data.durationMinutes !== undefined) {
         updateData.durationMinutes = data.durationMinutes === null || data.durationMinutes === ''

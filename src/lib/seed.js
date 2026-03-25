@@ -46,6 +46,13 @@ const modules = [
     category: 'suporte-clinico',
   },
   {
+    name: 'execucao-exames',
+    label: 'Execução de Exames',
+    description: 'Triagem e andamento operacional dos exames',
+    icon: 'ClipboardCheck',
+    category: 'suporte-clinico',
+  },
+  {
     name: 'laudo',
     label: 'Laudo',
     description: 'Emissão de laudos',
@@ -145,6 +152,20 @@ const modules = [
     description: 'Equipamentos médicos com integração DICOM',
     icon: 'ScanLine',
     category: 'cadastros',
+  },
+  {
+    name: 'cadastro-anamnese',
+    label: 'Cadastro de Anamnese',
+    description: 'Perguntas de anamnese por procedimento',
+    icon: 'ClipboardPenLine',
+    category: 'cadastros',
+  },
+  {
+    name: 'cadastro-enfermagem',
+    label: 'Cadastro de Enfermagem',
+    description: 'Triagens e preparos por procedimento',
+    icon: 'ClipboardCheck',
+    category: 'cadastros',
   }
 ];
 
@@ -166,7 +187,7 @@ async function main() {
   const removedCount = await prisma.module.deleteMany({
     where: {
       name: {
-        in: ['envelopamento', 'anamnese', 'enfermagem', 'documentos'],
+        in: ['envelopamento', 'documentos'],
       },
     },
   });
