@@ -1,4 +1,38 @@
 export const openapiSchemas = {
+  Lead: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      name: { type: 'string' },
+      email: { type: 'string' },
+      phone: { type: 'string', nullable: true },
+      companyName: { type: 'string', nullable: true },
+      message: { type: 'string', nullable: true },
+      source: { type: 'string', nullable: true },
+      status: { type: 'string', enum: ['NEW', 'CONTACTED', 'QUALIFIED', 'LOST'] },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  },
+  LeadCreate: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      email: { type: 'string' },
+      phone: { type: 'string' },
+      companyName: { type: 'string' },
+      message: { type: 'string' },
+      source: { type: 'string' },
+    },
+    required: ['name', 'email', 'phone', 'message'],
+  },
+  LeadStatusUpdate: {
+    type: 'object',
+    properties: {
+      status: { type: 'string', enum: ['NEW', 'CONTACTED', 'QUALIFIED', 'LOST'] },
+    },
+    required: ['status'],
+  },
   InventoryItem: {
     type: 'object',
     properties: {
