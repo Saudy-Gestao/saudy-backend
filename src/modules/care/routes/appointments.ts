@@ -370,7 +370,28 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       offset = 0 
     } = request.query as any;
 
-    const where: any = { isActive: true, branchId };
+    const branchPatients = await prisma.patient.findMany({
+      where: { branchId },
+      select: { id: true },
+      take: 10000,
+    });
+    const branchPatientIds = branchPatients
+      .map((item: any) => String(item?.id || '').trim())
+      .filter(Boolean);
+
+    const branchScope = {
+      OR: [
+        { branchId },
+        ...(branchPatientIds.length > 0
+          ? [{ branchId: null, patientId: { in: branchPatientIds } }]
+          : []),
+      ],
+    };
+
+    const where: any = {
+      isActive: true,
+      AND: [branchScope],
+    };
     if (status) where.status = status;
     if (authorizationStatus) where.authorizationStatus = authorizationStatus;
     if (specialty) where.specialty = specialty;
@@ -394,11 +415,13 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     
     // Search (sÃ³ aplica se nÃ£o tiver filtros especÃ­ficos de paciente)
     if (search && !patientId && !patientCpf) {
-      where.OR = [
-        { patientName: { contains: search, mode: 'insensitive' } },
-        { patientCpf: { contains: search, mode: 'insensitive' } },
-        { doctorName: { contains: search, mode: 'insensitive' } },
-      ];
+      where.AND.push({
+        OR: [
+          { patientName: { contains: search, mode: 'insensitive' } },
+          { patientCpf: { contains: search, mode: 'insensitive' } },
+          { doctorName: { contains: search, mode: 'insensitive' } },
+        ],
+      });
     }
 
     const [items, total] = await Promise.all([

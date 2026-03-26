@@ -1,0 +1,22 @@
+ALTER TABLE "medical_equipments"
+  ADD COLUMN IF NOT EXISTS "integrationType" TEXT NOT NULL DEFAULT 'MWL_BRIDGE',
+  ADD COLUMN IF NOT EXISTS "bridgeIdentifier" TEXT,
+  ADD COLUMN IF NOT EXISTS "mwlRemoteAeTitle" TEXT,
+  ADD COLUMN IF NOT EXISTS "storeRemoteAeTitle" TEXT,
+  ADD COLUMN IF NOT EXISTS "mwlHost" TEXT,
+  ADD COLUMN IF NOT EXISTS "mwlPort" INTEGER,
+  ADD COLUMN IF NOT EXISTS "storeHost" TEXT,
+  ADD COLUMN IF NOT EXISTS "storePort" INTEGER,
+  ADD COLUMN IF NOT EXISTS "dicomWebPath" TEXT,
+  ADD COLUMN IF NOT EXISTS "supportsWorklist" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "supportsStore" BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS "supportsPrint" BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'Ativo',
+  ADD COLUMN IF NOT EXISTS "observations" TEXT,
+  ADD COLUMN IF NOT EXISTS "lastTestStatus" TEXT,
+  ADD COLUMN IF NOT EXISTS "lastTestMessage" TEXT,
+  ADD COLUMN IF NOT EXISTS "lastTestedAt" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "isActive" BOOLEAN NOT NULL DEFAULT true;
+
+CREATE INDEX IF NOT EXISTS "medical_equipments_branchId_idx" ON "medical_equipments"("branchId");
+CREATE INDEX IF NOT EXISTS "medical_equipments_roomId_idx" ON "medical_equipments"("roomId");
