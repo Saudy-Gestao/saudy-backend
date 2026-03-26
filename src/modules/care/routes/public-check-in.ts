@@ -9,6 +9,14 @@ type DoctorQueueLookup = {
   name: string;
 };
 
+type AuthorizedBranchContext = {
+  id: string;
+  tradeName: string;
+  phone: string | null;
+  companyId: string;
+  publicCheckInEnabled: boolean;
+};
+
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
 const CLOSED_PRE_ATTENDANCE_STATUSES = new Set(['FINALIZADO', 'FINALIZADA', 'CANCELADO', 'CANCELADA']);
 const ADVANCED_PRE_ATTENDANCE_STATUSES = new Set([
@@ -131,9 +139,7 @@ const getCheckInQueueStatus = (appointmentDate?: string | null, appointmentTime?
   return 'Na fila da recepção';
 };
 
-const getTodayDateString = () => {
-  return getClinicNowDateTime().date;
-};
+const getTodayDateString = () => getClinicNowDateTime().date;
 
 const getTodayBounds = () => {
   const { year, month, day } = getTimeZoneParts(new Date());
@@ -149,11 +155,51 @@ const formatAppointmentSummary = (appointment: {
   doctorName?: string | null;
 }) => [appointment.time, appointment.specialty, appointment.doctorName].filter(Boolean).join(' • ');
 
+const getAuthorizedBranchContext = async (userId: string, branchId: string): Promise<AuthorizedBranchContext | null> => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { sector: { include: { branch: true } } },
+  });
+
+  if (!user?.sector?.branch?.companyId) {
+    return null;
+  }
+
+  const branch = await prisma.branch.findUnique({
+    where: { id: branchId },
+    select: {
+      id: true,
+      tradeName: true,
+      phone: true,
+      companyId: true,
+      settings: {
+        select: {
+          publicCheckInEnabled: true,
+        },
+      },
+    },
+  });
+
+  if (!branch || branch.companyId !== user.sector.branch.companyId) {
+    return null;
+  }
+
+  return {
+    id: branch.id,
+    tradeName: branch.tradeName,
+    phone: branch.phone,
+    companyId: branch.companyId,
+    publicCheckInEnabled: Boolean(branch.settings?.publicCheckInEnabled),
+  };
+};
+
 export default async function publicCheckInRoutes(app: FastifyInstance) {
   app.get('/branch/:branchId', {
+    preHandler: async (request) => { await request.jwtVerify(); },
     schema: {
       summary: 'Get public branch info for kiosk/totem',
       tags: ['PublicCheckIn'],
+      security: [{ bearerAuth: [] }],
       params: {
         type: 'object',
         required: ['branchId'],
@@ -164,27 +210,28 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { branchId } = request.params as { branchId: string };
+    const userId = (request.user as any).id as string;
 
-    const branch = await prisma.branch.findUnique({
-      where: { id: branchId },
-      select: {
-        id: true,
-        tradeName: true,
-        phone: true,
-      },
-    });
+    const branch = await getAuthorizedBranchContext(userId, branchId);
 
     if (!branch) {
-      return reply.code(404).send({ error: 'Branch not found' });
+      return reply.code(403).send({ error: 'Acesso negado para esta filial.' });
     }
 
-    return branch;
+    return {
+      id: branch.id,
+      tradeName: branch.tradeName,
+      phone: branch.phone,
+      publicCheckInEnabled: branch.publicCheckInEnabled,
+    };
   });
 
   app.post('/facial', {
+    preHandler: async (request) => { await request.jwtVerify(); },
     schema: {
       summary: 'Public facial check-in for kiosk/totem',
       tags: ['PublicCheckIn'],
+      security: [{ bearerAuth: [] }],
       body: {
         type: 'object',
         required: ['branchId'],
@@ -212,6 +259,20 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'branchId is required' });
     }
 
+    const userId = (request.user as any).id as string;
+    const authorizedBranch = await getAuthorizedBranchContext(userId, branchId);
+
+    if (!authorizedBranch) {
+      return reply.code(403).send({ error: 'Acesso negado para esta filial.' });
+    }
+
+    if (!authorizedBranch.publicCheckInEnabled) {
+      return reply.code(403).send({
+        error: 'O check-in público desta filial está desligado no momento.',
+        code: 'PUBLIC_CHECKIN_DISABLED',
+      });
+    }
+
     const normalizedCpf = normalizeCpf(patientCpf);
 
     const patientLookupConditions = [
@@ -230,7 +291,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
       where: {
         branchId,
         isActive: true,
-        OR: patientLookupConditions,
+        OR: patientLookupConditions as any,
       },
     });
 
@@ -257,8 +318,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
     });
 
     const confirmedAppointments = appointments.filter((appointment: AppointmentModel) =>
-      CONFIRMED_APPOINTMENT_STATUSES.has(normalizeStatus(appointment.status)),
-    );
+      CONFIRMED_APPOINTMENT_STATUSES.has(normalizeStatus(appointment.status)));
 
     const mappedAppointments = appointments.map((appointment: AppointmentModel) => ({
       id: appointment.id,
@@ -394,7 +454,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
       };
 
       if (existingPreAttendance) {
-        if (ADVANCED_PRE_ATTENDANCE_STATUSES.has(normalizedPreAttendanceStatus)) {
+        if (ADVANCED_PRE_ATTENDANCE_STATUSES.has(normalizeStatus(existingPreAttendance.status))) {
           processedPreAttendances.push(existingPreAttendance);
           continue;
         }
@@ -425,18 +485,15 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
       processedPreAttendances.push(createdPreAttendance);
     }
 
-    const queuedPreAttendances = processedPreAttendances.filter(
-      (item: PreAttendanceModel) => {
-        const status = normalizeStatus(item.status);
-        return status === normalizeStatus('Na fila da recepção')
-          || status === normalizeStatus('Atrasado');
-      },
-    );
+    const queuedPreAttendances = processedPreAttendances.filter((item: PreAttendanceModel) => {
+      const status = normalizeStatus(item.status);
+      return status === normalizeStatus('Na fila da recepção')
+        || status === normalizeStatus('Atrasado');
+    });
     const firstPreAttendance = processedPreAttendances[0] || null;
     const allAlreadyAdvanced = processedPreAttendances.length > 0
       && processedPreAttendances.every((item: PreAttendanceModel) =>
-        ADVANCED_PRE_ATTENDANCE_STATUSES.has(normalizeStatus(item.status)),
-      );
+        ADVANCED_PRE_ATTENDANCE_STATUSES.has(normalizeStatus(item.status)));
 
     return reply.send({
       status: 'QUEUED',

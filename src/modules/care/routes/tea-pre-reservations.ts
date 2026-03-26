@@ -70,6 +70,25 @@ function formatDateAsIso(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeComparableText(value: unknown): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function buildTherapyComparableSignature(input: {
+  teaProfileId?: string | null;
+  patientId?: string | null;
+  procedureId?: string | null;
+  procedureName?: string | null;
+  professionalId?: string | null;
+  professionalName?: string | null;
+}): string {
+  return [
+    normalizeComparableText(input?.teaProfileId || input?.patientId),
+    normalizeComparableText(input?.procedureId || input?.procedureName),
+    normalizeComparableText(input?.professionalId || input?.professionalName),
+  ].join('#');
+}
+
 function startOfWeekMonday(date: Date): Date {
   const normalized = new Date(date);
   normalized.setHours(0, 0, 0, 0);
@@ -724,13 +743,21 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           patientId: true,
           date: true,
           time: true,
+          doctorName: true,
+          specialty: true,
         },
       })
       : [];
     const activeTeaAppointmentSignature = new Set(
       activeTeaAppointments
         .filter((item: any) => item?.patientId && item?.date && item?.time)
-        .map((item: any) => `${String(item.patientId)}#${String(item.date)}#${String(item.time)}`),
+        .map((item: any) => [
+          String(item.patientId),
+          String(item.date),
+          String(item.time),
+          normalizeComparableText(item.doctorName),
+          normalizeComparableText(item.specialty),
+        ].join('#')),
     );
 
     const items = therapies.map((therapy: any) => {
@@ -751,7 +778,13 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const dateIso = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : null;
         const time = item?.suggestedTime ? String(item.suggestedTime) : null;
         if (!patientId || !dateIso || !time) return;
-        const signature = `${patientId}#${dateIso}#${time}`;
+        const signature = [
+          patientId,
+          dateIso,
+          time,
+          normalizeComparableText(item?.professionalName),
+          normalizeComparableText(item?.procedureName),
+        ].join('#');
         if (activeTeaAppointmentSignature.has(signature)) {
           activeConvertedSlotSignatures.add(`${dateIso}#${time}`);
         }
@@ -921,10 +954,14 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
     const activeTherapySignatureSet = new Set(
       items.map((item: any) => {
-        const pitId = String(item?.pitId || '');
-        const procedureId = String(item?.procedure?.id || item?.procedure?.name || '').trim().toLowerCase();
-        const professionalId = String(item?.professional?.id || item?.professional?.name || '').trim().toLowerCase();
-        return `${pitId}#${procedureId}#${professionalId}`;
+        return buildTherapyComparableSignature({
+          teaProfileId: item?.teaProfileId,
+          patientId: item?.patient?.id,
+          procedureId: item?.procedure?.id,
+          procedureName: item?.procedure?.name,
+          professionalId: item?.professional?.id,
+          professionalName: item?.professional?.name,
+        });
       }),
     );
 
@@ -934,7 +971,14 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const convertedReservations = therapyReservations.filter((item: any) => String(item?.status || '') === 'CONVERTED');
         if (convertedReservations.length === 0) return null;
 
-        const removedTherapySignature = `${String(therapy?.pitId || '')}#${String(therapy?.procedureId || therapy?.therapyType || '').trim().toLowerCase()}#${String(therapy?.professionalDoctorId || therapy?.professional || '').trim().toLowerCase()}`;
+        const removedTherapySignature = buildTherapyComparableSignature({
+          teaProfileId: therapy?.pit?.teaProfileId,
+          patientId: therapy?.pit?.teaProfile?.patient?.id,
+          procedureId: therapy?.procedureId,
+          procedureName: therapy?.therapyType,
+          professionalId: therapy?.professionalDoctorId,
+          professionalName: therapy?.professional,
+        });
         if (activeTherapySignatureSet.has(removedTherapySignature)) {
           return null;
         }
@@ -944,7 +988,13 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           const dateIso = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : null;
           const time = item?.suggestedTime ? String(item.suggestedTime) : null;
           if (!patientId || !dateIso || !time) return false;
-          const signature = `${patientId}#${dateIso}#${time}`;
+          const signature = [
+            patientId,
+            dateIso,
+            time,
+            normalizeComparableText(item?.professionalName),
+            normalizeComparableText(item?.procedureName),
+          ].join('#');
           return activeTeaAppointmentSignature.has(signature);
         });
 
@@ -2827,6 +2877,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       seriesStartDate?: string;
     };
     const actor = resolveActorFromRequest(request);
+    const branchId = (request as any).branchId as string;
 
     const preReservation = await prisma.teaPreReservation.findFirst({
       where: {
@@ -3008,6 +3059,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const result = await prisma.$transaction(async (tx: any) => {
           const appointment = await tx.appointment.create({
             data: {
+              branchId,
               patientId: reservation.patient.id,
               patientName: reservation.patient.name || null,
               patientCpf: reservation.patient.cpf || null,
@@ -3149,6 +3201,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const result = await prisma.$transaction(async (tx: any) => {
       const appointment = await tx.appointment.create({
         data: {
+          branchId,
           patientId: preReservation.patient.id,
           patientName: preReservation.patient.name || null,
           patientCpf: preReservation.patient.cpf || null,
@@ -3261,6 +3314,4 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     return { items: itemsWithAttachments, total };
   });
 }
-
-
 

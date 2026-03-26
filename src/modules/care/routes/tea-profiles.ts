@@ -74,7 +74,7 @@ function normalizeDoctorName(value?: string | null): string {
   return String(value || '').trim().toLowerCase();
 }
 
-async function cancelAppointmentsForConvertedReservations(tx: any, reservations: any[], reason: string): Promise<number> {
+async function resolveAppointmentIdsForConvertedReservations(tx: any, reservations: any[]): Promise<string[]> {
   const normalized = reservations
     .filter((reservation: any) => reservation?.patientId && reservation?.suggestedDate && reservation?.suggestedTime)
     .map((reservation: any) => ({
@@ -86,7 +86,7 @@ async function cancelAppointmentsForConvertedReservations(tx: any, reservations:
     }))
     .filter((reservation: any) => reservation.id && reservation.patientId && reservation.date && reservation.time);
 
-  if (!normalized.length) return 0;
+  if (!normalized.length) return [];
 
   const patientIds = Array.from(new Set(normalized.map((reservation: any) => reservation.patientId)));
   const dates = normalized.map((reservation: any) => reservation.date).sort();
@@ -130,6 +130,12 @@ async function cancelAppointmentsForConvertedReservations(tx: any, reservations:
     })
     .map((appointment: any) => String(appointment.id))
     .filter(Boolean);
+
+  return appointmentIdsToCancel;
+}
+
+async function cancelAppointmentsForConvertedReservations(tx: any, reservations: any[], reason: string): Promise<number> {
+  const appointmentIdsToCancel = await resolveAppointmentIdsForConvertedReservations(tx, reservations);
 
   if (!appointmentIdsToCancel.length) return 0;
 
@@ -1206,11 +1212,36 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
         },
       });
 
+      const appointmentIdsToCancel = await resolveAppointmentIdsForConvertedReservations(
+        tx,
+        convertedFutureReservations,
+      );
+
       await cancelAppointmentsForConvertedReservations(
         tx,
         convertedFutureReservations,
         'Cancelamento em lote TEA: PIT excluído',
       );
+
+      if (therapyIds.length > 0 || appointmentIdsToCancel.length > 0) {
+        await tx.convenioAuthorizationAttachment.updateMany({
+          where: {
+            branchId,
+            isActive: true,
+            OR: [
+              ...(therapyIds.length > 0
+                ? [{ sourceType: 'TEA', pitTherapyId: { in: therapyIds } }]
+                : []),
+              ...(appointmentIdsToCancel.length > 0
+                ? [{ sourceType: 'APPOINTMENT', appointmentId: { in: appointmentIdsToCancel } }]
+                : []),
+            ],
+          },
+          data: {
+            isActive: false,
+          },
+        });
+      }
 
     });
 
@@ -1633,5 +1664,4 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     return reply.code(201).send(resultPit);
   });
 }
-
 

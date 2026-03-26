@@ -79,14 +79,33 @@ model Branch {
 }
 
 model BranchSettings {
-    id                              String  @id @default(uuid())
-    branchId                        String  @unique
-    branch                          Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
-    requireFacialForReportDelivery  Boolean @default(false)
-    requireFacialForPatientRegistration Boolean @default(true)
-    noShowToleranceMinutes          Int     @default(30)
+    id                                   String   @id @default(uuid())
+    branchId                             String   @unique
+    branch                               Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+    requireFacialForReportDelivery       Boolean  @default(false)
+    requireFacialForPatientRegistration  Boolean  @default(true)
+    noShowToleranceMinutes               Int      @default(30)
+    publicCheckInEnabled                 Boolean  @default(false)
+    publicCheckInLastEnabledAt           DateTime?
+    publicCheckInLastEnabledByUserId     String?
+    publicCheckInLastEnabledByName       String?
+    publicCheckInLastDisabledAt          DateTime?
+    publicCheckInLastDisabledByUserId    String?
+    publicCheckInLastDisabledByName      String?
 
     @@map("branch_settings")
+}
+
+model BranchPublicCheckInAuditLog {
+    id                String   @id @default(uuid())
+    branchId          String
+    action            String
+    performedByUserId String?
+    performedByName   String?
+    createdAt         DateTime @default(now())
+
+    @@index([branchId, createdAt])
+    @@map("branch_public_check_in_audit_logs")
 }
 
 model Sector {
