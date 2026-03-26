@@ -258,6 +258,175 @@ function getShiftSlots(shift?: string | null): string[] {
   return Array.from(new Set(combined)).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
 }
 
+const DOCTOR_AVAILABILITY_SELECT = {
+  id: true,
+  name: true,
+  isActive: true,
+  workingDays: true,
+  workingHoursStart: true,
+  workingHoursEnd: true,
+  workingSchedules: true,
+} as const;
+
+async function listCandidateDoctorsForTherapy(therapy: any, branchId: string): Promise<any[]> {
+  const assignedDoctorId = String(therapy?.professionalDoctorId || '').trim();
+  const procedureId = String(therapy?.procedureId || '').trim();
+
+  if (assignedDoctorId) {
+    const doctor = await prisma.doctor.findFirst({
+      where: { id: assignedDoctorId, branchId, isActive: true },
+      select: DOCTOR_AVAILABILITY_SELECT,
+    });
+
+    if (!doctor) return [];
+
+    if (procedureId) {
+      const linkedProcedureDoctor = await prisma.procedureDoctor.findFirst({
+        where: {
+          procedureId,
+          doctorId: doctor.id,
+        },
+      });
+
+      if (!linkedProcedureDoctor) {
+        return [];
+      }
+    }
+
+    return [doctor];
+  }
+
+  if (!procedureId) return [];
+
+  const links = await prisma.procedureDoctor.findMany({
+    where: { procedureId },
+    select: { doctorId: true },
+  });
+
+  const doctorIds = Array.from(new Set(
+    links
+      .map((item: any) => String(item?.doctorId || '').trim())
+      .filter(Boolean),
+  ));
+
+  if (doctorIds.length === 0) return [];
+
+  return prisma.doctor.findMany({
+    where: {
+      id: { in: doctorIds },
+      branchId,
+      isActive: true,
+    },
+    select: DOCTOR_AVAILABILITY_SELECT,
+    orderBy: { name: 'asc' },
+  });
+}
+
+async function resolveAvailableDoctorForSession(input: {
+  therapy: any;
+  branchId: string;
+  candidateDateIso: string;
+  suggestedTime: string;
+  durationMinutes: number;
+  preferredDoctorId?: string | null;
+}) {
+  const {
+    therapy,
+    branchId,
+    candidateDateIso,
+    suggestedTime,
+    durationMinutes,
+    preferredDoctorId,
+  } = input;
+
+  const preferredId = String(preferredDoctorId || '').trim();
+  let candidateDoctors = preferredId
+    ? await prisma.doctor.findMany({
+      where: {
+        id: preferredId,
+        branchId,
+        isActive: true,
+      },
+      select: DOCTOR_AVAILABILITY_SELECT,
+      orderBy: { name: 'asc' },
+    })
+    : await listCandidateDoctorsForTherapy(therapy, branchId);
+
+  if (!candidateDoctors.length && preferredId && String(therapy?.professionalDoctorId || '').trim() === preferredId) {
+    candidateDoctors = await listCandidateDoctorsForTherapy(therapy, branchId);
+  }
+
+  if (!candidateDoctors.length) return null;
+
+  const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[new Date(`${candidateDateIso}T00:00:00`).getDay()];
+  const dayStart = new Date(`${candidateDateIso}T00:00:00`);
+  const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
+
+  const [patientAppointments, patientReservations] = await Promise.all([
+    prisma.appointment.findMany({
+      where: {
+        isActive: true,
+        date: candidateDateIso,
+        patientId: therapy.pit.teaProfile.patient.id,
+      },
+      select: { id: true, time: true, durationMinutes: true },
+    }),
+    prisma.teaPreReservation.findMany({
+      where: {
+        status: { in: [...OPEN_STATUSES] as any },
+        suggestedDate: { gte: dayStart, lte: dayEnd },
+        patientId: therapy.pit.teaProfile.patient.id,
+      },
+      select: { id: true, suggestedTime: true, durationMinutes: true },
+    }),
+  ]);
+
+  for (const doctor of candidateDoctors) {
+    const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+    const fitsAnyWindow = doctorWindows.some((window) => (
+      fitsDoctorWorkingWindow(suggestedTime, durationMinutes, window.hoursStart, window.hoursEnd)
+    ));
+    if (!fitsAnyWindow) continue;
+
+    const [doctorAppointments, doctorReservations] = await Promise.all([
+      prisma.appointment.findMany({
+        where: {
+          isActive: true,
+          date: candidateDateIso,
+          doctorName: doctor.name,
+        },
+        select: { id: true, time: true, durationMinutes: true },
+      }),
+      prisma.teaPreReservation.findMany({
+        where: {
+          status: { in: [...OPEN_STATUSES] as any },
+          suggestedDate: { gte: dayStart, lte: dayEnd },
+          professionalDoctorId: doctor.id,
+        },
+        select: { id: true, suggestedTime: true, durationMinutes: true },
+      }),
+    ]);
+
+    const appointmentConflict = [...doctorAppointments, ...patientAppointments].find((item: any) => (
+      item?.time && timeRangesOverlap(suggestedTime, durationMinutes, String(item.time), item.durationMinutes)
+    ));
+    const preReservationConflict = [...doctorReservations, ...patientReservations].find((item: any) => (
+      item?.suggestedTime && timeRangesOverlap(suggestedTime, durationMinutes, String(item.suggestedTime), item.durationMinutes)
+    ));
+
+    if (appointmentConflict || preReservationConflict) {
+      continue;
+    }
+
+    return {
+      professionalDoctorId: doctor.id,
+      professionalName: doctor.name,
+    };
+  }
+
+  return null;
+}
+
 function buildSeriesDatesFromWeekdays(startDateIso: string, preferredWeekdays: string[], count: number): string[] {
   const safeCount = Math.max(0, Number(count) || 0);
   if (safeCount === 0) return [];
@@ -1138,44 +1307,20 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'PIT therapy not found or inactive' });
     }
 
-    if (!therapy.professionalDoctorId) {
-      return reply.code(400).send({
-        error: 'Doctor not set for PIT therapy',
-        fields: { professionalDoctorId: 'Defina um médico para gerar sugestões automáticas.' },
-      });
-    }
-
-    const doctor = await prisma.doctor.findFirst({
-      where: { id: therapy.professionalDoctorId, branchId: (request as any).branchId as string },
-      select: {
-        id: true,
-        name: true,
-        isActive: true,
-        workingDays: true,
-        workingHoursStart: true,
-        workingHoursEnd: true,
-        workingSchedules: true,
-      },
-    });
-
-    if (!doctor || !doctor.isActive) {
-      return reply.code(400).send({ error: 'Assigned doctor is invalid or inactive' });
-    }
-
-    if (therapy.procedureId) {
-      const linkedProcedureDoctor = await prisma.procedureDoctor.findFirst({
-        where: {
-          procedureId: therapy.procedureId,
-          doctorId: doctor.id,
+    const branchId = (request as any).branchId as string;
+    const candidateDoctors = await listCandidateDoctorsForTherapy(therapy, branchId);
+    if (!candidateDoctors.length) {
+      return {
+        items: [],
+        total: 0,
+        context: {
+          pitTherapyId,
+          doctorId: null,
+          doctorName: null,
+          preferredWeekdays: Array.isArray(therapy.preferredWeekdays) ? therapy.preferredWeekdays : [],
+          preferredShift: therapy.preferredShift,
         },
-      });
-
-      if (!linkedProcedureDoctor) {
-        return reply.code(400).send({
-          error: 'Doctor is not linked to selected procedure',
-          fields: { procedureId: 'O médico selecionado não está vinculado ao procedimento.' },
-        });
-      }
+      };
     }
 
     const preferredWeekdays = Array.isArray(therapy.preferredWeekdays)
@@ -1184,76 +1329,68 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .filter(Boolean) as string[]
       : [];
 
-    const preferredCandidateDateStrings: string[] = [];
-    const fallbackCandidateDateStrings: string[] = [];
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const monday = startOfWeekMonday(now);
     const daysSinceMonday = Math.max(0, Math.floor((now.getTime() - monday.getTime()) / (24 * 60 * 60 * 1000)));
     const totalOffsets = Math.max(daysAhead, 1) + daysSinceMonday;
 
-    for (let offset = 0; offset <= totalOffsets; offset += 1) {
-      const date = new Date(monday);
-      date.setHours(0, 0, 0, 0);
-      date.setDate(monday.getDate() + offset);
+    const candidateDateStringsByDoctor = candidateDoctors.map((doctor) => {
+      const preferredCandidateDateStrings: string[] = [];
+      const fallbackCandidateDateStrings: string[] = [];
 
-      const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[date.getDay()];
+      for (let offset = 0; offset <= totalOffsets; offset += 1) {
+        const date = new Date(monday);
+        date.setHours(0, 0, 0, 0);
+        date.setDate(monday.getDate() + offset);
 
-      const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
-      const matchesDoctorWorkingDays = doctorWindows.length > 0;
+        const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[date.getDay()];
+        const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+        if (doctorWindows.length === 0) continue;
 
-      if (!matchesDoctorWorkingDays) continue;
-
-      const isoDate = formatDateAsIso(date);
-      const isPreferredWeekday = preferredWeekdays.length > 0 && preferredWeekdays.includes(weekdayToken);
-
-      if (isPreferredWeekday) {
-        preferredCandidateDateStrings.push(isoDate);
-      } else {
-        fallbackCandidateDateStrings.push(isoDate);
+        const isoDate = formatDateAsIso(date);
+        const isPreferredWeekday = preferredWeekdays.length > 0 && preferredWeekdays.includes(weekdayToken);
+        if (isPreferredWeekday) {
+          preferredCandidateDateStrings.push(isoDate);
+        } else {
+          fallbackCandidateDateStrings.push(isoDate);
+        }
       }
-    }
 
-    const candidateDateStrings = preferredWeekdays.length > 0
-      ? [...preferredCandidateDateStrings, ...fallbackCandidateDateStrings]
-      : [...fallbackCandidateDateStrings];
+      return {
+        doctor,
+        candidateDateStrings: preferredWeekdays.length > 0
+          ? [...preferredCandidateDateStrings, ...fallbackCandidateDateStrings]
+          : [...fallbackCandidateDateStrings],
+      };
+    }).filter((entry) => entry.candidateDateStrings.length > 0);
 
-    if (candidateDateStrings.length === 0) {
+    const allCandidateDateStrings = Array.from(new Set(
+      candidateDateStringsByDoctor.flatMap((entry) => entry.candidateDateStrings),
+    ));
+
+    if (allCandidateDateStrings.length === 0) {
       return {
         items: [],
         total: 0,
         context: {
           pitTherapyId,
-          doctorId: doctor.id,
-          doctorName: doctor.name,
+          doctorId: null,
+          doctorName: null,
         },
       };
     }
 
-    const candidateDateRange = [...candidateDateStrings].sort((a, b) => a.localeCompare(b));
+    const candidateDateRange = [...allCandidateDateStrings].sort((a, b) => a.localeCompare(b));
     const rangeStart = candidateDateRange[0];
     const rangeEnd = candidateDateRange[candidateDateRange.length - 1];
  
-    const [doctorAppointments, patientAppointments, doctorReservations, patientReservations] = await Promise.all([
-      prisma.appointment.findMany({
-        where: {
-          isActive: true,
-          doctorName: doctor.name,
-          date: { in: candidateDateStrings },
-          NOT: [
-            { status: 'CANCELED' },
-            { status: 'CANCELADO' },
-            { status: 'COMPLETED' },
-            { status: 'CONCLUIDO' },
-          ],
-        },
-        select: { date: true, time: true, durationMinutes: true },
-      }),
+    const [patientAppointments, patientReservations] = await Promise.all([
       prisma.appointment.findMany({
         where: {
           isActive: true,
           patientId: therapy.pit.teaProfile.patient.id,
-          date: { in: candidateDateStrings },
+          date: { in: allCandidateDateStrings },
           NOT: [
             { status: 'CANCELED' },
             { status: 'CANCELADO' },
@@ -1262,19 +1399,6 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           ],
         },
         select: { date: true, time: true, durationMinutes: true },
-      }),
-      prisma.teaPreReservation.findMany({
-        where: {
-          professionalDoctorId: doctor.id,
-          status: { in: [...OPEN_STATUSES] as any },
-          pit: { status: { not: 'Inativo' } },
-          pitTherapy: { isActive: true },
-          suggestedDate: {
-            gte: new Date(`${rangeStart}T00:00:00`),
-            lte: new Date(`${rangeEnd}T23:59:59`),
-          },
-        },
-        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1291,27 +1415,18 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       }),
     ]);
 
-    const occupied = new Set<string>();
-
-    [...doctorAppointments].forEach((item: any) => {
-      const date = String(item.date || '').trim();
-      const time = String(item.time || '').trim();
-      if (!date || !time) return;
-      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
-        occupied.add(`${date}#${coveredTime}`);
-      });
-    });
+    const patientOccupied = new Set<string>();
 
     [...patientAppointments].forEach((item: any) => {
       const date = String(item.date || '').trim();
       const time = String(item.time || '').trim();
       if (!date || !time) return;
       buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
-        occupied.add(`${date}#${coveredTime}`);
+        patientOccupied.add(`${date}#${coveredTime}`);
       });
     });
 
-    [...doctorReservations, ...patientReservations].forEach((item: any) => {
+    [...patientReservations].forEach((item: any) => {
       const time = String(item?.suggestedTime || '').trim();
       const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
       if (!date || !time) return;
@@ -1320,69 +1435,129 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
 
       buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
-        occupied.add(`${date}#${coveredTime}`);
+        patientOccupied.add(`${date}#${coveredTime}`);
       });
     });
 
     const baseSlots = getShiftSlots(therapy.preferredShift);
     const slotDurationMinutes = resolveDurationMinutes(therapy.durationMinutes);
 
-    const suggestions: Array<{ date: string; time: string; doctorName: string; procedureName: string | null }> = [];
+    const suggestions: Array<{
+      date: string;
+      time: string;
+      doctorId: string;
+      doctorName: string;
+      procedureName: string | null;
+    }> = [];
+    const seenSuggestions = new Set<string>();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    for (const date of candidateDateStrings) {
-      const candidateDate = new Date(`${date}T00:00:00`);
-      const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
-      const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
-      const filteredSlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
-        fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
-      )));
-      if (filteredSlots.length === 0) continue;
-       const suggestionDateObj = new Date(candidateDate);
-       while (suggestionDateObj.getTime() < today.getTime()) {
-         suggestionDateObj.setDate(suggestionDateObj.getDate() + 7);
-       }
-       const suggestionIso = formatDateAsIso(suggestionDateObj);
- 
-       for (const time of filteredSlots) {
-         const originalSignature = `${date}#${time}`;
-         const suggestionSignature = `${suggestionIso}#${time}`;
-         // Suggest only truly available slots. This avoids offering times that will be dropped later.
-         if (occupied.has(originalSignature) || occupied.has(suggestionSignature)) continue;
-         if (!canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied)) continue;
-         if (!canPlaceSessionAtSlot(suggestionIso, time, slotDurationMinutes, occupied)) continue;
-         if (excludedSlots.has(originalSignature) || excludedSlots.has(suggestionSignature)) continue;
-         suggestions.push({
-           date: suggestionIso,
-           time,
-           doctorName: doctor.name,
-           procedureName: therapy.therapyType || null,
-         });
+    for (const entry of candidateDateStringsByDoctor) {
+      const { doctor, candidateDateStrings } = entry;
+      const [doctorAppointments, doctorReservations] = await Promise.all([
+        prisma.appointment.findMany({
+          where: {
+            isActive: true,
+            doctorName: doctor.name,
+            date: { in: candidateDateStrings },
+            NOT: [
+              { status: 'CANCELED' },
+              { status: 'CANCELADO' },
+              { status: 'COMPLETED' },
+              { status: 'CONCLUIDO' },
+            ],
+          },
+          select: { date: true, time: true, durationMinutes: true },
+        }),
+        prisma.teaPreReservation.findMany({
+          where: {
+            professionalDoctorId: doctor.id,
+            status: { in: [...OPEN_STATUSES] as any },
+            pit: { status: { not: 'Inativo' } },
+            pitTherapy: { isActive: true },
+            suggestedDate: {
+              gte: new Date(`${rangeStart}T00:00:00`),
+              lte: new Date(`${rangeEnd}T23:59:59`),
+            },
+          },
+          select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
+        }),
+      ]);
 
-         if (suggestions.length >= Math.max(limit, 1)) {
-           return {
-             items: suggestions,
-             total: suggestions.length,
-             context: {
-               pitTherapyId,
-               doctorId: doctor.id,
-               doctorName: doctor.name,
-               preferredWeekdays,
-               preferredShift: therapy.preferredShift,
-             },
-           };
-         }
-       }
+      const occupied = new Set<string>(patientOccupied);
+
+      [...doctorAppointments].forEach((item: any) => {
+        const date = String(item.date || '').trim();
+        const time = String(item.time || '').trim();
+        if (!date || !time) return;
+        buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+          occupied.add(`${date}#${coveredTime}`);
+        });
+      });
+
+      [...doctorReservations].forEach((item: any) => {
+        const time = String(item?.suggestedTime || '').trim();
+        const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
+        if (!date || !time) return;
+        if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
+
+        buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+          occupied.add(`${date}#${coveredTime}`);
+        });
+      });
+
+      for (const date of candidateDateStrings) {
+        const candidateDate = new Date(`${date}T00:00:00`);
+        const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
+        const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+        const filteredSlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
+          fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
+        )));
+        if (filteredSlots.length === 0) continue;
+        const suggestionDateObj = new Date(candidateDate);
+        while (suggestionDateObj.getTime() < today.getTime()) {
+          suggestionDateObj.setDate(suggestionDateObj.getDate() + 7);
+        }
+        const suggestionIso = formatDateAsIso(suggestionDateObj);
+
+        for (const time of filteredSlots) {
+          const originalSignature = `${date}#${time}`;
+          const suggestionSignature = `${suggestionIso}#${time}`;
+          const suggestionKey = `${doctor.id}#${suggestionIso}#${time}`;
+          if (occupied.has(originalSignature) || occupied.has(suggestionSignature)) continue;
+          if (!canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied)) continue;
+          if (!canPlaceSessionAtSlot(suggestionIso, time, slotDurationMinutes, occupied)) continue;
+          if (excludedSlots.has(originalSignature) || excludedSlots.has(suggestionSignature)) continue;
+          if (seenSuggestions.has(suggestionKey)) continue;
+
+          seenSuggestions.add(suggestionKey);
+          suggestions.push({
+            date: suggestionIso,
+            time,
+            doctorId: doctor.id,
+            doctorName: doctor.name,
+            procedureName: therapy.therapyType || null,
+          });
+        }
+      }
     }
 
+    suggestions.sort((a, b) => {
+      const dateDiff = a.date.localeCompare(b.date);
+      if (dateDiff !== 0) return dateDiff;
+      const timeDiff = a.time.localeCompare(b.time);
+      if (timeDiff !== 0) return timeDiff;
+      return a.doctorName.localeCompare(b.doctorName);
+    });
+
     return {
-      items: suggestions,
+      items: suggestions.slice(0, Math.max(limit, 1)),
       total: suggestions.length,
       context: {
         pitTherapyId,
-        doctorId: doctor.id,
-        doctorName: doctor.name,
+        doctorId: candidateDoctors.length === 1 ? candidateDoctors[0].id : null,
+        doctorName: candidateDoctors.length === 1 ? candidateDoctors[0].name : null,
         preferredWeekdays,
         preferredShift: therapy.preferredShift,
       },
@@ -1430,29 +1605,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'PIT therapy not found or inactive' });
     }
 
-    if (!therapy.professionalDoctorId) {
-      return reply.code(400).send({
-        error: 'Doctor not set for PIT therapy',
-        fields: { professionalDoctorId: 'Defina um médico para montar calendário manual.' },
-      });
-    }
-
-    const doctor = await prisma.doctor.findFirst({
-      where: { id: therapy.professionalDoctorId, branchId: (request as any).branchId as string },
-      select: {
-        id: true,
-        name: true,
-        isActive: true,
-        workingDays: true,
-        workingHoursStart: true,
-        workingHoursEnd: true,
-        workingSchedules: true,
-      },
-    });
-
-    if (!doctor || !doctor.isActive) {
-      return reply.code(400).send({ error: 'Assigned doctor is invalid or inactive' });
-    }
+    const branchId = (request as any).branchId as string;
+    const candidateDoctors = await listCandidateDoctorsForTherapy(therapy, branchId);
 
     const parsedWeekStart = weekStart ? new Date(`${weekStart}T00:00:00`) : new Date();
     if (Number.isNaN(parsedWeekStart.getTime())) {
@@ -1472,21 +1626,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .filter(Boolean) as string[]
       : [];
 
-    const [doctorAppointments, patientAppointments, doctorReservations, patientReservations] = await Promise.all([
-      prisma.appointment.findMany({
-        where: {
-          isActive: true,
-          doctorName: doctor.name,
-          date: { in: weekDates },
-          NOT: [
-            { status: 'CANCELED' },
-            { status: 'CANCELADO' },
-            { status: 'COMPLETED' },
-            { status: 'CONCLUIDO' },
-          ],
-        },
-        select: { date: true, time: true, durationMinutes: true },
-      }),
+    const [patientAppointments, patientReservations] = await Promise.all([
       prisma.appointment.findMany({
         where: {
           isActive: true,
@@ -1500,19 +1640,6 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           ],
         },
         select: { date: true, time: true, durationMinutes: true },
-      }),
-      prisma.teaPreReservation.findMany({
-        where: {
-          professionalDoctorId: doctor.id,
-          status: { in: [...OPEN_STATUSES] as any },
-          pit: { status: { not: 'Inativo' } },
-          pitTherapy: { isActive: true },
-          suggestedDate: {
-            gte: new Date(`${weekDates[0]}T00:00:00`),
-            lte: new Date(`${weekDates[6]}T23:59:59`),
-          },
-        },
-        select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
       }),
       prisma.teaPreReservation.findMany({
         where: {
@@ -1529,27 +1656,18 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       }),
     ]);
 
-    const occupied = new Set<string>();
-
-    [...doctorAppointments].forEach((item: any) => {
-      const date = String(item.date || '').trim();
-      const time = String(item.time || '').trim();
-      if (!date || !time) return;
-      buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
-        occupied.add(`${date}#${coveredTime}`);
-      });
-    });
+    const patientOccupied = new Set<string>();
 
     [...patientAppointments].forEach((item: any) => {
       const date = String(item.date || '').trim();
       const time = String(item.time || '').trim();
       if (!date || !time) return;
       buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
-        occupied.add(`${date}#${coveredTime}`);
+        patientOccupied.add(`${date}#${coveredTime}`);
       });
     });
 
-    [...doctorReservations, ...patientReservations].forEach((item: any) => {
+    [...patientReservations].forEach((item: any) => {
       const time = String(item?.suggestedTime || '').trim();
       const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
       if (!date || !time) return;
@@ -1558,41 +1676,130 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
 
       buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
-        occupied.add(`${date}#${coveredTime}`);
+        patientOccupied.add(`${date}#${coveredTime}`);
       });
     });
 
     const baseSlots = getShiftSlots(therapy.preferredShift);
     const slotDurationMinutes = resolveDurationMinutes(therapy.durationMinutes);
 
+    const daySlotMap = new Map<string, Map<string, { time: string; occupied: boolean; selectable: boolean; doctorId?: string | null; doctorName?: string | null }>>();
+    weekDates.forEach((date) => daySlotMap.set(date, new Map()));
+
+    for (const doctor of candidateDoctors) {
+      const [doctorAppointments, doctorReservations] = await Promise.all([
+        prisma.appointment.findMany({
+          where: {
+            isActive: true,
+            doctorName: doctor.name,
+            date: { in: weekDates },
+            NOT: [
+              { status: 'CANCELED' },
+              { status: 'CANCELADO' },
+              { status: 'COMPLETED' },
+              { status: 'CONCLUIDO' },
+            ],
+          },
+          select: { date: true, time: true, durationMinutes: true },
+        }),
+        prisma.teaPreReservation.findMany({
+          where: {
+            professionalDoctorId: doctor.id,
+            status: { in: [...OPEN_STATUSES] as any },
+            pit: { status: { not: 'Inativo' } },
+            pitTherapy: { isActive: true },
+            suggestedDate: {
+              gte: new Date(`${weekDates[0]}T00:00:00`),
+              lte: new Date(`${weekDates[6]}T23:59:59`),
+            },
+          },
+          select: { pitTherapyId: true, suggestedDate: true, suggestedTime: true, durationMinutes: true },
+        }),
+      ]);
+
+      const occupied = new Set<string>(patientOccupied);
+
+      [...doctorAppointments].forEach((item: any) => {
+        const date = String(item.date || '').trim();
+        const time = String(item.time || '').trim();
+        if (!date || !time) return;
+        buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+          occupied.add(`${date}#${coveredTime}`);
+        });
+      });
+
+      [...doctorReservations].forEach((item: any) => {
+        const time = String(item?.suggestedTime || '').trim();
+        const date = item?.suggestedDate ? formatDateAsIso(new Date(item.suggestedDate)) : '';
+        if (!date || !time) return;
+        if (String(item?.pitTherapyId || '') === String(therapy.id)) return;
+
+        buildCoveredTimeSlots(time, item.durationMinutes).forEach((coveredTime) => {
+          occupied.add(`${date}#${coveredTime}`);
+        });
+      });
+
+      weekDates.forEach((date) => {
+        const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[new Date(`${date}T00:00:00`).getDay()];
+        const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+        if (doctorWindows.length === 0) return;
+
+        const timeMap = daySlotMap.get(date);
+        if (!timeMap) return;
+
+        const daySlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
+          fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
+        )));
+
+        daySlots.forEach((time) => {
+          const selectable = canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied);
+          const existing = timeMap.get(time);
+
+          if (!existing) {
+            timeMap.set(time, {
+              time,
+              occupied: !selectable,
+              selectable,
+              doctorId: selectable ? doctor.id : null,
+              doctorName: selectable ? doctor.name : null,
+            });
+            return;
+          }
+
+          if (!existing.selectable && selectable) {
+            timeMap.set(time, {
+              time,
+              occupied: false,
+              selectable: true,
+              doctorId: doctor.id,
+              doctorName: doctor.name,
+            });
+          }
+        });
+      });
+    }
+
     const days = weekDates.map((date) => {
       const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[new Date(`${date}T00:00:00`).getDay()];
       const matchesPreferredWeekday = preferredWeekdays.length === 0 || preferredWeekdays.includes(weekdayToken);
-      const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
-      const matchesDoctorWorkingDays = doctorWindows.length > 0;
-      const isDayEnabled = matchesDoctorWorkingDays;
-      const daySlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
-        fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
-      )));
+      const slots = Array.from(daySlotMap.get(date)?.values() || []).sort((a, b) => (
+        timeToMinutes(a.time) - timeToMinutes(b.time)
+      ));
 
       return {
         date,
         weekday: weekdayToken,
         isPreferredWeekday: matchesPreferredWeekday,
-        enabled: isDayEnabled,
-        slots: daySlots.map((time) => ({
-          time,
-          occupied: isDayEnabled ? occupied.has(`${date}#${time}`) : false,
-          selectable: isDayEnabled && canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied),
-        })),
+        enabled: slots.length > 0,
+        slots,
       };
     });
 
     return {
       context: {
         pitTherapyId,
-        doctorId: doctor.id,
-        doctorName: doctor.name,
+        doctorId: candidateDoctors.length === 1 ? candidateDoctors[0]?.id : null,
+        doctorName: candidateDoctors.length === 1 ? candidateDoctors[0]?.name : null,
         procedureName: therapy.therapyType || null,
         preferredWeekdays,
         preferredShift: therapy.preferredShift,
@@ -1971,6 +2178,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                   suggestedDate: { type: 'string' },
                   suggestedTime: { type: 'string' },
                   durationMinutes: { type: 'number' },
+                  professionalDoctorId: { type: 'string' },
+                  professionalName: { type: 'string' },
                 },
               },
             },
@@ -2009,6 +2218,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const suggestedDate = String(entry?.suggestedDate || '');
         const suggestedTime = String(entry?.suggestedTime || '');
         const durationMinutes = Number.isFinite(entry?.durationMinutes) ? Math.max(0, Math.min(1440, Number(entry.durationMinutes))) : null;
+        const preferredDoctorId = String(entry?.professionalDoctorId || '').trim() || null;
+        const preferredDoctorName = String(entry?.professionalName || '').trim() || null;
 
         if (!pitTherapyId || !suggestedDate || !suggestedTime) continue;
 
@@ -2069,33 +2280,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           replacedTherapyIds.add(therapy.id);
         }
 
-        const assignedDoctor = therapy.professionalDoctorId
-          ? await prisma.doctor.findFirst({
-            where: {
-              id: therapy.professionalDoctorId,
-              branchId: (request as any).branchId as string,
-              isActive: true,
-            },
-            select: {
-              workingDays: true,
-              workingHoursStart: true,
-              workingHoursEnd: true,
-              workingSchedules: true,
-            },
-          })
-          : null;
-
         const effectiveDuration = resolveDurationMinutes(durationMinutes ?? therapy.durationMinutes);
-
-        if (assignedDoctor && !fitsDoctorWorkingWindow(
-          suggestedTime,
-          effectiveDuration,
-          assignedDoctor.workingHoursStart,
-          assignedDoctor.workingHoursEnd,
-        )) {
-          skippedConflicts += 1;
-          continue;
-        }
 
         let acceptedStatusForTherapy = acceptedStatus;
         if (shouldInferStatusFromHistory) {
@@ -2146,50 +2331,16 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           const dayStart = new Date(`${candidateDateIso}T00:00:00`);
           const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
 
-          if (assignedDoctor) {
-            const doctorWindows = getDoctorWindowsForWeekday(assignedDoctor, weekdayToken);
-            const fitsAnyWindow = doctorWindows.some((window) => (
-              fitsDoctorWorkingWindow(suggestedTime, effectiveDuration, window.hoursStart, window.hoursEnd)
-            ));
-            if (!fitsAnyWindow) {
-              skippedConflicts += 1;
-              continue;
-            }
-          }
+          const selectedDoctor = await resolveAvailableDoctorForSession({
+            therapy,
+            branchId: (request as any).branchId as string,
+            candidateDateIso,
+            suggestedTime,
+            durationMinutes: effectiveDuration,
+            preferredDoctorId: preferredDoctorId || therapy.professionalDoctorId || null,
+          });
 
-          const [appointmentConflicts, preReservationConflicts] = await Promise.all([
-            prisma.appointment.findMany({
-              where: {
-                isActive: true,
-                date: candidateDateIso,
-                OR: [
-                  { doctorName: therapy.professional || undefined },
-                  { patientId: therapy.pit.teaProfile.patient.id },
-                ],
-              },
-              select: { id: true, time: true, durationMinutes: true },
-            }),
-            prisma.teaPreReservation.findMany({
-              where: {
-                status: { in: [...OPEN_STATUSES] as any },
-                suggestedDate: { gte: dayStart, lte: dayEnd },
-                OR: [
-                  { professionalDoctorId: therapy.professionalDoctorId || undefined },
-                  { patientId: therapy.pit.teaProfile.patient.id },
-                ],
-              },
-              select: { id: true, suggestedTime: true, durationMinutes: true },
-            }),
-          ]);
-
-          const appointmentConflict = appointmentConflicts.find((item: any) => (
-            item?.time && timeRangesOverlap(suggestedTime, effectiveDuration, String(item.time), item.durationMinutes)
-          ));
-          const preReservationConflict = preReservationConflicts.find((item: any) => (
-            item?.suggestedTime && timeRangesOverlap(suggestedTime, effectiveDuration, String(item.suggestedTime), item.durationMinutes)
-          ));
-
-          if (appointmentConflict || preReservationConflict) {
+          if (!selectedDoctor) {
             skippedConflicts += 1;
             continue;
           }
@@ -2202,8 +2353,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               patientId: therapy.pit.teaProfile.patient.id,
               procedureId: therapy.procedureId || null,
               procedureName: therapy.therapyType || null,
-              professionalDoctorId: therapy.professionalDoctorId || null,
-              professionalName: therapy.professional || null,
+              professionalDoctorId: selectedDoctor.professionalDoctorId,
+              professionalName: selectedDoctor.professionalName || preferredDoctorName,
               status: acceptedStatusForTherapy,
               suggestedDate: candidateDate,
               suggestedTime,
@@ -3314,4 +3465,3 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     return { items: itemsWithAttachments, total };
   });
 }
-
