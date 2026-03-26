@@ -1470,3 +1470,28 @@ model WhatsAppMessageLog {
     @@index([createdAt])
     @@map("whatsapp_message_logs")
 }
+
+enum LeadStatus {
+    NEW
+    CONTACTED
+    QUALIFIED
+    LOST
+}
+
+model Lead {
+    id          String     @id @default(uuid())
+    name        String
+    email       String
+    phone       String?
+    companyName String?
+    message     String?    @db.Text
+    source      String?
+    status      LeadStatus @default(NEW)
+    createdAt   DateTime   @default(now())
+    updatedAt   DateTime   @updatedAt
+
+    @@index([status])
+    @@index([createdAt])
+    @@index([email])
+    @@map("leads")
+}
