@@ -8,6 +8,7 @@ import reportTemplateRoutes from './routes/report-templates';
 import reportPhraseRoutes from './routes/report-phrases';
 import reportConfigRoutes from './routes/report-config';
 import reportAddendumRoutes from './routes/report-addendums';
+import reportAuditLogRoutes from './routes/report-audit-logs';
 import documentRoutes from './routes/documents';
 import teaProfilesRoutes from './routes/tea-profiles';
 import teaPreReservationsRoutes from './routes/tea-pre-reservations';
@@ -34,6 +35,7 @@ export default async function careModule(app: FastifyInstance) {
   app.register(reportPhraseRoutes, { prefix: '/report-phrases' });
   app.register(reportConfigRoutes, { prefix: '/report-config' });
   app.register(reportAddendumRoutes, { prefix: '/report-addendums' });
+  app.register(reportAuditLogRoutes, { prefix: '/report-audit-logs' });
   app.register(documentRoutes, { prefix: '/documents' });
   app.register(teaProfilesRoutes, { prefix: '/tea-profiles' });
   app.register(teaPreReservationsRoutes, { prefix: '/tea-pre-reservations' });

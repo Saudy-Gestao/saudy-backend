@@ -3,14 +3,38 @@ import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
 export default async function reportRoutes(app: FastifyInstance) {
-  const getLoggedBranchId = async (request: any) => {
+  const getLoggedUser = async (request: any) => {
     const userId = (request.user as any)?.id;
-    if (!userId) return null;
+    if (!userId) return { userId: null, userName: null, branchId: null };
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { sector: { include: { branch: true } } },
     });
-    return user?.sector?.branch?.id || null;
+    return {
+      userId: user?.id || null,
+      userName: (user as any)?.name || null,
+      branchId: user?.sector?.branch?.id || null,
+    };
+  };
+
+  const getLoggedBranchId = async (request: any) => {
+    const { branchId } = await getLoggedUser(request);
+    return branchId;
+  };
+
+  const createAuditLog = async (params: {
+    branchId: string;
+    reportId?: string;
+    action: string;
+    performedByUserId?: string | null;
+    performedByName?: string | null;
+    details?: string;
+  }) => {
+    try {
+      await prisma.reportAuditLog.create({ data: params });
+    } catch {
+      // audit log failures must not break the main operation
+    }
   };
 
   app.addHook('onRequest', async (request, reply) => {
@@ -66,6 +90,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         include: {
           appointment: { select: { id: true, patientName: true, patientCpf: true, specialty: true, date: true, time: true, doctorName: true, convenio: true } },
           worklistItem: { select: { id: true, dicomStudyUid: true, dicomUrl: true, dicomReceivedAt: true } },
+          addendums: { where: { isActive: true }, select: { id: true } },
         },
       }),
       prisma.report.count({ where }),
@@ -130,7 +155,7 @@ export default async function reportRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const { branchId, userId, userName } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const data = request.body as any;
@@ -177,6 +202,21 @@ export default async function reportRoutes(app: FastifyInstance) {
         reviewerSignedAt: data.reviewerSignedAt || null,
       } });
 
+      await createAuditLog({
+        branchId,
+        reportId: item.id,
+        action: 'laudo_criado',
+        performedByUserId: userId,
+        performedByName: userName,
+        details: JSON.stringify({
+          status: item.status,
+          paciente: item.patientName,
+          exame: item.exam,
+          medicoSolicitante: item.requestingDoctor,
+          medicoLaudador: item.reportingDoctor,
+        }),
+      });
+
       return reply.code(201).send(item);
     } catch (err: any) {
       request.log.error({ err }, 'Failed to create report');
@@ -219,7 +259,7 @@ export default async function reportRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const { branchId, userId, userName } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
@@ -247,6 +287,52 @@ export default async function reportRoutes(app: FastifyInstance) {
       }
 
       const item = await prisma.report.update({ where: { id }, data: { ...data, branchId } });
+
+      // Determine the most descriptive action label for meaningful status transitions
+      let action = 'laudo_atualizado';
+      if (data.status && data.status !== existing.status) {
+        if (data.status === 'finalizado') {
+          action = 'laudo_finalizado';
+        } else if (existing.status === 'finalizado') {
+          action = 'laudo_desfinalizado';
+        } else {
+          action = 'laudo_status_alterado';
+        }
+      } else if (data.issuerSignedAt && !existing.issuerSignedAt) {
+        action = 'laudo_assinado_emissor';
+      } else if (data.reviewerSignedAt && !existing.reviewerSignedAt) {
+        action = 'laudo_assinado_revisor';
+      } else if (data.description !== undefined) {
+        action = 'laudo_conteudo_alterado';
+      }
+
+      const auditDetails: Record<string, any> = {};
+      if (data.status && data.status !== existing.status) {
+        auditDetails.statusAnterior = existing.status;
+        auditDetails.statusNovo = data.status;
+      }
+      if (data.description !== undefined && data.description !== existing.description) {
+        auditDetails.conteudoAnterior = existing.description || '';
+        auditDetails.conteudoNovo = data.description || '';
+      }
+      if (data.issuerSignedAt !== undefined) {
+        auditDetails.assinaturaEmissor = data.issuerSignedAt;
+      }
+      if (data.reviewerSignedAt !== undefined) {
+        auditDetails.assinaturaRevisor = data.reviewerSignedAt;
+      }
+      auditDetails.medicoEmissor = item.issuerSignedAt ? (item.reportingDoctor || userName) : null;
+      auditDetails.medicoRevisor = item.reviewerSignedAt ? (item.reviewingDoctor || null) : null;
+
+      await createAuditLog({
+        branchId,
+        reportId: id,
+        action,
+        performedByUserId: userId,
+        performedByName: userName,
+        details: JSON.stringify(auditDetails),
+      });
+
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update report');
@@ -261,13 +347,20 @@ export default async function reportRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const { branchId, userId, userName } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
     const existing = await prisma.report.findFirst({ where: { id, branchId } });
     if (!existing) return reply.code(404).send({ error: 'Report not found' });
     await prisma.report.delete({ where: { id } });
+    await createAuditLog({
+      branchId,
+      reportId: id,
+      action: 'laudo_excluido',
+      performedByUserId: userId,
+      performedByName: userName,
+    });
     return { message: 'Deleted' };
   });
 }

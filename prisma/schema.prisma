@@ -990,6 +990,22 @@ model ReportAddendum {
     @@map("report_addendums")
 }
 
+model ReportAuditLog {
+    id                String   @id @default(uuid())
+    branchId          String
+    reportId          String?
+    addendumId        String?
+    action            String
+    performedByUserId String?
+    performedByName   String?
+    details           String?
+    createdAt         DateTime @default(now())
+
+    @@index([branchId, createdAt])
+    @@index([reportId])
+    @@map("report_audit_logs")
+}
+
 model ReportTemplate {
     id        String   @id @default(uuid())
     branchId  String?
