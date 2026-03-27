@@ -337,6 +337,7 @@ export default async function authRoutes(app: FastifyInstance) {
       sector,
       user,
       accesses,
+      modulo,
     } = request.body as {
       company: {
         cnpj: string;
@@ -366,6 +367,7 @@ export default async function authRoutes(app: FastifyInstance) {
         description: string;
       }[];
       branchesCount?: number;
+      modulo?: string;
     };
 
     try {
@@ -386,6 +388,7 @@ export default async function authRoutes(app: FastifyInstance) {
           data: {
             ...company,
             cnpj: normalizedCnpj,
+            module_type: modulo || 'padrao',
           },
         });
 
@@ -464,6 +467,18 @@ export default async function authRoutes(app: FastifyInstance) {
 
       const token = app.jwt.sign({ id: result.user.id, email: result.user.email });
 
+      // Enviar e-mail de boas-vindas
+      try {
+        const transporter = require('../lib/mailer');
+        if (result.user.email && user.password) {
+          const to = result.user.email;
+          const subject = 'Bem-vindo ao Saudy!';
+          const html = `<div style="font-family:Arial,sans-serif;font-size:16px;color:#222"><h2>Bem-vindo ao Saudy!</h2><p>Seu acesso foi criado com sucesso.</p><p><b>Login:</b> ${result.user.email}<br/><b>Senha:</b> ${user.password}</p><p>Recomendamos alterar a senha após o primeiro acesso.</p></div>`;
+          await transporter.getTransporter()?.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@saudy.local', to, subject, html });
+        }
+      } catch (e) {
+        console.warn('Falha ao enviar e-mail de boas-vindas:', e);
+      }
       return {
         company: result.company,
         branches: result.branches,
