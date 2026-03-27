@@ -59,6 +59,7 @@ model Company {
     tradeName String
     address   String
     phone     String
+    module_type String  @default("padrao") // 'padrao', 'tea', 'apenas-tea'
     branches  Branch[]
 
     @@map("companies")

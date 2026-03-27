@@ -12,6 +12,7 @@ export const swaggerComponents = {
         tradeName: { type: 'string' },
         address: { type: 'string' },
         phone: { type: 'string' },
+        module_type: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
       },
       example: {
         id: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc',
@@ -20,6 +21,7 @@ export const swaggerComponents = {
         tradeName: 'ACME',
         address: 'Rua Exemplo, 123',
         phone: '+55 11 99999-9999',
+        module_type: 'padrao',
       },
     },
     CompanyCreate: {
@@ -30,6 +32,7 @@ export const swaggerComponents = {
         tradeName: { type: 'string' },
         address: { type: 'string' },
         phone: { type: 'string' },
+        module_type: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
       },
       required: ['cnpj', 'legalName', 'tradeName'],
       example: {
@@ -38,6 +41,7 @@ export const swaggerComponents = {
         tradeName: 'ACME',
         address: 'Rua Exemplo, 123',
         phone: '+55 11 99999-9999',
+        module_type: 'padrao',
       },
     },
     Branch: {
@@ -298,15 +302,17 @@ export const swaggerComponents = {
         user: { $ref: '#/components/schemas/UserCreateForRegister' },
         accesses: { type: 'array', items: { $ref: '#/components/schemas/AccessCreate' } },
         branchesCount: { type: 'integer', minimum: 1 },
+        modulo: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
       },
       required: ['company', 'branch', 'sector', 'user'],
       example: {
-        company: { cnpj: '00.000.000/0000-00', legalName: 'ACME Indústria e Comércio Ltda', tradeName: 'ACME', address: 'Rua Exemplo, 123', phone: '+55 11 99999-9999' },
+        company: { cnpj: '00.000.000/0000-00', legalName: 'ACME Indústria e Comércio Ltda', tradeName: 'ACME', address: 'Rua Exemplo, 123', phone: '+55 11 99999-9999', module_type: 'tea' },
         branch: { tradeName: 'ACME', address: 'Av. Central, 1', phone: '+55 11 98888-8888' },
         sector: { name: 'Vendas', description: 'Setor de vendas' },
         user: { name: 'João Silva', birthDate: '1990-01-01', email: 'joao@example.com', password: 'supersecret', phone: '+55 11 97777-7777', address: 'Rua Exemplo, 10' },
         accesses: [{ description: 'Acesso de administrador' }],
         branchesCount: 3,
+        modulo: 'tea',
       },
     },
     LoginRequest: {
@@ -351,6 +357,7 @@ export const ajvSchemas: Record<string, any> = {
       tradeName: { type: 'string' },
       address: { type: 'string' },
       phone: { type: 'string' },
+      module_type: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
     },
   },
   CompanyCreate: {
@@ -361,6 +368,7 @@ export const ajvSchemas: Record<string, any> = {
       tradeName: { type: 'string' },
       address: { type: 'string' },
       phone: { type: 'string' },
+      module_type: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
     },
     required: ['cnpj', 'legalName', 'tradeName'],
   },
@@ -511,6 +519,7 @@ export const ajvSchemas: Record<string, any> = {
       sector: { $ref: 'SectorCreateForRegister#' },
       user: { $ref: 'UserCreateForRegister#' },
       accesses: { type: 'array', items: { $ref: 'AccessCreate#' } },
+      modulo: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
     },
     required: ['company', 'branch', 'sector', 'user'],
   },
