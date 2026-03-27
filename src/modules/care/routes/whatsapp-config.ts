@@ -546,7 +546,11 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       .replace(/\{\{data\}\}/gi, '18/03/2026 (Quarta-feira)')
       .replace(/\{\{hora\}\}/gi, '14:00')
       .replace(/\{\{convenio\}\}/gi, 'Plano Saúdy')
-      .replace(/\{\{observacoes\}\}/gi, '-');
+      .replace(/\{\{observacoes\}\}/gi, '-')
+      .replace(/\{\{profissional\}\}/gi, 'Dra. Mariana Souza')
+      .replace(/\{\{local\}\}/gi, 'Clínica Saúdy - Unidade Centro')
+      .replace(/\{\{link_documentos\}\}/gi, 'https://saudy.app/documentos')
+      .replace(/\{\{clinica_nome\}\}/gi, 'Clínica Saúdy');
 
     const body = new URLSearchParams({
       elementName: template.hsmTemplateName,
@@ -558,6 +562,13 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       example: exampleMessage,
       enableSample: 'true',
     });
+
+    if (template.type === 'APPOINTMENT_CONFIRMATION') {
+      body.append('buttons', JSON.stringify([
+        { type: 'QUICK_REPLY', text: 'Confirmar' },
+        { type: 'QUICK_REPLY', text: 'Reagendar' },
+      ]));
+    }
 
     console.log('[push-to-gupshup] sending body:', body.toString());
 
