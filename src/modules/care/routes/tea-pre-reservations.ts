@@ -783,6 +783,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                     id: true,
                     name: true,
                     cpf: true,
+                    birthDate: true,
                     hasHealthInsurance: true,
                     healthInsuranceName: true,
                   },
@@ -818,6 +819,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
                     id: true,
                     name: true,
                     cpf: true,
+                    birthDate: true,
                     hasHealthInsurance: true,
                     healthInsuranceName: true,
                   },
@@ -3419,7 +3421,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       prisma.teaPreReservation.findMany({
         where,
         include: {
-          patient: { select: { id: true, name: true, cpf: true } },
+          patient: { select: { id: true, name: true, cpf: true, birthDate: true } },
         },
         orderBy: { createdAt: 'desc' },
         take: limit,

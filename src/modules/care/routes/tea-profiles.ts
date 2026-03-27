@@ -92,6 +92,9 @@ async function resolveAppointmentIdsForConvertedReservations(tx: any, reservatio
   const dates = normalized.map((reservation: any) => reservation.date).sort();
   const fromDate = dates[0];
   const toDate = dates[dates.length - 1];
+  const slotSignatures = new Set(
+    normalized.map((reservation: any) => `${reservation.patientId}#${reservation.date}#${reservation.time}`),
+  );
   const signatures = new Set(
     normalized.map((reservation: any) => `${reservation.patientId}#${reservation.doctorName}#${reservation.date}#${reservation.time}`),
   );
@@ -125,6 +128,8 @@ async function resolveAppointmentIdsForConvertedReservations(tx: any, reservatio
       const observationText = String(appointment?.observations || '');
       const matchesObservation = reservationIds.some((reservationId) => observationText.includes(reservationId));
       if (matchesObservation) return true;
+      const slotSignature = `${String(appointment?.patientId || '')}#${String(appointment?.date || '')}#${String(appointment?.time || '')}`;
+      if (slotSignatures.has(slotSignature)) return true;
       const signature = `${String(appointment?.patientId || '')}#${normalizeDoctorName(appointment?.doctorName)}#${String(appointment?.date || '')}#${String(appointment?.time || '')}`;
       return signatures.has(signature);
     })
@@ -1664,4 +1669,3 @@ export default async function teaProfilesRoutes(app: FastifyInstance) {
     return reply.code(201).send(resultPit);
   });
 }
-

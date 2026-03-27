@@ -17,6 +17,13 @@ type AuthorizedBranchContext = {
   publicCheckInEnabled: boolean;
 };
 
+type RequestAccessContext = {
+  id?: string;
+  companyId?: string | null;
+  branchId?: string | null;
+  admHubOnly?: boolean;
+};
+
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
 const CLOSED_PRE_ATTENDANCE_STATUSES = new Set(['FINALIZADO', 'FINALIZADA', 'CANCELADO', 'CANCELADA']);
 const ADVANCED_PRE_ATTENDANCE_STATUSES = new Set([
@@ -155,13 +162,26 @@ const formatAppointmentSummary = (appointment: {
   doctorName?: string | null;
 }) => [appointment.time, appointment.specialty, appointment.doctorName].filter(Boolean).join(' • ');
 
-const getAuthorizedBranchContext = async (userId: string, branchId: string): Promise<AuthorizedBranchContext | null> => {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { sector: { include: { branch: true } } },
-  });
+const getAuthorizedBranchContext = async (
+  requestUser: RequestAccessContext,
+  branchId: string,
+): Promise<AuthorizedBranchContext | null> => {
+  if (requestUser?.admHubOnly) {
+    return null;
+  }
 
-  if (!user?.sector?.branch?.companyId) {
+  let companyId = String(requestUser?.companyId || '').trim() || null;
+
+  if (!companyId && requestUser?.id) {
+    const user = await prisma.user.findUnique({
+      where: { id: requestUser.id },
+      include: { sector: { include: { branch: true } } },
+    });
+
+    companyId = user?.sector?.branch?.companyId || null;
+  }
+
+  if (!companyId) {
     return null;
   }
 
@@ -180,7 +200,7 @@ const getAuthorizedBranchContext = async (userId: string, branchId: string): Pro
     },
   });
 
-  if (!branch || branch.companyId !== user.sector.branch.companyId) {
+  if (!branch || branch.companyId !== companyId) {
     return null;
   }
 
@@ -210,9 +230,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { branchId } = request.params as { branchId: string };
-    const userId = (request.user as any).id as string;
-
-    const branch = await getAuthorizedBranchContext(userId, branchId);
+    const branch = await getAuthorizedBranchContext(request.user as RequestAccessContext, branchId);
 
     if (!branch) {
       return reply.code(403).send({ error: 'Acesso negado para esta filial.' });
@@ -259,8 +277,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'branchId is required' });
     }
 
-    const userId = (request.user as any).id as string;
-    const authorizedBranch = await getAuthorizedBranchContext(userId, branchId);
+    const authorizedBranch = await getAuthorizedBranchContext(request.user as RequestAccessContext, branchId);
 
     if (!authorizedBranch) {
       return reply.code(403).send({ error: 'Acesso negado para esta filial.' });
