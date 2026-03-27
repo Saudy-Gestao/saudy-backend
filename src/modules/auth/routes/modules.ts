@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { filterModulesForCompanyType, getRequestCompanyModuleType } from '../lib/module-type-access';
 
 export default async function moduleRoutes(app: FastifyInstance) {
   // List all modules
@@ -9,16 +10,24 @@ export default async function moduleRoutes(app: FastifyInstance) {
       summary: 'List all modules',
       tags: ['Modules'],
       security: [{ bearerAuth: [] }],
-      response: { 200: { type: 'array' } },
+      response: {
+        200: { type: 'array' },
+        403: { type: 'object', properties: { error: { type: 'string' } } },
+      },
     },
   }, async (request, reply) => {
+    const moduleType = await getRequestCompanyModuleType((request.user as any).id as string);
+    if (!moduleType) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
+    }
+
     const modules = await prisma.module.findMany({
       orderBy: [
         { category: 'asc' },
         { label: 'asc' },
       ],
     });
-    return modules;
+    return filterModulesForCompanyType(modules, moduleType);
   });
 
   // Get a module by ID

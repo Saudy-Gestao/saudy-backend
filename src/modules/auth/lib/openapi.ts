@@ -358,6 +358,7 @@ export const ajvSchemas: Record<string, any> = {
       address: { type: 'string' },
       phone: { type: 'string' },
       module_type: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
+      additionalBranchesAllowed: { type: 'integer', minimum: 0 },
     },
   },
   CompanyCreate: {
@@ -369,6 +370,7 @@ export const ajvSchemas: Record<string, any> = {
       address: { type: 'string' },
       phone: { type: 'string' },
       module_type: { type: 'string', enum: ['padrao', 'tea', 'apenas-tea'] },
+      additionalBranchesAllowed: { type: 'integer', minimum: 0 },
     },
     required: ['cnpj', 'legalName', 'tradeName'],
   },

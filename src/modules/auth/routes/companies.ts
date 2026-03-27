@@ -8,6 +8,25 @@ import {
 } from '../lib/cnpj';
 
 export default async function companyRoutes(app: FastifyInstance) {
+  const getScopedCompanyId = async (requestUser: any) => {
+    if (requestUser?.admHubOnly) {
+      return { isAdmHubOnly: true as const, companyId: null };
+    }
+
+    const userId = requestUser?.id as string | undefined;
+    if (!userId) return null;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+
+    return {
+      isAdmHubOnly: false as const,
+      companyId: user?.sector?.branch?.companyId || null,
+    };
+  };
+
   // Example route to list companies
   app.get('/companies', {
     preHandler: async (request, reply) => { await request.jwtVerify(); },
@@ -18,20 +37,27 @@ export default async function companyRoutes(app: FastifyInstance) {
       response: { 200: { type: 'array', items: { $ref: 'Company#' } }, 403: { type: 'object' } },
     },
   }, async (request, reply) => {
-    // Get logged user's company ID
-    const userId = (request.user as any).id;
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: { sector: { include: { branch: true } } },
-    });
-    
-    if (!user?.sector?.branch?.companyId) {
+    const scope = await getScopedCompanyId(request.user);
+
+    if (!scope) {
       return reply.code(403).send({ error: 'User not associated with a company' });
     }
-    
-    // Return only user's company
+
+    if (scope.isAdmHubOnly) {
+      return prisma.company.findMany({
+        orderBy: [
+          { tradeName: 'asc' },
+          { legalName: 'asc' },
+        ],
+      });
+    }
+
+    if (!scope.companyId) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
+    }
+
     const companies = await prisma.company.findMany({
-      where: { id: user.sector.branch.companyId },
+      where: { id: scope.companyId },
     });
     return companies;
   });
@@ -51,12 +77,14 @@ export default async function companyRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const { cnpj, legalName, tradeName, address, phone } = request.body as {
+    const { cnpj, legalName, tradeName, address, phone, module_type, additionalBranchesAllowed } = request.body as {
       cnpj: string;
       legalName: string;
       tradeName: string;
       address: string;
       phone: string;
+      module_type?: 'padrao' | 'tea' | 'apenas-tea';
+      additionalBranchesAllowed?: number;
     };
 
     const normalizedCnpj = normalizeCnpj(cnpj);
@@ -70,7 +98,15 @@ export default async function companyRoutes(app: FastifyInstance) {
     }
 
     const company = await prisma.company.create({
-      data: { cnpj: normalizedCnpj, legalName, tradeName, address, phone },
+      data: {
+        cnpj: normalizedCnpj,
+        legalName,
+        tradeName,
+        address,
+        phone,
+        module_type,
+        additionalBranchesAllowed: Math.max(0, Number(additionalBranchesAllowed || 0)),
+      },
     });
     return company;
   });
@@ -83,16 +119,31 @@ export default async function companyRoutes(app: FastifyInstance) {
       tags: ['Companies'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { $ref: 'Company#' }, 404: { type: 'object' } },
+      response: {
+        200: { $ref: 'Company#' },
+        403: { type: 'object' },
+        404: { type: 'object' },
+      },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const scope = await getScopedCompanyId(request.user);
+
+    if (!scope) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
+    }
+
     const company = await prisma.company.findUnique({
       where: { id },
     });
     if (!company) {
       return reply.code(404).send({ error: 'Company not found' });
     }
+
+    if (!scope.isAdmHubOnly && scope.companyId !== company.id) {
+      return reply.code(403).send({ error: 'Company outside of your scope' });
+    }
+
     return company;
   });
 
@@ -108,21 +159,42 @@ export default async function companyRoutes(app: FastifyInstance) {
       response: {
         200: { $ref: 'Company#' },
         400: { type: 'object' },
+        403: { type: 'object' },
         404: { type: 'object' },
         409: { type: 'object' },
       },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { cnpj, legalName, tradeName, address, phone } = request.body as {
+    const scope = await getScopedCompanyId(request.user);
+    const { cnpj, legalName, tradeName, address, phone, module_type, additionalBranchesAllowed } = request.body as {
       cnpj?: string;
       legalName?: string;
       tradeName?: string;
       address?: string;
       phone?: string;
+      module_type?: 'padrao' | 'tea' | 'apenas-tea';
+      additionalBranchesAllowed?: number;
     };
 
+    if (!scope) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
+    }
+
     try {
+      const existing = await prisma.company.findUnique({
+        where: { id },
+        select: { id: true },
+      });
+
+      if (!existing) {
+        return reply.code(404).send({ error: 'Company not found' });
+      }
+
+      if (!scope.isAdmHubOnly && scope.companyId !== id) {
+        return reply.code(403).send({ error: 'Company outside of your scope' });
+      }
+
       let normalizedCnpj: string | undefined;
       if (typeof cnpj === 'string') {
         normalizedCnpj = normalizeCnpj(cnpj);
@@ -138,7 +210,17 @@ export default async function companyRoutes(app: FastifyInstance) {
 
       const company = await prisma.company.update({
         where: { id },
-        data: { cnpj: normalizedCnpj, legalName, tradeName, address, phone },
+        data: {
+          cnpj: normalizedCnpj,
+          legalName,
+          tradeName,
+          address,
+          phone,
+          module_type,
+          additionalBranchesAllowed: additionalBranchesAllowed === undefined
+            ? undefined
+            : Math.max(0, Number(additionalBranchesAllowed || 0)),
+        },
       });
       return company;
     } catch (error) {
@@ -158,10 +240,20 @@ export default async function companyRoutes(app: FastifyInstance) {
       tags: ['Companies'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { type: 'object', example: { message: 'Company deleted' } }, 404: { type: 'object' } },
+      response: {
+        200: { type: 'object', example: { message: 'Company deleted' } },
+        403: { type: 'object' },
+        404: { type: 'object' },
+      },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const scope = await getScopedCompanyId(request.user);
+
+    if (!scope?.isAdmHubOnly) {
+      return reply.code(403).send({ error: 'Only ADM Hub can delete companies' });
+    }
+
     try {
       await prisma.company.delete({
         where: { id },

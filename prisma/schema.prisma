@@ -53,14 +53,15 @@ enum PreSchedulingStatus {
 }
 
 model Company {
-    id        String   @id @default(uuid())
-    cnpj      String   @unique
-    legalName String
-    tradeName String
-    address   String
-    phone     String
-    module_type String  @default("padrao") // 'padrao', 'tea', 'apenas-tea'
-    branches  Branch[]
+    id                       String   @id @default(uuid())
+    cnpj                     String   @unique
+    legalName                String
+    tradeName                String
+    address                  String
+    phone                    String
+    module_type              String   @default("padrao") // 'padrao', 'tea', 'apenas-tea'
+    additionalBranchesAllowed Int      @default(0)
+    branches                 Branch[]
 
     @@map("companies")
 }

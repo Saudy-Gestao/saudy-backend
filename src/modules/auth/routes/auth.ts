@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { sendAdminRegisterCodeEmail, sendPasswordResetCodeEmail } from '../lib/mailer';
+import { sendAdminRegisterCodeEmail, sendPasswordResetCodeEmail, sendWelcomeEmail } from '../lib/mailer';
 import { Prisma } from '@prisma/client';
 import {
   findCompanyByNormalizedCnpj,
@@ -337,6 +337,7 @@ export default async function authRoutes(app: FastifyInstance) {
       sector,
       user,
       accesses,
+      branchesCount,
       modulo,
     } = request.body as {
       company: {
@@ -389,6 +390,7 @@ export default async function authRoutes(app: FastifyInstance) {
             ...company,
             cnpj: normalizedCnpj,
             module_type: modulo || 'padrao',
+            additionalBranchesAllowed: Math.max(0, Number(branchesCount || 0)),
           },
         });
 
@@ -469,12 +471,13 @@ export default async function authRoutes(app: FastifyInstance) {
 
       // Enviar e-mail de boas-vindas
       try {
-        const transporter = require('../lib/mailer');
         if (result.user.email && user.password) {
-          const to = result.user.email;
-          const subject = 'Bem-vindo ao Saudy!';
-          const html = `<div style="font-family:Arial,sans-serif;font-size:16px;color:#222"><h2>Bem-vindo ao Saudy!</h2><p>Seu acesso foi criado com sucesso.</p><p><b>Login:</b> ${result.user.email}<br/><b>Senha:</b> ${user.password}</p><p>Recomendamos alterar a senha após o primeiro acesso.</p></div>`;
-          await transporter.getTransporter()?.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@saudy.local', to, subject, html });
+          await sendWelcomeEmail({
+            to: result.user.email,
+            login: result.user.email,
+            password: user.password,
+            userName: result.user.name,
+          });
         }
       } catch (e) {
         console.warn('Falha ao enviar e-mail de boas-vindas:', e);
