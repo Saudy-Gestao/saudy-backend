@@ -17,6 +17,19 @@ export interface SendTemplateParams {
   params: string[]; // Ordered values matching {{1}}, {{2}}, ... in the HSM template
 }
 
+export interface QuickReplyOption {
+  title: string;
+  postbackText?: string;
+}
+
+export interface SendQuickReplyParams {
+  to: string;
+  body: string;
+  footer?: string;
+  msgId?: string;
+  options: QuickReplyOption[];
+}
+
 export interface SendMessageResponse {
   status: 'success' | 'error';
   messageId?: string;
@@ -97,6 +110,58 @@ export class GupshupService {
       return {
         status: 'error',
         error: errorMessage + hint,
+      };
+    }
+  }
+
+  async sendQuickReplyMessage(params: SendQuickReplyParams): Promise<SendMessageResponse> {
+    try {
+      const destinationNumber = this.normalizePhoneNumber(params.to);
+
+      const message = {
+        type: 'quick_reply',
+        ...(params.msgId ? { msgid: params.msgId } : {}),
+        content: {
+          type: 'text',
+          text: params.body,
+          ...(params.footer ? { caption: params.footer } : {}),
+        },
+        options: params.options.map((option) => ({
+          type: 'text',
+          title: option.title,
+          ...(option.postbackText ? { postbackText: option.postbackText } : {}),
+        })),
+      };
+
+      const data = new URLSearchParams({
+        channel: 'whatsapp',
+        source: this.sourceNumber,
+        destination: destinationNumber,
+        'src.name': this.appName,
+        message: JSON.stringify(message),
+      });
+
+      const response = await this.client.post('/msg', data.toString());
+
+      console.log('[gupshup] quick-reply response', response.status, JSON.stringify(response.data));
+
+      if (response.data.status === 'submitted' || response.data.status === 'success') {
+        return {
+          status: 'success',
+          messageId: response.data.messageId,
+        };
+      }
+
+      return {
+        status: 'error',
+        error: response.data.message || JSON.stringify(response.data) || 'Erro desconhecido ao enviar quick reply',
+      };
+    } catch (error: any) {
+      const rawData = error.response?.data;
+      console.error('[gupshup] quick-reply error', error.response?.status, JSON.stringify(rawData));
+      return {
+        status: 'error',
+        error: rawData?.message || rawData?.error || JSON.stringify(rawData) || error.message,
       };
     }
   }
