@@ -3,6 +3,47 @@ import prisma from '../lib/prisma';
 import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
 
 export default async function whatsappConfigRoutes(app: FastifyInstance) {
+  const ACTIVE_TEMPLATE_TYPES = [
+    'APPOINTMENT_CREATED',
+    'APPOINTMENT_CONFIRMATION',
+    'NO_SHOW',
+    'CONFIRMATION_REPLY_CONFIRMED',
+    'CONFIRMATION_REPLY_RESCHEDULE',
+  ] as const;
+
+  const DEFAULT_TEMPLATES = [
+    {
+      type: 'APPOINTMENT_CREATED',
+      name: 'Resumo de Agendamento',
+      hsmTemplateName: 'resumo_agendamento',
+      message: 'Olá, {{paciente_nome}}! 😊\nSeu atendimento está confirmado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\n📎 Para agilizar seu atendimento, pedimos que envie seus documentos pelo link abaixo:\n👉 {{link_documentos}}\nEm caso de necessidade, fale conosco por aqui.\n{{clinica_nome}}',
+    },
+    {
+      type: 'APPOINTMENT_CONFIRMATION',
+      name: 'Confirmação de Agendamento',
+      hsmTemplateName: 'confirmacao_agendamento',
+      message: 'Olá, {{paciente_nome}}! 😊\nEstamos entrando em contato para confirmar seu agendamento:\n📅 Data: {{data}}\n⏰ Horário: {{hora}}\n👩‍⚕️ Profissional: {{profissional}}\n📍 Local: {{local}}\nPor favor, escolha uma das opções nos botões abaixo.\nFicamos no aguardo.\n{{clinica_nome}}',
+    },
+    {
+      type: 'CONFIRMATION_REPLY_CONFIRMED',
+      name: 'Resposta Confirmado',
+      hsmTemplateName: 'resposta_confirmado',
+      message: '✅ Agendamento confirmado com sucesso!\n📅 {{data}}\n⏰ {{hora}}\n👩‍⚕️ {{profissional}}\nQualquer imprevisto, fale conosco por este canal.\nAté breve! 💙\n{{clinica_nome}}',
+    },
+    {
+      type: 'CONFIRMATION_REPLY_RESCHEDULE',
+      name: 'Resposta Reagendar',
+      hsmTemplateName: 'resposta_reagendar',
+      message: 'Em breve um atendente entrará em contato para seguir com seu reagendamento.',
+    },
+    {
+      type: 'NO_SHOW',
+      name: 'Falta',
+      hsmTemplateName: 'falta_agendamento',
+      message: 'Olá, {{paciente_nome}}.\nNotamos que você não compareceu ao atendimento agendado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\nCaso tenha ocorrido algum imprevisto, pedimos que nos informe por aqui.\n{{clinica_nome}}',
+    },
+  ] as const;
+
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
     if (!userId) return null;
@@ -152,7 +193,12 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const templates = await prisma.whatsAppMessageTemplate.findMany({
-      where: { branchId },
+      where: {
+        branchId,
+        type: {
+          in: [...ACTIVE_TEMPLATE_TYPES],
+        },
+      },
       orderBy: { type: 'asc' },
     });
 
@@ -169,7 +215,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         properties: {
           type: { 
             type: 'string',
-            enum: ['APPOINTMENT_CREATED', 'APPOINTMENT_CONFIRMATION', 'APPOINTMENT_REMINDER', 'APPOINTMENT_CANCELED'],
+            enum: [...ACTIVE_TEMPLATE_TYPES],
           },
           name: { type: 'string' },
           message: { type: 'string' },
@@ -248,6 +294,75 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     });
 
     return template;
+  });
+
+  app.post('/whatsapp/templates/load-defaults', {
+    schema: {
+      summary: 'Load default WhatsApp templates',
+      tags: ['WhatsApp'],
+      response: {
+        200: { type: 'object' },
+        403: { type: 'object' },
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    let created = 0;
+    let updated = 0;
+
+    await prisma.whatsAppMessageTemplate.deleteMany({
+      where: {
+        branchId,
+        type: {
+          in: ['APPOINTMENT_REMINDER', 'APPOINTMENT_CANCELED'],
+        },
+      },
+    });
+
+    for (const item of DEFAULT_TEMPLATES) {
+      const existing = await prisma.whatsAppMessageTemplate.findUnique({
+        where: {
+          branchId_type: {
+            branchId,
+            type: item.type as any,
+          },
+        },
+      });
+
+      if (existing) {
+        await prisma.whatsAppMessageTemplate.update({
+          where: { id: existing.id },
+          data: {
+            name: item.name,
+            message: item.message,
+            hsmTemplateName: item.hsmTemplateName,
+            isActive: true,
+          },
+        });
+        updated += 1;
+      } else {
+        await prisma.whatsAppMessageTemplate.create({
+          data: {
+            branchId,
+            type: item.type as any,
+            name: item.name,
+            message: item.message,
+            hsmTemplateName: item.hsmTemplateName,
+            isActive: true,
+          },
+        });
+        created += 1;
+      }
+    }
+
+    return {
+      success: true,
+      created,
+      updated,
+      total: DEFAULT_TEMPLATES.length,
+    };
   });
 
   app.get('/whatsapp/templates/:id', {

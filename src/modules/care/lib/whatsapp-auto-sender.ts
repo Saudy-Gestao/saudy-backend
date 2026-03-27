@@ -2,7 +2,14 @@ import prisma from './prisma';
 import GupshupService from './gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from './whatsapp-message-builder';
 
-type WhatsAppMessageType = 'APPOINTMENT_CREATED' | 'APPOINTMENT_CONFIRMATION' | 'APPOINTMENT_REMINDER' | 'APPOINTMENT_CANCELED';
+type WhatsAppMessageType =
+  | 'APPOINTMENT_CREATED'
+  | 'APPOINTMENT_CONFIRMATION'
+  | 'APPOINTMENT_REMINDER'
+  | 'APPOINTMENT_CANCELED'
+  | 'NO_SHOW'
+  | 'CONFIRMATION_REPLY_CONFIRMED'
+  | 'CONFIRMATION_REPLY_RESCHEDULE';
 
 export interface SendWhatsAppParams {
   branchId: string;
@@ -71,6 +78,11 @@ export class WhatsAppAutoSender {
         return { success: false, error: 'Envio de lembrete está desativado' };
       }
 
+      const branch = await prisma.branch.findUnique({
+        where: { id: params.branchId },
+        select: { tradeName: true, address: true },
+      });
+
       const appointmentData: AppointmentData = {
         patientName: appointment.patientName,
         patientCpf: appointment.patientCpf,
@@ -80,6 +92,10 @@ export class WhatsAppAutoSender {
         time: appointment.time,
         convenio: appointment.convenio,
         observations: appointment.observations,
+        clinicName: branch?.tradeName || '',
+        location: branch?.tradeName || branch?.address || '',
+        professional: appointment.doctorName || '',
+        documentsLink: '',
       };
 
       // Buscar template de mensagem
@@ -123,8 +139,25 @@ export class WhatsAppAutoSender {
       });
 
       let result;
+      if (!params.customMessage && params.messageType === 'APPOINTMENT_CONFIRMATION') {
+        result = await gupshup.sendQuickReplyMessage({
+          to: patientPhone,
+          body: message,
+          msgId: messageLog.id,
+          options: [
+            { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
+            { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
+          ],
+        });
+
+        if (result.status === 'error') {
+          console.warn('[whatsapp-auto-sender] quick reply falhou, tentando HSM/text:', result.error);
+        }
+      }
+
       if (
-        !params.customMessage
+        (!result || result.status === 'error')
+        && !params.customMessage
         && templateRecord?.hsmTemplateApproved
         && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName)
       ) {
@@ -142,7 +175,9 @@ export class WhatsAppAutoSender {
             message,
           });
         }
-      } else {
+      }
+
+      if (!result || result.status === 'error') {
         result = await gupshup.sendTextMessage({
           to: patientPhone,
           message,

@@ -123,33 +123,7 @@ export class WhatsAppSchedulerJob {
    * Processa lembretes de agendamentos (similar ao de confirmações)
    */
   static async processReminders(): Promise<{ processed: number; sent: number; failed: number }> {
-    let processed = 0;
-    let sent = 0;
-    let failed = 0;
-
-    try {
-      // Buscar todas as branches com lembretes habilitados
-      const configs = await prisma.whatsAppNotificationConfig.findMany({
-        where: {
-          sendReminderEnabled: true,
-        },
-      });
-
-      for (const config of configs) {
-        const result = await this.processRemindersForBranch(
-          config.branchId,
-          config.reminderHoursBefore
-        );
-        processed += result.processed;
-        sent += result.sent;
-        failed += result.failed;
-      }
-
-      return { processed, sent, failed };
-    } catch (error) {
-      console.error('Error processing reminders:', error);
-      return { processed, sent, failed };
-    }
+    return { processed: 0, sent: 0, failed: 0 };
   }
 
   /**
@@ -159,72 +133,9 @@ export class WhatsAppSchedulerJob {
     branchId: string,
     hoursBefore: number
   ): Promise<{ processed: number; sent: number; failed: number }> {
-    let processed = 0;
-    let sent = 0;
-    let failed = 0;
-
-    try {
-      // Calcular janela de tempo
-      const targetDate = dayjs().add(hoursBefore, 'hour');
-      const dateStr = targetDate.format('YYYY-MM-DD');
-
-      // Buscar agendamentos para a data/hora alvo
-      const appointments = await prisma.appointment.findMany({
-        where: {
-          branchId,
-          date: dateStr,
-          status: {
-            not: 'CANCELADO',
-          },
-          isActive: true,
-        },
-      });
-
-      for (const appointment of appointments) {
-        processed++;
-
-        // Verificar se já enviou lembrete para este agendamento
-        const existingLog = await prisma.whatsAppMessageLog.findFirst({
-          where: {
-            appointmentId: appointment.id,
-            messageType: 'APPOINTMENT_REMINDER',
-            status: {
-              in: ['SENT', 'PENDING'],
-            },
-          },
-        });
-
-        if (existingLog) {
-          continue;
-        }
-
-        // Verificar horário
-        if (appointment.time) {
-          const appointmentHour = dayjs(`${dateStr} ${appointment.time}`);
-          const diffHours = appointmentHour.diff(dayjs(), 'hour');
-          
-          if (diffHours >= hoursBefore - 1 && diffHours <= hoursBefore + 1) {
-            const result = await WhatsAppAutoSender.sendMessage({
-              branchId,
-              appointmentId: appointment.id,
-              messageType: 'APPOINTMENT_REMINDER',
-            });
-
-            if (result.success) {
-              sent++;
-            } else {
-              failed++;
-              console.error(`Failed to send reminder for appointment ${appointment.id}:`, result.error);
-            }
-          }
-        }
-      }
-
-      return { processed, sent, failed };
-    } catch (error) {
-      console.error(`Error processing reminders for branch ${branchId}:`, error);
-      return { processed, sent, failed };
-    }
+    void branchId;
+    void hoursBefore;
+    return { processed: 0, sent: 0, failed: 0 };
   }
 }
 

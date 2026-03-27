@@ -3,7 +3,12 @@ import prisma from '../lib/prisma';
 import GupshupService from '../lib/gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from '../lib/whatsapp-message-builder';
 
-type WhatsAppMessageType = 'APPOINTMENT_CREATED' | 'APPOINTMENT_CONFIRMATION' | 'APPOINTMENT_REMINDER' | 'APPOINTMENT_CANCELED';
+type WhatsAppMessageType =
+  | 'APPOINTMENT_CREATED'
+  | 'APPOINTMENT_CONFIRMATION'
+  | 'NO_SHOW'
+  | 'CONFIRMATION_REPLY_CONFIRMED'
+  | 'CONFIRMATION_REPLY_RESCHEDULE';
 
 export default async function whatsappMessagesRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
@@ -35,9 +40,15 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         required: ['appointmentId', 'messageType'],
         properties: {
           appointmentId: { type: 'string' },
-          messageType: { 
+          messageType: {
             type: 'string',
-            enum: ['APPOINTMENT_CREATED', 'APPOINTMENT_CONFIRMATION', 'APPOINTMENT_REMINDER', 'APPOINTMENT_CANCELED'],
+            enum: [
+              'APPOINTMENT_CREATED',
+              'APPOINTMENT_CONFIRMATION',
+              'NO_SHOW',
+              'CONFIRMATION_REPLY_CONFIRMED',
+              'CONFIRMATION_REPLY_RESCHEDULE',
+            ],
           },
           customMessage: { type: 'string' },
         },
@@ -82,6 +93,11 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         });
       }
 
+      const branch = await prisma.branch.findUnique({
+        where: { id: branchId },
+        select: { tradeName: true, address: true },
+      });
+
       // Buscar configuração do WhatsApp
       const whatsappConfig = await prisma.whatsAppConfig.findUnique({
         where: { branchId },
@@ -125,6 +141,10 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
           time: appointment.time,
           convenio: appointment.convenio,
           observations: appointment.observations,
+          clinicName: branch?.tradeName || '',
+          location: branch?.tradeName || branch?.address || '',
+          professional: appointment.doctorName || '',
+          documentsLink: '',
         };
 
         message = WhatsAppMessageBuilder.buildMessage(template.message, appointmentData);
@@ -157,7 +177,23 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         where: { branchId, type: data.messageType, isActive: true },
       });
 
-      if ((templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName) && !data.customMessage) {
+      if (!data.customMessage && data.messageType === 'APPOINTMENT_CONFIRMATION') {
+        result = await gupshup.sendQuickReplyMessage({
+          to: patientPhone,
+          body: message,
+          msgId: messageLog.id,
+          options: [
+            { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
+            { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
+          ],
+        });
+
+        if (result.status === 'error') {
+          console.warn('[whatsapp-send] quick reply falhou, tentando HSM/text:', result.error);
+        }
+      }
+
+      if ((!result || result.status === 'error') && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName) && !data.customMessage) {
         const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
           patientName: appointment.patientName,
           patientCpf: appointment.patientCpf,
@@ -167,6 +203,10 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
           time: appointment.time,
           convenio: appointment.convenio,
           observations: appointment.observations,
+          clinicName: branch?.tradeName || '',
+          location: branch?.tradeName || branch?.address || '',
+          professional: appointment.doctorName || '',
+          documentsLink: '',
         });
         result = await gupshup.sendTemplateMessage({
           to: patientPhone,
@@ -177,7 +217,9 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
           console.warn('[whatsapp-send] HSM template falhou, tentando session text:', result.error);
           result = await gupshup.sendTextMessage({ to: patientPhone, message });
         }
-      } else {
+      }
+
+      if (!result || result.status === 'error') {
         result = await gupshup.sendTextMessage({ to: patientPhone, message });
       }
 
@@ -429,6 +471,11 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Agendamento não encontrado' });
     }
 
+    const branch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { tradeName: true, address: true },
+    });
+
     const appointmentData: AppointmentData = {
       patientName: appointment.patientName,
       patientCpf: appointment.patientCpf,
@@ -438,6 +485,10 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       time: appointment.time,
       convenio: appointment.convenio,
       observations: appointment.observations,
+      clinicName: branch?.tradeName || '',
+      location: branch?.tradeName || branch?.address || '',
+      professional: appointment.doctorName || '',
+      documentsLink: '',
     };
 
     const previewMessage = WhatsAppMessageBuilder.buildMessage(data.template, appointmentData);

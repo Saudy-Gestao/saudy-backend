@@ -12,6 +12,10 @@ export interface AppointmentData {
   time?: string | null;
   convenio?: string | null;
   observations?: string | null;
+  clinicName?: string | null;
+  location?: string | null;
+  professional?: string | null;
+  documentsLink?: string | null;
 }
 
 /**
@@ -26,6 +30,10 @@ export interface AppointmentData {
  * - {{hora}} - Hora do agendamento
  * - {{convenio}} - Convênio
  * - {{observacoes}} - Observações
+ * - {{clinica_nome}} - Nome da clínica/filial
+ * - {{local}} - Local do atendimento
+ * - {{profissional}} - Nome do profissional
+ * - {{link_documentos}} - Link para envio de documentos
  */
 export class WhatsAppMessageBuilder {
   /**
@@ -43,6 +51,10 @@ export class WhatsAppMessageBuilder {
     message = message.replace(/\{\{hora\}\}/gi, data.time || '');
     message = message.replace(/\{\{convenio\}\}/gi, data.convenio || '');
     message = message.replace(/\{\{observacoes\}\}/gi, data.observations || '');
+    message = message.replace(/\{\{clinica_nome\}\}/gi, data.clinicName || '');
+    message = message.replace(/\{\{local\}\}/gi, data.location || data.clinicName || '');
+    message = message.replace(/\{\{profissional\}\}/gi, data.professional || data.doctorName || '');
+    message = message.replace(/\{\{link_documentos\}\}/gi, data.documentsLink || '');
 
     return message.trim();
   }
@@ -85,6 +97,10 @@ export class WhatsAppMessageBuilder {
       { key: '{{hora}}', description: 'Hora do agendamento' },
       { key: '{{convenio}}', description: 'Convênio' },
       { key: '{{observacoes}}', description: 'Observações adicionais' },
+      { key: '{{clinica_nome}}', description: 'Nome da clínica/filial' },
+      { key: '{{local}}', description: 'Local do atendimento' },
+      { key: '{{profissional}}', description: 'Profissional responsável' },
+      { key: '{{link_documentos}}', description: 'Link para envio de documentos' },
     ];
   }
 
@@ -108,6 +124,10 @@ export class WhatsAppMessageBuilder {
         case 'hora': value = data.time || ''; break;
         case 'convenio': value = data.convenio || ''; break;
         case 'observacoes': value = data.observations || ''; break;
+        case 'clinica_nome': value = data.clinicName || ''; break;
+        case 'local': value = data.location || data.clinicName || ''; break;
+        case 'profissional': value = data.professional || data.doctorName || ''; break;
+        case 'link_documentos': value = data.documentsLink || ''; break;
       }
       params.push(value);
     }
