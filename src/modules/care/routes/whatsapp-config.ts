@@ -552,11 +552,21 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       .replace(/\{\{link_documentos\}\}/gi, 'https://saudy.app/documentos')
       .replace(/\{\{clinica_nome\}\}/gi, 'Clínica Saúdy');
 
+    // Regra de categoria para criação de template no Gupshup:
+    // - UTILITY apenas para templates de confirmação/interação
+    // - MARKETING para os demais templates proativos
+    const gupshupCategory =
+      template.type === 'APPOINTMENT_CONFIRMATION'
+      || template.type === 'CONFIRMATION_REPLY_CONFIRMED'
+      || template.type === 'CONFIRMATION_REPLY_RESCHEDULE'
+        ? 'UTILITY'
+        : 'MARKETING';
+
     const body = new URLSearchParams({
       elementName: template.hsmTemplateName,
       languageCode: 'pt_BR',
       content: numberedContent,
-      category: 'UTILITY',
+      category: gupshupCategory,
       templateType: 'TEXT',
       vertical: 'Healthcare',
       example: exampleMessage,
