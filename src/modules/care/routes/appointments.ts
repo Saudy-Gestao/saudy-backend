@@ -21,6 +21,11 @@ const mapAppointmentStatusToWorklistStatus = (status?: string | null) => {
   return 'agendado';
 };
 
+const isConfirmedAppointmentStatus = (status?: string | null) => {
+  const normalized = normalizeStatus(status);
+  return normalized === 'CONFIRMED' || normalized === 'CONFIRMADO';
+};
+
 const generateAccessionNumber = () => {
   // AcessionNumber deve ser Ãºnico para correlaÃ§Ã£o MWL/DICOM.
   // Usamos timestamp + random para evitar colisÃµes em ambiente de alta concorrÃªncia.
@@ -256,6 +261,11 @@ const syncMwlFromAppointment = async (
 
   if (existing) {
     await tx.mwlEntry.update({ where: { id: existing.id }, data: payload });
+    return;
+  }
+
+  // Business rule: create MWL entry only after exam/appointment is confirmed.
+  if (!isConfirmedAppointmentStatus(appointment.status)) {
     return;
   }
 

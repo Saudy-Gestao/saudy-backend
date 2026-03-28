@@ -1,4 +1,3 @@
-import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import dicomParser from 'dicom-parser';
 import prisma from './lib/prisma';
@@ -12,6 +11,15 @@ export interface ParsedDicomData {
   modality: string;
   studyDate: string;
   accessionNumber: string;
+}
+
+function sanitizeObjectPathSegment(value: string): string {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 // images are stored exclusively in a GCS bucket; no local directory used
@@ -45,8 +53,9 @@ export async function processDicomBuffer(
     ? `${studyDateRaw.slice(6, 8)}/${studyDateRaw.slice(4, 6)}/${studyDateRaw.slice(0, 4)}`
     : '';
 
-  // always upload to GCS
-  const objectName = `${uuidv4()}.dcm`;
+  // always upload to GCS, grouped by accession number (folder-like prefix)
+  const accessionFolder = sanitizeObjectPathSegment(accessionNumber) || 'sem-accession-number';
+  const objectName = `${accessionFolder}/${uuidv4()}.dcm`;
   await uploadDicomToGcs(objectName, buffer);
   const fullPath = objectName; // store object name in database
 
