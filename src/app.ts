@@ -82,7 +82,7 @@ app.register(dicomWebProxyModule, { prefix: '/dicom-web' });
 app.register(proceduresModule, { prefix: '/procedures' });
 
 // start Orthanc poller (if configured)
-//startOrthancPoller();
+startOrthancPoller();
 
 // start DICOM MWL SCP
 const mwlScp = new MwlScp();
