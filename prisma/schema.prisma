@@ -504,7 +504,46 @@ model FinanceEntry {
 model Invoice {
     id            String    @id @default(uuid())
     number        String    @unique
+    sourceAppointmentId String? @unique
+    sourceConsultationId String? @unique
     patientName   String?
+    beneficiaryCardNumber String?
+    beneficiaryPlan String?
+    beneficiaryCardExpiry String?
+    beneficiaryStatus String?
+    holderName String?
+    holderDocument String?
+    dependentName String?
+    dependentRelationship String?
+    guideType String?
+    operatorGuideNumber String?
+    authorizationPassword String?
+    authorizationDate DateTime?
+    authorizationExpiryDate DateTime?
+    authorizedAttendanceType String?
+    packageValue Decimal? @db.Decimal(12, 2)
+    materialsValue Decimal? @db.Decimal(12, 2)
+    feesValue Decimal? @db.Decimal(12, 2)
+    dailyValue Decimal? @db.Decimal(12, 2)
+    gasesValue Decimal? @db.Decimal(12, 2)
+    opmeValue Decimal? @db.Decimal(12, 2)
+    expectedDiscountValue Decimal? @db.Decimal(12, 2)
+    expectedGlosaValue Decimal? @db.Decimal(12, 2)
+    cidCode String?
+    clinicalIndication String?
+    requestingProfessionalName String?
+    requestingProfessionalCpf String?
+    requestingProfessionalCouncil String?
+    requestingProfessionalCouncilUf String?
+    requestingProfessionalCouncilNumber String?
+    requestingProfessionalCbo String?
+    executingProfessionalName String?
+    executingProfessionalCpf String?
+    executingProfessionalCouncil String?
+    executingProfessionalCouncilUf String?
+    executingProfessionalCouncilNumber String?
+    executingProfessionalCbo String?
+    procedureItems InvoiceProcedureItem[]
     issuedAt      DateTime  @default(now())
     dueDate       DateTime?
     status        String    @default("EMITIDA")
@@ -513,11 +552,75 @@ model Invoice {
     discount      Decimal?  @db.Decimal(12, 2)
     total         Decimal   @db.Decimal(12, 2)
     paymentMethod String?
+    tissBatchItems TissBatchItem[]
     createdAt     DateTime  @default(now())
     updatedAt     DateTime  @updatedAt
     isActive      Boolean   @default(true)
 
     @@map("invoices")
+}
+
+model InvoiceProcedureItem {
+    id             String   @id @default(uuid())
+    invoiceId      String
+    invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+    procedureId    String?
+    procedureName  String
+    tussCode       String?
+    tableCode      String?
+    quantity       Int      @default(1)
+    executedAt     DateTime?
+    unitValue      Decimal  @db.Decimal(12, 2)
+    totalValue     Decimal  @db.Decimal(12, 2)
+    createdAt      DateTime @default(now())
+    updatedAt      DateTime @updatedAt
+
+    @@index([invoiceId])
+    @@index([procedureId])
+    @@map("invoice_procedure_items")
+}
+
+model TissBatch {
+    id              String          @id @default(uuid())
+    batchNumber     String          @unique
+    competenceMonth String
+    convention      String
+    status          String          @default("DRAFT")
+    protocolNumber  String?
+    generatedXmlAt  DateTime?
+    sentAt          DateTime?
+    createdByUserId String?
+    createdAt       DateTime        @default(now())
+    updatedAt       DateTime        @updatedAt
+    isActive        Boolean         @default(true)
+    items           TissBatchItem[]
+
+    @@index([status, competenceMonth])
+    @@index([convention, competenceMonth])
+    @@map("tiss_batches")
+}
+
+model TissBatchItem {
+    id         String    @id @default(uuid())
+    batchId    String
+    invoiceId  String
+    guideNumber String
+    status     String    @default("PENDING")
+    returnStatus String?
+    returnCode String?
+    returnMessage String?
+    glosaValue Decimal? @db.Decimal(12, 2)
+    isRepresented Boolean @default(false)
+    representedAt DateTime?
+    createdAt  DateTime  @default(now())
+    updatedAt  DateTime  @updatedAt
+    isActive   Boolean   @default(true)
+    batch      TissBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+    invoice    Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+    @@unique([invoiceId, isActive])
+    @@index([batchId, status])
+    @@map("tiss_batch_items")
 }
 
 model Delivery {
@@ -1095,6 +1198,8 @@ model Procedure {
     acceptsInsurance   Boolean           @default(false)
     acceptedInsurances String[]          @default([])
     modalities         String[]          @default([])
+    tussCode           String?
+    tussTableCode      String?
     isActive           Boolean           @default(true)
     createdAt          DateTime          @default(now())
     updatedAt          DateTime          @updatedAt
@@ -1370,6 +1475,12 @@ model Insurance {
     name        String
     code        String?
     description String?
+    tissRegistroAns String?
+    tissOperadoraCnpj String?
+    tissVersao String?
+    tissPrestadorCnpj String?
+    tissPrestadorCnes String?
+    tissCodigoPrestadorOperadora String?
     isActive    Boolean  @default(true)
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt

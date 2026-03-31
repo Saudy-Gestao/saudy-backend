@@ -49,6 +49,11 @@ const normalizeProcedureAppointmentType = (value: unknown): string => {
   return normalized === 'EXAME' ? 'EXAME' : 'CONSULTA';
 };
 
+const normalizeDigitsCode = (value: unknown) => {
+  const digits = String(value || '').replace(/\D/g, '').trim();
+  return digits || null;
+};
+
 export default async function procedureRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -147,6 +152,8 @@ export default async function procedureRoutes(app: FastifyInstance) {
           appointmentType: { type: "string", enum: ["CONSULTA", "EXAME"] },
           price: { type: ["number", "string"] },
           durationMinutes: { type: "number" },
+          tussCode: { type: "string" },
+          tussTableCode: { type: "string" },
           acceptsInsurance: { type: "boolean" },
           acceptedInsurances: { type: "array", items: { type: "string" } },
           modalities: { type: "array", items: { type: "string" } },
@@ -201,6 +208,8 @@ export default async function procedureRoutes(app: FastifyInstance) {
           durationMinutes: data.durationMinutes !== undefined && data.durationMinutes !== null
             ? Number(data.durationMinutes)
             : null,
+          tussCode: data.tussCode !== undefined ? normalizeDigitsCode(data.tussCode) : null,
+          tussTableCode: data.tussTableCode !== undefined ? normalizeDigitsCode(data.tussTableCode) : null,
           acceptsInsurance,
           acceptedInsurances: acceptsInsurance ? acceptedInsurances : [],
           modalities,
@@ -270,6 +279,12 @@ export default async function procedureRoutes(app: FastifyInstance) {
         updateData.durationMinutes = data.durationMinutes === null || data.durationMinutes === ''
           ? null
           : Number(data.durationMinutes);
+      }
+      if (data.tussCode !== undefined) {
+        updateData.tussCode = normalizeDigitsCode(data.tussCode);
+      }
+      if (data.tussTableCode !== undefined) {
+        updateData.tussTableCode = normalizeDigitsCode(data.tussTableCode);
       }
       if (data.acceptsInsurance !== undefined) updateData.acceptsInsurance = Boolean(data.acceptsInsurance);
       if (data.isActive !== undefined) updateData.isActive = Boolean(data.isActive);

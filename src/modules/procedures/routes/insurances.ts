@@ -135,6 +135,12 @@ export default async function insuranceRoutes(app: FastifyInstance) {
           name: { type: "string" },
           code: { type: "string" },
           description: { type: "string" },
+          tissRegistroAns: { type: "string" },
+          tissOperadoraCnpj: { type: "string" },
+          tissVersao: { type: "string" },
+          tissPrestadorCnpj: { type: "string" },
+          tissPrestadorCnes: { type: "string" },
+          tissCodigoPrestadorOperadora: { type: "string" },
           isActive: { type: "boolean" },
           subInsurances: { type: "array", items: { type: "string" } },
         },
@@ -158,6 +164,12 @@ export default async function insuranceRoutes(app: FastifyInstance) {
             name: data.name,
             code: data.code || null,
             description: data.description || null,
+            tissRegistroAns: data.tissRegistroAns || null,
+            tissOperadoraCnpj: data.tissOperadoraCnpj || null,
+            tissVersao: data.tissVersao || null,
+            tissPrestadorCnpj: data.tissPrestadorCnpj || null,
+            tissPrestadorCnes: data.tissPrestadorCnes || null,
+            tissCodigoPrestadorOperadora: data.tissCodigoPrestadorOperadora || null,
             isActive: data.isActive ?? true,
           },
         });
@@ -221,6 +233,12 @@ export default async function insuranceRoutes(app: FastifyInstance) {
       if (data.name !== undefined) updateData.name = data.name;
       if (data.code !== undefined) updateData.code = data.code || null;
       if (data.description !== undefined) updateData.description = data.description || null;
+      if (data.tissRegistroAns !== undefined) updateData.tissRegistroAns = data.tissRegistroAns || null;
+      if (data.tissOperadoraCnpj !== undefined) updateData.tissOperadoraCnpj = data.tissOperadoraCnpj || null;
+      if (data.tissVersao !== undefined) updateData.tissVersao = data.tissVersao || null;
+      if (data.tissPrestadorCnpj !== undefined) updateData.tissPrestadorCnpj = data.tissPrestadorCnpj || null;
+      if (data.tissPrestadorCnes !== undefined) updateData.tissPrestadorCnes = data.tissPrestadorCnes || null;
+      if (data.tissCodigoPrestadorOperadora !== undefined) updateData.tissCodigoPrestadorOperadora = data.tissCodigoPrestadorOperadora || null;
       if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
       const persistedBranchId = normalizeBranchId(existing.branchId) !== "" ? String(existing.branchId) : branchId;

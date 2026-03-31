@@ -5,6 +5,7 @@ import invoiceRoutes from './routes/invoices';
 import deliveryRoutes from './routes/deliveries';
 import leadRoutes from './routes/leads';
 import ticketRoutes from './routes/tickets';
+import tissBatchRoutes from './routes/tiss-batches';
 import { openapiSchemas } from './lib/openapi';
 
 export default async function adminModule(app: FastifyInstance) {
@@ -18,4 +19,5 @@ export default async function adminModule(app: FastifyInstance) {
   app.register(deliveryRoutes, { prefix: '/deliveries' });
   app.register(leadRoutes, { prefix: '/leads' });
   app.register(ticketRoutes, { prefix: '/tickets' });
+  app.register(tissBatchRoutes, { prefix: '/tiss-batches' });
 }
