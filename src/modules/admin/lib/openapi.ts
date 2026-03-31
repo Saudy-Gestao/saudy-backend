@@ -33,6 +33,51 @@ export const openapiSchemas = {
     },
     required: ['status'],
   },
+  Ticket: {
+    type: 'object',
+    properties: {
+      id: { type: 'string' },
+      flow: { type: 'string' },
+      module: { type: 'string' },
+      type: { type: 'string', enum: ['BUG', 'ERROR', 'IMPROVEMENT'] },
+      description: { type: 'string' },
+      status: { type: 'string', enum: ['OPEN', 'TRIAGE', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'] },
+      priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+      createdByUserId: { type: 'string', nullable: true },
+      createdByName: { type: 'string', nullable: true },
+      createdByEmail: { type: 'string', nullable: true },
+      branchId: { type: 'string', nullable: true },
+      branchName: { type: 'string', nullable: true },
+      resolutionConfirmationDeadlineAt: { type: 'string', format: 'date-time', nullable: true },
+      resolutionConfirmedAt: { type: 'string', format: 'date-time', nullable: true },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  },
+  TicketCreate: {
+    type: 'object',
+    properties: {
+      flow: { type: 'string' },
+      module: { type: 'string' },
+      type: { type: 'string', enum: ['BUG', 'ERROR', 'IMPROVEMENT'] },
+      description: { type: 'string' },
+    },
+    required: ['flow', 'module', 'type', 'description'],
+  },
+  TicketStatusUpdate: {
+    type: 'object',
+    properties: {
+      status: { type: 'string', enum: ['OPEN', 'TRIAGE', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'] },
+    },
+    required: ['status'],
+  },
+  TicketPriorityUpdate: {
+    type: 'object',
+    properties: {
+      priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
+    },
+    required: ['priority'],
+  },
   InventoryItem: {
     type: 'object',
     properties: {
