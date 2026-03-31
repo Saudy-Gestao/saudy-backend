@@ -1516,3 +1516,80 @@ model Lead {
     @@index([email])
     @@map("leads")
 }
+
+enum TicketType {
+    BUG
+    ERROR
+    IMPROVEMENT
+}
+
+enum TicketStatus {
+    OPEN
+    TRIAGE
+    IN_PROGRESS
+    RESOLVED
+    CLOSED
+}
+
+enum TicketPriority {
+    LOW
+    MEDIUM
+    HIGH
+    CRITICAL
+}
+
+model Ticket {
+    id              String       @id @default(uuid())
+    flow            String
+    module          String
+    type            TicketType
+    description     String       @db.Text
+    status          TicketStatus @default(OPEN)
+    priority        TicketPriority @default(MEDIUM)
+    createdByUserId String?
+    createdByName   String?
+    createdByEmail  String?
+    branchId        String?
+    branchName      String?
+    lastUserMessageAt DateTime?
+    lastAdminMessageAt DateTime?
+    lastReadByUserAt DateTime?
+    lastReadByAdminAt DateTime?
+    resolutionConfirmationDeadlineAt DateTime?
+    resolutionConfirmedAt DateTime?
+    createdAt       DateTime     @default(now())
+    updatedAt       DateTime     @updatedAt
+    messages        TicketMessage[]
+
+    @@index([status])
+    @@index([priority])
+    @@index([createdAt])
+    @@index([createdByUserId])
+    @@index([branchId])
+    @@map("tickets")
+}
+
+enum TicketMessageAuthorRole {
+    USER
+    ADMIN
+    SYSTEM
+}
+
+model TicketMessage {
+    id           String                  @id @default(uuid())
+    ticketId     String
+    ticket       Ticket                  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+    authorRole   TicketMessageAuthorRole
+    authorUserId String?
+    authorName   String?
+    authorEmail  String?
+    message      String                  @db.Text
+    attachmentName String?
+    attachmentMimeType String?
+    attachmentSizeBytes Int?
+    attachmentObjectName String?
+    createdAt    DateTime                @default(now())
+
+    @@index([ticketId, createdAt])
+    @@map("ticket_messages")
+}

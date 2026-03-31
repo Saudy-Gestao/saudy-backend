@@ -22,6 +22,7 @@ import publicCheckInRoutes from './routes/public-check-in';
 import mwlRoutes from './routes/mwl';
 import preSchedulingRoutes from './routes/pre-scheduling';
 import spellCheckRoutes from './routes/spell-check';
+import ticketRoutes from './routes/tickets';
 
 export default async function careModule(app: FastifyInstance) {
   app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
@@ -47,4 +48,5 @@ export default async function careModule(app: FastifyInstance) {
   app.register(whatsappMessagesRoutes, { prefix: '/' });
   app.register(whatsappWebhookRoutes, { prefix: '/' });
   app.register(spellCheckRoutes, { prefix: '/spell-check' });
+  app.register(ticketRoutes, { prefix: '/tickets' });
 }

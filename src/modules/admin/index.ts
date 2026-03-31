@@ -4,6 +4,7 @@ import financeRoutes from './routes/finance';
 import invoiceRoutes from './routes/invoices';
 import deliveryRoutes from './routes/deliveries';
 import leadRoutes from './routes/leads';
+import ticketRoutes from './routes/tickets';
 import { openapiSchemas } from './lib/openapi';
 
 export default async function adminModule(app: FastifyInstance) {
@@ -16,4 +17,5 @@ export default async function adminModule(app: FastifyInstance) {
   app.register(invoiceRoutes, { prefix: '/invoices' });
   app.register(deliveryRoutes, { prefix: '/deliveries' });
   app.register(leadRoutes, { prefix: '/leads' });
+  app.register(ticketRoutes, { prefix: '/tickets' });
 }
