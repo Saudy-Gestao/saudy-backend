@@ -248,6 +248,451 @@ const findTodayAppointmentCandidate = async (params: {
   ) || candidates[0] || null;
 };
 
+const normalizeForMatch = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase();
+
+const generateInvoiceNumber = () => {
+  const y = new Date().getFullYear();
+  const ts = Date.now().toString().slice(-6);
+  const rnd = Math.floor(Math.random() * 900 + 100);
+  return `FAT-${y}-${ts}-${rnd}`;
+};
+
+const onlyDigits = (value?: string | null) => String(value || '').replace(/\D/g, '');
+const formatIsoDate = (value?: Date | null) => {
+  if (!value || Number.isNaN(value.getTime())) return null;
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(value.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const extractCidCode = (value?: string | null) => {
+  const raw = String(value || '').toUpperCase();
+  const match = raw.match(/\b([A-Z][0-9]{2}(?:\.[0-9A-Z]{1,2})?)\b/);
+  return match?.[1] || null;
+};
+
+const sanitizeClinicalIndicationText = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('[queue-transition]')) return '';
+  const collapsed = raw.replace(/\s+/g, ' ').trim();
+  return collapsed.slice(0, 800);
+};
+
+const resolveBeneficiarySnapshot = async (params: {
+  branchId: string;
+  consultation: any;
+  appointment: any | null;
+}) => {
+  const { branchId, consultation, appointment } = params;
+  const patientId = String(appointment?.patientId || '').trim();
+  const patientCpf = onlyDigits(appointment?.patientCpf || consultation?.cpf || null);
+  const appointmentPlan = String(appointment?.convenio || consultation?.convenio || '').trim();
+
+  let patient: any = null;
+  if (patientId) {
+    patient = await prisma.patient.findFirst({
+      where: { id: patientId, branchId },
+    });
+  }
+  if (!patient && patientCpf) {
+    patient = await prisma.patient.findFirst({
+      where: { cpf: patientCpf, branchId },
+    });
+  }
+
+  const plan = String(patient?.healthInsuranceName || appointmentPlan || '').trim() || null;
+  const cardNumber = String(patient?.healthInsuranceNumber || '').trim() || null;
+  const expiry = formatIsoDate(patient?.healthInsuranceExpiry || null);
+
+  const now = new Date();
+  const isExpired = Boolean(patient?.healthInsuranceExpiry && patient.healthInsuranceExpiry < now);
+  const status = !plan ? 'PARTICULAR' : (isExpired ? 'VENCIDO' : 'ATIVO');
+
+  const hasGuardian = Boolean(patient?.hasGuardian && String(patient?.guardianName || '').trim());
+  const holderName = hasGuardian
+    ? String(patient?.guardianName || '').trim() || null
+    : (String(patient?.name || appointment?.patientName || consultation?.patientName || '').trim() || null);
+  const holderDocument = hasGuardian
+    ? (onlyDigits(patient?.guardianCpf || null) || null)
+    : (onlyDigits(patient?.cpf || appointment?.patientCpf || null) || null);
+
+  const dependentName = hasGuardian ? (String(patient?.name || '').trim() || null) : null;
+  const dependentRelationship = hasGuardian
+    ? (String(patient?.guardianRelationship || 'DEPENDENTE').trim() || 'DEPENDENTE')
+    : null;
+
+  return {
+    beneficiaryCardNumber: cardNumber,
+    beneficiaryPlan: plan,
+    beneficiaryCardExpiry: expiry,
+    beneficiaryStatus: status,
+    holderName,
+    holderDocument,
+    dependentName,
+    dependentRelationship,
+  };
+};
+
+const resolveClinicalGuideSnapshot = async (params: {
+  branchId: string;
+  consultation: any;
+  appointment: any | null;
+  isExam: boolean;
+}) => {
+  const { branchId, consultation, appointment, isExam } = params;
+  const guideType = isExam ? 'SP_SADT' : 'CONSULTA';
+  const clinicalCandidates = [
+    consultation?.mainComplaint,
+    consultation?.anamnese,
+    consultation?.triageNotes,
+    appointment?.observations,
+  ];
+  const indication = clinicalCandidates
+    .map((item) => sanitizeClinicalIndicationText(item))
+    .find((item) => Boolean(item)) || null;
+  const cidCode = extractCidCode(indication);
+
+  const doctorId = String(consultation?.doctorId || '').trim();
+  const doctorName = String(consultation?.doctorName || appointment?.doctorName || '').trim();
+
+  let doctor: any = null;
+  if (doctorId) {
+    doctor = await prisma.doctor.findFirst({
+      where: { id: doctorId, branchId },
+      select: {
+        name: true,
+        cpf: true,
+        crm: true,
+        crmState: true,
+      },
+    });
+  }
+  if (!doctor && doctorName) {
+    doctor = await prisma.doctor.findFirst({
+      where: {
+        branchId,
+        name: { equals: doctorName, mode: 'insensitive' },
+      },
+      select: {
+        name: true,
+        cpf: true,
+        crm: true,
+        crmState: true,
+      },
+    });
+  }
+
+  const professionalName = String(doctor?.name || doctorName || '').trim() || null;
+  const professionalCpf = onlyDigits(doctor?.cpf || null) || null;
+  const councilNumber = String(doctor?.crm || '').trim() || null;
+  const councilUf = String(doctor?.crmState || '').trim() || null;
+  const council = councilNumber ? 'CRM' : null;
+
+  return {
+    guideType,
+    cidCode,
+    clinicalIndication: indication,
+    requestingProfessionalName: professionalName,
+    requestingProfessionalCpf: professionalCpf,
+    requestingProfessionalCouncil: council,
+    requestingProfessionalCouncilUf: councilUf,
+    requestingProfessionalCouncilNumber: councilNumber,
+    requestingProfessionalCbo: null,
+    executingProfessionalName: professionalName,
+    executingProfessionalCpf: professionalCpf,
+    executingProfessionalCouncil: council,
+    executingProfessionalCouncilUf: councilUf,
+    executingProfessionalCouncilNumber: councilNumber,
+    executingProfessionalCbo: null,
+  };
+};
+
+const resolveAuthorizationSnapshot = async (params: {
+  appointment: any | null;
+  clinicalGuideType: string;
+}) => {
+  const { appointment, clinicalGuideType } = params;
+  const appointmentId = String(appointment?.id || '').trim();
+
+  let preSchedulingFlow: any = null;
+  if (appointmentId) {
+    preSchedulingFlow = await prisma.preSchedulingFlow.findUnique({
+      where: { appointmentId },
+      select: { guideNumber: true },
+    });
+  }
+
+  const operatorGuideNumber = String(preSchedulingFlow?.guideNumber || '').trim() || null;
+  const authorizationDate = appointment?.authorizedAt ? new Date(appointment.authorizedAt) : null;
+  const authorizedAttendanceType = String(clinicalGuideType || '').trim() || null;
+
+  return {
+    operatorGuideNumber,
+    authorizationPassword: null,
+    authorizationDate: authorizationDate && !Number.isNaN(authorizationDate.getTime()) ? authorizationDate : null,
+    authorizationExpiryDate: null,
+    authorizedAttendanceType,
+  };
+};
+
+const resolveBillingItem = async (params: {
+  branchId: string;
+  consultation: any;
+  appointment: any | null;
+  isExam: boolean;
+}) => {
+  const { branchId, consultation, appointment, isExam } = params;
+  const specialty = String(appointment?.specialty || consultation?.agenda || '').trim();
+  const executionDateRaw = String(appointment?.date || '').trim();
+  const executionTimeRaw = String(appointment?.time || '').trim();
+  const executedAt = (() => {
+    if (!executionDateRaw) return new Date();
+    const normalizedDate = /^\d{4}-\d{2}-\d{2}$/.test(executionDateRaw) ? executionDateRaw : null;
+    if (!normalizedDate) return new Date();
+    const normalizedTime = /^\d{2}:\d{2}/.test(executionTimeRaw) ? executionTimeRaw.slice(0, 5) : '00:00';
+    const parsed = new Date(`${normalizedDate}T${normalizedTime}:00`);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  })();
+
+  if (isExam) {
+    const procedures = await prisma.procedure.findMany({
+      where: {
+        branchId,
+        isActive: true,
+        appointmentType: { in: ['EXAME', 'EXAM'] },
+      },
+      select: { id: true, name: true, price: true, tussCode: true, tussTableCode: true },
+      take: 200,
+    });
+
+    const target = normalizeForMatch(specialty);
+    const exact = procedures.find((item: any) => normalizeForMatch(item.name) === target);
+    const contains = exact ? null : procedures.find((item: any) => {
+      const name = normalizeForMatch(item.name);
+      return name.includes(target) || target.includes(name);
+    });
+    const picked = exact || contains || procedures[0];
+    const unitValue = Number(picked?.price || 0);
+    return {
+      procedureId: picked?.id || null,
+      procedureName: String(picked?.name || specialty || 'EXAME').trim(),
+      tussCode: String(picked?.tussCode || '').trim() || null,
+      tableCode: String(picked?.tussTableCode || '').trim() || '22',
+      quantity: 1,
+      executedAt,
+      unitValue,
+      totalValue: unitValue,
+    };
+  }
+
+  const consultationProcedures = await prisma.procedure.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      appointmentType: { in: ['CONSULTA', 'CONSULTATION'] },
+    },
+    select: { id: true, name: true, price: true, tussCode: true, tussTableCode: true },
+    take: 200,
+  });
+
+  const consultationTarget = normalizeForMatch(specialty);
+  const consultationExact = consultationProcedures.find((item: any) => normalizeForMatch(item.name) === consultationTarget);
+  const consultationContains = consultationExact ? null : consultationProcedures.find((item: any) => {
+    const name = normalizeForMatch(item.name);
+    return name.includes(consultationTarget) || consultationTarget.includes(name);
+  });
+  const consultationPicked = consultationExact || consultationContains || consultationProcedures[0];
+
+  if (consultationPicked) {
+    const unitValue = Number(consultationPicked?.price || 0);
+    return {
+      procedureId: consultationPicked.id,
+      procedureName: String(consultationPicked.name || specialty || 'CONSULTA').trim(),
+      tussCode: String(consultationPicked.tussCode || '').trim() || null,
+      tableCode: String(consultationPicked.tussTableCode || '').trim() || '22',
+      quantity: 1,
+      executedAt,
+      unitValue,
+      totalValue: unitValue,
+    };
+  }
+
+  const doctorId = String(consultation?.doctorId || '').trim();
+  const doctorName = String(consultation?.doctorName || appointment?.doctorName || '').trim();
+
+  if (doctorId) {
+    const doctor = await prisma.doctor.findFirst({
+      where: { id: doctorId, branchId },
+      select: { consultationFee: true },
+    });
+    if (doctor?.consultationFee !== null && doctor?.consultationFee !== undefined) {
+      const unitValue = Number(doctor.consultationFee || 0);
+      return {
+        procedureId: null,
+        procedureName: 'CONSULTA',
+        tussCode: null,
+        tableCode: '22',
+        quantity: 1,
+        executedAt,
+        unitValue,
+        totalValue: unitValue,
+      };
+    }
+  }
+
+  if (doctorName) {
+    const doctor = await prisma.doctor.findFirst({
+      where: {
+        branchId,
+        name: { equals: doctorName, mode: 'insensitive' },
+      },
+      select: { consultationFee: true },
+    });
+    if (doctor?.consultationFee !== null && doctor?.consultationFee !== undefined) {
+      const unitValue = Number(doctor.consultationFee || 0);
+      return {
+        procedureId: null,
+        procedureName: 'CONSULTA',
+        tussCode: null,
+        tableCode: '22',
+        quantity: 1,
+        executedAt,
+        unitValue,
+        totalValue: unitValue,
+      };
+    }
+  }
+
+  return {
+    procedureId: null,
+    procedureName: isExam ? 'EXAME' : 'CONSULTA',
+    tussCode: null,
+    tableCode: '22',
+    quantity: 1,
+    executedAt,
+    unitValue: 0,
+    totalValue: 0,
+  };
+};
+
+const ensureInvoiceForCompletedAppointment = async (params: {
+  branchId: string;
+  consultation: any;
+  appointment: any | null;
+  isExam: boolean;
+}) => {
+  const { branchId, consultation, appointment, isExam } = params;
+  const appointmentId = String(appointment?.id || '').trim();
+  const consultationId = String(consultation?.id || '').trim();
+  if (!appointmentId && !consultationId) return null;
+
+  const existing = appointmentId
+    ? await prisma.invoice.findUnique({ where: { sourceAppointmentId: appointmentId } })
+    : await prisma.invoice.findUnique({ where: { sourceConsultationId: consultationId } });
+  if (existing) return existing;
+
+  const billingItem = await resolveBillingItem({ branchId, consultation, appointment, isExam });
+  const beneficiary = await resolveBeneficiarySnapshot({ branchId, consultation, appointment });
+  const clinical = await resolveClinicalGuideSnapshot({ branchId, consultation, appointment, isExam });
+  const authorization = await resolveAuthorizationSnapshot({ appointment, clinicalGuideType: clinical.guideType });
+  const normalizedUnitValue = Number.isFinite(Number(billingItem.unitValue)) ? Number(billingItem.unitValue) : 0;
+  const normalizedTotalValue = Number.isFinite(Number(billingItem.totalValue)) ? Number(billingItem.totalValue) : 0;
+  const patientName = String(appointment?.patientName || consultation?.patientName || '').trim() || null;
+  const convention = String(appointment?.convenio || consultation?.convenio || '').trim() || null;
+  const discount = 0;
+  const total = normalizedTotalValue - discount;
+
+  let attempts = 0;
+  const maxAttempts = 5;
+  let created: any = null;
+  let numberToUse: string | undefined = undefined;
+
+  while (!created && attempts < maxAttempts) {
+    attempts += 1;
+    numberToUse = numberToUse || generateInvoiceNumber();
+    try {
+      created = await prisma.invoice.create({
+        data: {
+          sourceAppointmentId: appointmentId || null,
+          sourceConsultationId: consultationId || null,
+          number: numberToUse,
+          patientName,
+          status: 'EMITIDA',
+          convention,
+          value: normalizedUnitValue,
+          discount,
+          total,
+          beneficiaryCardNumber: beneficiary.beneficiaryCardNumber,
+          beneficiaryPlan: beneficiary.beneficiaryPlan,
+          beneficiaryCardExpiry: beneficiary.beneficiaryCardExpiry,
+          beneficiaryStatus: beneficiary.beneficiaryStatus,
+          holderName: beneficiary.holderName,
+          holderDocument: beneficiary.holderDocument,
+          dependentName: beneficiary.dependentName,
+          dependentRelationship: beneficiary.dependentRelationship,
+          guideType: clinical.guideType,
+          operatorGuideNumber: authorization.operatorGuideNumber,
+          authorizationPassword: authorization.authorizationPassword,
+          authorizationDate: authorization.authorizationDate,
+          authorizationExpiryDate: authorization.authorizationExpiryDate,
+          authorizedAttendanceType: authorization.authorizedAttendanceType,
+          cidCode: clinical.cidCode,
+          clinicalIndication: clinical.clinicalIndication,
+          requestingProfessionalName: clinical.requestingProfessionalName,
+          requestingProfessionalCpf: clinical.requestingProfessionalCpf,
+          requestingProfessionalCouncil: clinical.requestingProfessionalCouncil,
+          requestingProfessionalCouncilUf: clinical.requestingProfessionalCouncilUf,
+          requestingProfessionalCouncilNumber: clinical.requestingProfessionalCouncilNumber,
+          requestingProfessionalCbo: clinical.requestingProfessionalCbo,
+          executingProfessionalName: clinical.executingProfessionalName,
+          executingProfessionalCpf: clinical.executingProfessionalCpf,
+          executingProfessionalCouncil: clinical.executingProfessionalCouncil,
+          executingProfessionalCouncilUf: clinical.executingProfessionalCouncilUf,
+          executingProfessionalCouncilNumber: clinical.executingProfessionalCouncilNumber,
+          executingProfessionalCbo: clinical.executingProfessionalCbo,
+          procedureItems: {
+            create: [
+              {
+                procedureId: billingItem.procedureId,
+                procedureName: billingItem.procedureName,
+                tussCode: billingItem.tussCode,
+                tableCode: billingItem.tableCode,
+                quantity: Number.isFinite(Number(billingItem.quantity)) ? Number(billingItem.quantity) : 1,
+                executedAt: billingItem.executedAt || new Date(),
+                unitValue: normalizedUnitValue,
+                totalValue: normalizedTotalValue,
+              },
+            ],
+          },
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        const target = Array.isArray(err?.meta?.target) ? err.meta.target : [];
+        if (target.includes('sourceAppointmentId') && appointmentId) {
+          return prisma.invoice.findUnique({ where: { sourceAppointmentId: appointmentId } });
+        }
+        if (target.includes('sourceConsultationId') && consultationId) {
+          return prisma.invoice.findUnique({ where: { sourceConsultationId: consultationId } });
+        }
+        if (target.includes('number')) {
+          numberToUse = undefined;
+          continue;
+        }
+      }
+      throw err;
+    }
+  }
+
+  return created;
+};
+
 export default async function consultationRoutes(app: FastifyInstance) {
   const getLoggedContext = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -766,6 +1211,8 @@ export default async function consultationRoutes(app: FastifyInstance) {
         && ['ATENDIMENTO_CONCLUIDO', 'EXAME_CONCLUIDO'].includes(canonicalClinicalQueueStatus(data.queue));
 
       if (movedToDone) {
+        const finalStatusKey = canonicalClinicalQueueStatus(data.queue);
+        const isExamCompletion = finalStatusKey === 'EXAME_CONCLUIDO';
         try {
           let appointment = null as any;
           const deterministicAppointmentId = String(data?.appointmentId || existing.appointmentId || item.appointmentId || '').trim();
@@ -802,6 +1249,17 @@ export default async function consultationRoutes(app: FastifyInstance) {
                 },
               });
             }
+          }
+
+          try {
+            await ensureInvoiceForCompletedAppointment({
+              branchId,
+              consultation: item,
+              appointment,
+              isExam: isExamCompletion,
+            });
+          } catch (invoiceErr: any) {
+            request.log.warn({ err: invoiceErr, consultationId: item.id, appointmentId: appointment?.id || null }, 'Could not create billing invoice for completed appointment');
           }
         } catch (appointmentErr: any) {
           request.log.warn({ err: appointmentErr, consultationId: item.id }, 'Could not sync appointment status to REALIZADO');

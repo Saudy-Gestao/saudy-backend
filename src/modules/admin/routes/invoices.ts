@@ -2,6 +2,35 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function invoiceRoutes(app: FastifyInstance) {
+  const toMoney = (value: unknown) => {
+    const numeric = Number(value ?? 0);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+
+  const computeInvoiceTotal = (data: any) => {
+    const baseValue = toMoney(data.value);
+    const commercialDiscount = toMoney(data.discount);
+    const packageValue = toMoney(data.packageValue);
+    const materialsValue = toMoney(data.materialsValue);
+    const feesValue = toMoney(data.feesValue);
+    const dailyValue = toMoney(data.dailyValue);
+    const gasesValue = toMoney(data.gasesValue);
+    const opmeValue = toMoney(data.opmeValue);
+    const expectedDiscountValue = toMoney(data.expectedDiscountValue);
+    const expectedGlosaValue = toMoney(data.expectedGlosaValue);
+
+    return baseValue
+      + packageValue
+      + materialsValue
+      + feesValue
+      + dailyValue
+      + gasesValue
+      + opmeValue
+      - commercialDiscount
+      - expectedDiscountValue
+      - expectedGlosaValue;
+  };
+
   const parseDateOnly = (value?: string | null) => {
     if (!value) return null;
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -80,7 +109,7 @@ export default async function invoiceRoutes(app: FastifyInstance) {
     };
 
     try {
-      const total = (data.value || 0) - (data.discount || 0);
+      const total = computeInvoiceTotal(data);
 
       // If client didn't provide number, generate one and attempt create with retries on unique constraint
       let attempts = 0;
@@ -94,7 +123,45 @@ export default async function invoiceRoutes(app: FastifyInstance) {
         try {
           created = await prisma.invoice.create({ data: {
             number: numToUse,
+            sourceAppointmentId: data.sourceAppointmentId || null,
+            sourceConsultationId: data.sourceConsultationId || null,
             patientName: data.patientName || null,
+            beneficiaryCardNumber: data.beneficiaryCardNumber || null,
+            beneficiaryPlan: data.beneficiaryPlan || null,
+            beneficiaryCardExpiry: data.beneficiaryCardExpiry || null,
+            beneficiaryStatus: data.beneficiaryStatus || null,
+            holderName: data.holderName || null,
+            holderDocument: data.holderDocument || null,
+            dependentName: data.dependentName || null,
+            dependentRelationship: data.dependentRelationship || null,
+            guideType: data.guideType || null,
+            operatorGuideNumber: data.operatorGuideNumber || null,
+            authorizationPassword: data.authorizationPassword || null,
+            authorizationDate: parseDateOnly(data.authorizationDate),
+            authorizationExpiryDate: parseDateOnly(data.authorizationExpiryDate),
+            authorizedAttendanceType: data.authorizedAttendanceType || null,
+            packageValue: data.packageValue ?? null,
+            materialsValue: data.materialsValue ?? null,
+            feesValue: data.feesValue ?? null,
+            dailyValue: data.dailyValue ?? null,
+            gasesValue: data.gasesValue ?? null,
+            opmeValue: data.opmeValue ?? null,
+            expectedDiscountValue: data.expectedDiscountValue ?? null,
+            expectedGlosaValue: data.expectedGlosaValue ?? null,
+            cidCode: data.cidCode || null,
+            clinicalIndication: data.clinicalIndication || null,
+            requestingProfessionalName: data.requestingProfessionalName || null,
+            requestingProfessionalCpf: data.requestingProfessionalCpf || null,
+            requestingProfessionalCouncil: data.requestingProfessionalCouncil || null,
+            requestingProfessionalCouncilUf: data.requestingProfessionalCouncilUf || null,
+            requestingProfessionalCouncilNumber: data.requestingProfessionalCouncilNumber || null,
+            requestingProfessionalCbo: data.requestingProfessionalCbo || null,
+            executingProfessionalName: data.executingProfessionalName || null,
+            executingProfessionalCpf: data.executingProfessionalCpf || null,
+            executingProfessionalCouncil: data.executingProfessionalCouncil || null,
+            executingProfessionalCouncilUf: data.executingProfessionalCouncilUf || null,
+            executingProfessionalCouncilNumber: data.executingProfessionalCouncilNumber || null,
+            executingProfessionalCbo: data.executingProfessionalCbo || null,
             issuedAt: data.issuedAt ? new Date(data.issuedAt) : undefined,
             dueDate: parseDateOnly(data.dueDate),
             status: data.status || 'EMITIDA',
@@ -146,11 +213,38 @@ export default async function invoiceRoutes(app: FastifyInstance) {
       if (data.dueDate !== undefined) {
         data.dueDate = parseDateOnly(data.dueDate);
       }
-      if (data.value !== undefined || data.discount !== undefined) {
+      if (data.authorizationDate !== undefined) {
+        data.authorizationDate = parseDateOnly(data.authorizationDate);
+      }
+      if (data.authorizationExpiryDate !== undefined) {
+        data.authorizationExpiryDate = parseDateOnly(data.authorizationExpiryDate);
+      }
+      if (
+        data.value !== undefined
+        || data.discount !== undefined
+        || data.packageValue !== undefined
+        || data.materialsValue !== undefined
+        || data.feesValue !== undefined
+        || data.dailyValue !== undefined
+        || data.gasesValue !== undefined
+        || data.opmeValue !== undefined
+        || data.expectedDiscountValue !== undefined
+        || data.expectedGlosaValue !== undefined
+      ) {
         const existing = await prisma.invoice.findUnique({ where: { id } });
-        const value = data.value !== undefined ? data.value : Number(existing?.value || 0);
-        const discount = data.discount !== undefined ? data.discount : Number(existing?.discount || 0);
-        data.total = value - discount;
+        const mergedData = {
+          value: data.value !== undefined ? data.value : Number(existing?.value || 0),
+          discount: data.discount !== undefined ? data.discount : Number(existing?.discount || 0),
+          packageValue: data.packageValue !== undefined ? data.packageValue : Number(existing?.packageValue || 0),
+          materialsValue: data.materialsValue !== undefined ? data.materialsValue : Number(existing?.materialsValue || 0),
+          feesValue: data.feesValue !== undefined ? data.feesValue : Number(existing?.feesValue || 0),
+          dailyValue: data.dailyValue !== undefined ? data.dailyValue : Number(existing?.dailyValue || 0),
+          gasesValue: data.gasesValue !== undefined ? data.gasesValue : Number(existing?.gasesValue || 0),
+          opmeValue: data.opmeValue !== undefined ? data.opmeValue : Number(existing?.opmeValue || 0),
+          expectedDiscountValue: data.expectedDiscountValue !== undefined ? data.expectedDiscountValue : Number(existing?.expectedDiscountValue || 0),
+          expectedGlosaValue: data.expectedGlosaValue !== undefined ? data.expectedGlosaValue : Number(existing?.expectedGlosaValue || 0),
+        };
+        data.total = computeInvoiceTotal(mergedData);
       }
       const inv = await prisma.invoice.update({ where: { id }, data });
       return inv;

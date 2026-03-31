@@ -1,0 +1,16 @@
+ALTER TABLE "invoices"
+ADD COLUMN "guideType" TEXT,
+ADD COLUMN "cidCode" TEXT,
+ADD COLUMN "clinicalIndication" TEXT,
+ADD COLUMN "requestingProfessionalName" TEXT,
+ADD COLUMN "requestingProfessionalCpf" TEXT,
+ADD COLUMN "requestingProfessionalCouncil" TEXT,
+ADD COLUMN "requestingProfessionalCouncilUf" TEXT,
+ADD COLUMN "requestingProfessionalCouncilNumber" TEXT,
+ADD COLUMN "requestingProfessionalCbo" TEXT,
+ADD COLUMN "executingProfessionalName" TEXT,
+ADD COLUMN "executingProfessionalCpf" TEXT,
+ADD COLUMN "executingProfessionalCouncil" TEXT,
+ADD COLUMN "executingProfessionalCouncilUf" TEXT,
+ADD COLUMN "executingProfessionalCouncilNumber" TEXT,
+ADD COLUMN "executingProfessionalCbo" TEXT;
