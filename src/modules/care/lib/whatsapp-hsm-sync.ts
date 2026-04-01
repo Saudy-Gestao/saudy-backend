@@ -1,5 +1,4 @@
 import prisma from './prisma';
-import { DEFAULT_TEMPLATES } from './whatsapp-default-templates';
 
 export interface HsmSyncResult {
   synced: number;
@@ -11,11 +10,11 @@ export interface HsmSyncResult {
 export async function syncBranchHsmTemplates(branchId: string): Promise<HsmSyncResult> {
   const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
 
-  const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
-  const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+  const gupshupAppId = whatsappConfig?.appId || '';
+  const apiKey = whatsappConfig?.accountSid || '';
 
   if (!gupshupAppId || !apiKey) {
-    throw new Error('App ID do Gupshup não configurado. Preencha o campo App ID nas configurações.');
+    throw new Error('Credenciais do WhatsApp não configuradas na filial. Salve API Key e App ID no banco antes de sincronizar.');
   }
 
   const gupshupRes = await fetch(
@@ -47,37 +46,8 @@ export async function syncBranchHsmTemplates(branchId: string): Promise<HsmSyncR
   }
 
   const localTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
-  const localTemplateTypes = new Set(localTemplates.map((tmpl: any) => tmpl.type));
+  const refreshedLocalTemplates = localTemplates;
   let created = 0;
-
-  for (const defaultTemplate of DEFAULT_TEMPLATES) {
-    const hsmTemplateName = String(defaultTemplate.hsmTemplateName || '').trim().toLowerCase();
-    if (!hsmTemplateName) continue;
-    if (localTemplateTypes.has(defaultTemplate.type as any)) continue;
-
-    const gupshupTemplate = gupshupTemplates[hsmTemplateName];
-    if (!gupshupTemplate) continue;
-
-    await prisma.whatsAppMessageTemplate.create({
-      data: {
-        branchId,
-        type: defaultTemplate.type as any,
-        name: defaultTemplate.name,
-        message: defaultTemplate.message,
-        hsmTemplateName: defaultTemplate.hsmTemplateName,
-        hsmTemplateId: gupshupTemplate.id,
-        hsmTemplateStatus: gupshupTemplate.status || null,
-        hsmTemplateApproved: gupshupTemplate.status === 'APPROVED',
-        importedFromGupshupSync: true,
-        isActive: true,
-      },
-    });
-
-    localTemplateTypes.add(defaultTemplate.type as any);
-    created++;
-  }
-
-  const refreshedLocalTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
   let updated = 0;
 
   for (const tmpl of refreshedLocalTemplates) {
@@ -131,7 +101,7 @@ export async function syncAllBranchesHsmTemplates(): Promise<{ branches: number;
 
   for (const config of configs) {
     if (!config.branchId) continue;
-    if (!(config.appId || process.env.GUPSHUP_APP_ID) || !(config.accountSid || process.env.GUPSHUP_API_KEY)) {
+    if (!config.appId || !config.accountSid) {
       continue;
     }
 
