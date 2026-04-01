@@ -1,49 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
+import { ACTIVE_TEMPLATE_TYPES, DEFAULT_TEMPLATES } from '../lib/whatsapp-default-templates';
+import { syncBranchHsmTemplates } from '../lib/whatsapp-hsm-sync';
 
 export default async function whatsappConfigRoutes(app: FastifyInstance) {
-  const ACTIVE_TEMPLATE_TYPES = [
-    'APPOINTMENT_CREATED',
-    'APPOINTMENT_CONFIRMATION',
-    'NO_SHOW',
-    'CONFIRMATION_REPLY_CONFIRMED',
-    'CONFIRMATION_REPLY_RESCHEDULE',
-  ] as const;
-
-  const DEFAULT_TEMPLATES = [
-    {
-      type: 'APPOINTMENT_CREATED',
-      name: 'Resumo de Agendamento',
-      hsmTemplateName: 'resumo_agendamento',
-      message: 'Olá, {{paciente_nome}}! 😊\nSomos da {{clinica_nome}}.\nSeu atendimento está confirmado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\n📎 Para agilizar seu atendimento, pedimos que envie seus documentos pelo link abaixo:\n👉 {{link_documentos}}\nEm caso de necessidade, fale conosco por aqui.',
-    },
-    {
-      type: 'APPOINTMENT_CONFIRMATION',
-      name: 'Confirmação de Agendamento',
-      hsmTemplateName: 'confirmacao_agendamento',
-      message: 'Olá, {{paciente_nome}}! 😊\nSomos da {{clinica_nome}}.\nEstamos entrando em contato para confirmar seu agendamento:\n📅 Data: {{data}}\n⏰ Horário: {{hora}}\n👩‍⚕️ Profissional: {{profissional}}\n📍 Local: {{local}}\nPor favor, escolha uma das opções abaixo:\n✅ Confirmar\n❌ Reagendar\nFicamos no aguardo.',
-    },
-    {
-      type: 'CONFIRMATION_REPLY_CONFIRMED',
-      name: 'Resposta Confirmado',
-      hsmTemplateName: 'resposta_confirmado',
-      message: '✅ Agendamento confirmado com sucesso!\n📅 {{data}}\n⏰ {{hora}}\n👩‍⚕️ {{profissional}}\nQualquer imprevisto, fale conosco por este canal.\nAté breve! 💙',
-    },
-    {
-      type: 'CONFIRMATION_REPLY_RESCHEDULE',
-      name: 'Resposta Reagendar',
-      hsmTemplateName: 'resposta_reagendar',
-      message: 'Em breve um atendente entrará em contato para realizar seu reagendamento.',
-    },
-    {
-      type: 'NO_SHOW',
-      name: 'Falta',
-      hsmTemplateName: 'falta_agendamento',
-      message: 'Olá, {{paciente_nome}}.\nSomos da {{clinica_nome}}.\nNotamos que você não apareceu para o seu agendamento:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\nCaso tenha ocorrido algum imprevisto, pedimos que nos informe por aqui.',
-    },
-  ] as const;
-
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
     if (!userId) return null;
@@ -710,112 +671,11 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
-
-    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-
-    const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
-    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
-
-    if (!gupshupAppId || !apiKey) {
-      return reply.code(400).send({
-        error: 'App ID do Gupshup não configurado. Preencha o campo App ID nas configurações.',
-      });
+    try {
+      return await syncBranchHsmTemplates(branchId);
+    } catch (error: any) {
+      return reply.code(400).send({ error: error.message || 'Erro ao sincronizar templates HSM' });
     }
-
-    // Buscar templates no Gupshup
-    const gupshupRes = await fetch(
-      `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
-      { headers: { apikey: apiKey } },
-    );
-
-    if (!gupshupRes.ok) {
-      const body = await gupshupRes.text();
-      return reply.code(400).send({ error: `Erro ao consultar Gupshup: ${body}` });
-    }
-
-    const gupshupData = await gupshupRes.json() as { status: string; templates: any[] };
-    // Map: elementName (lowercase) -> { status, id }
-    const gupshupTemplates: Record<string, { status: string; id: string | null }> = {};
-    for (const t of (gupshupData.templates || [])) {
-      if (!t.elementName) continue;
-      const templateId =
-        t.id
-        ?? t.templateId
-        ?? t.templateID
-        ?? t.elementId
-        ?? null;
-      gupshupTemplates[t.elementName.toLowerCase()] = {
-        status: String(t.status || ''),
-        id: templateId ? String(templateId) : null,
-      };
-    }
-
-    // Importar templates padrão conhecidos que existam no Gupshup mas ainda não existam localmente
-    const localTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
-    const localTemplateTypes = new Set(localTemplates.map((tmpl: any) => tmpl.type));
-    let created = 0;
-
-    for (const defaultTemplate of DEFAULT_TEMPLATES) {
-      const hsmTemplateName = String(defaultTemplate.hsmTemplateName || '').trim().toLowerCase();
-      if (!hsmTemplateName) continue;
-      if (localTemplateTypes.has(defaultTemplate.type as any)) continue;
-
-      const gupshupTemplate = gupshupTemplates[hsmTemplateName];
-      if (!gupshupTemplate) continue;
-
-      await prisma.whatsAppMessageTemplate.create({
-        data: {
-          branchId,
-          type: defaultTemplate.type as any,
-          name: defaultTemplate.name,
-          message: defaultTemplate.message,
-          hsmTemplateName: defaultTemplate.hsmTemplateName,
-          hsmTemplateId: gupshupTemplate.id,
-          hsmTemplateStatus: gupshupTemplate.status || null,
-          hsmTemplateApproved: gupshupTemplate.status === 'APPROVED',
-          importedFromGupshupSync: true,
-          isActive: true,
-        },
-      });
-
-      localTemplateTypes.add(defaultTemplate.type as any);
-      created++;
-    }
-
-    // Atualizar templates locais
-    const refreshedLocalTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
-    let updated = 0;
-
-    for (const tmpl of refreshedLocalTemplates) {
-      if (!tmpl.hsmTemplateName) continue;
-      const gupshupTemplate = gupshupTemplates[tmpl.hsmTemplateName.toLowerCase()];
-      const gupshupStatus = gupshupTemplate?.status || null;
-      const approved = gupshupStatus === 'APPROVED';
-      const hsmTemplateId = gupshupTemplate?.id || null;
-      const shouldUpdate =
-        tmpl.hsmTemplateApproved !== approved
-        || (tmpl.hsmTemplateStatus || null) !== gupshupStatus
-        || (tmpl.hsmTemplateId || null) !== hsmTemplateId;
-
-      if (shouldUpdate) {
-        await prisma.whatsAppMessageTemplate.update({
-          where: { id: tmpl.id },
-          data: {
-            hsmTemplateApproved: approved,
-            hsmTemplateStatus: gupshupStatus,
-            hsmTemplateId,
-          },
-        });
-        updated++;
-      }
-    }
-
-    return {
-      synced: refreshedLocalTemplates.filter((tmpl: any) => tmpl.hsmTemplateName).length,
-      created,
-      updated,
-      gupshupTemplates,
-    };
   });
 
 }
