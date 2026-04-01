@@ -8,6 +8,7 @@ import authModule from './modules/auth';
 import accountsModule from './modules/accounts';
 import adminModule from './modules/admin';
 import careModule from './modules/care';
+import whatsappWebhookRoutes from './modules/care/routes/whatsapp-webhook';
 import proceduresModule from './modules/procedures';
 import dicomModule from './modules/dicom';
 import dicomWebProxyModule from './modules/dicom-web-proxy';
@@ -76,6 +77,7 @@ app.get('/', async () => ({
 app.register(authModule, { prefix: '/auth' });
 app.register(accountsModule, { prefix: '/accounts' });
 app.register(adminModule, { prefix: '/admin' });
+app.register(whatsappWebhookRoutes, { prefix: '/' });
 app.register(careModule, { prefix: '/care' });
 app.register(dicomModule, { prefix: '/dicom' });
 app.register(dicomWebProxyModule, { prefix: '/dicom-web' });

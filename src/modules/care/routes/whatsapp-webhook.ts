@@ -5,16 +5,31 @@ import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 
+const collectStringCandidates = (value: unknown, candidates = new Set<string>()): Set<string> => {
+  if (value == null) return candidates;
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const normalized = normalizeValue(value);
+    if (normalized) candidates.add(normalized);
+    return candidates;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringCandidates(item, candidates);
+    return candidates;
+  }
+
+  if (typeof value === 'object') {
+    for (const nestedValue of Object.values(value as Record<string, unknown>)) {
+      collectStringCandidates(nestedValue, candidates);
+    }
+  }
+
+  return candidates;
+};
+
 const parseConfirmationAction = (payload: any): 'CONFIRMED' | 'RESCHEDULE' | null => {
-  const candidates = [
-    payload?.payload?.postbackText,
-    payload?.payload?.title,
-    payload?.payload?.reply,
-    payload?.payload?.text,
-    payload?.text,
-  ]
-    .map(normalizeValue)
-    .filter(Boolean);
+  const candidates = Array.from(collectStringCandidates(payload));
 
   for (const value of candidates) {
     if (value === '1' || value.includes('confirm')) return 'CONFIRMED';
@@ -52,7 +67,20 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const inboundPayload = body?.payload || {};
     const action = parseConfirmationAction(inboundPayload);
 
+    request.log.info({
+      gupshupEventType: body?.type || inboundPayload?.type || null,
+      source: inboundPayload?.source || inboundPayload?.sender?.phone || null,
+      contextGsId: inboundPayload?.context?.gsId || null,
+      contextId: inboundPayload?.context?.id || null,
+      confirmationAction: action,
+      payloadPreview: inboundPayload,
+    }, 'Received WhatsApp webhook event');
+
     if (!action) {
+      request.log.warn({
+        reason: 'unsupported-action',
+        payload: inboundPayload,
+      }, 'Ignoring WhatsApp webhook event');
       return { success: true, ignored: true, reason: 'unsupported-action' };
     }
 
@@ -96,6 +124,13 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     }
 
     if (!originatingLog?.appointmentId || !originatingLog.branchId) {
+      request.log.warn({
+        reason: 'originating-log-not-found',
+        source,
+        contextGsId,
+        contextId,
+        payload: inboundPayload,
+      }, 'Could not match WhatsApp webhook event to appointment confirmation log');
       return { success: true, ignored: true, reason: 'originating-log-not-found' };
     }
 
@@ -162,6 +197,12 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         ? 'CONFIRMATION_REPLY_CONFIRMED'
         : 'CONFIRMATION_REPLY_RESCHEDULE',
     });
+
+    request.log.info({
+      action,
+      appointmentId: originatingLog.appointmentId,
+      originatingLogId: originatingLog.id,
+    }, 'Processed WhatsApp confirmation reply');
 
     return {
       success: true,

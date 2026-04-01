@@ -78,20 +78,22 @@ export class WhatsAppSchedulerJob {
     let failed = 0;
 
     try {
-      // Calcular janela de tempo
-      const targetDate = dayjs().add(hoursBefore, 'hour');
-      const dateStr = targetDate.format('YYYY-MM-DD');
-      const currentHour = targetDate.format('HH:mm');
+      // Janela real: do momento atual até as próximas N horas
+      const now = dayjs();
+      const windowEnd = now.add(hoursBefore, 'hour');
 
-      // Buscar agendamentos para a data/hora alvo que ainda não tiveram confirmação enviada
+      // Buscar agendamentos ativos da filial e filtrar pela janela
       const appointments = await prisma.appointment.findMany({
         where: {
           branchId,
-          date: dateStr,
-          status: {
-            not: 'CANCELADO',
-          },
           isActive: true,
+          status: {
+            notIn: ['CANCELADO', 'CANCELED', 'NAO_COMPARECEU', 'NO_SHOW', 'COMPLETED', 'FINALIZADO', 'REALIZADO'],
+          },
+          date: {
+            gte: now.format('YYYY-MM-DD'),
+            lte: windowEnd.format('YYYY-MM-DD'),
+          },
         },
       });
 
@@ -113,28 +115,30 @@ export class WhatsAppSchedulerJob {
           continue; // Já enviou confirmação
         }
 
-        // Verificar se o horário está próximo do horário do agendamento
-        // (tolerância de ±1 hora para evitar enviar múltiplas vezes)
-        if (appointment.time) {
-          const appointmentHour = dayjs(`${dateStr} ${appointment.time}`);
-          const diffHours = appointmentHour.diff(dayjs(), 'hour');
-          
-          // Se está entre hoursBefore-1 e hoursBefore+1
-          if (diffHours >= hoursBefore - 1 && diffHours <= hoursBefore + 1) {
-            // Enviar confirmação
-            const result = await WhatsAppAutoSender.sendMessage({
-              branchId,
-              appointmentId: appointment.id,
-              messageType: 'APPOINTMENT_CONFIRMATION',
-            });
+        if (!appointment.date || !appointment.time) {
+          continue;
+        }
 
-            if (result.success) {
-              sent++;
-            } else {
-              failed++;
-              console.error(`Failed to send confirmation for appointment ${appointment.id}:`, result.error);
-            }
-          }
+        const appointmentDateTime = dayjs(`${appointment.date} ${appointment.time}`);
+        if (!appointmentDateTime.isValid()) {
+          continue;
+        }
+
+        if (appointmentDateTime.isBefore(now) || appointmentDateTime.isAfter(windowEnd)) {
+          continue;
+        }
+
+        const result = await WhatsAppAutoSender.sendMessage({
+          branchId,
+          appointmentId: appointment.id,
+          messageType: 'APPOINTMENT_CONFIRMATION',
+        });
+
+        if (result.success) {
+          sent++;
+        } else {
+          failed++;
+          console.error(`Failed to send confirmation for appointment ${appointment.id}:`, result.error);
         }
       }
 

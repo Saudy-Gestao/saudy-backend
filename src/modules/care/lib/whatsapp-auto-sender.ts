@@ -342,25 +342,8 @@ export class WhatsAppAutoSender {
       });
 
       let result;
-      if (!params.customMessage && params.messageType === 'APPOINTMENT_CONFIRMATION') {
-        result = await gupshup.sendQuickReplyMessage({
-          to: patientPhone,
-          body: message,
-          msgId: messageLog.id,
-          options: [
-            { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
-            { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
-          ],
-        });
-
-        if (result.status === 'error') {
-          console.warn('[whatsapp-auto-sender] quick reply falhou, tentando HSM/text:', result.error);
-        }
-      }
-
       if (
-        (!result || result.status === 'error')
-        && !params.customMessage
+        !params.customMessage
         && templateRecord?.hsmTemplateApproved
         && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName)
       ) {
@@ -372,11 +355,27 @@ export class WhatsAppAutoSender {
         });
 
         if (result.status === 'error') {
-          console.warn('[whatsapp-auto-sender] HSM template falhou, tentando session text:', result.error);
-          result = await gupshup.sendTextMessage({
-            to: patientPhone,
-            message,
-          });
+          console.warn('[whatsapp-auto-sender] HSM template falhou:', result.error);
+        }
+      }
+
+      if (
+        (!result || result.status === 'error')
+        && !params.customMessage
+        && params.messageType === 'APPOINTMENT_CONFIRMATION'
+      ) {
+        result = await gupshup.sendQuickReplyMessage({
+          to: patientPhone,
+          body: message,
+          msgId: messageLog.id,
+          options: [
+            { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
+            { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
+          ],
+        });
+
+        if (result.status === 'error') {
+          console.warn('[whatsapp-auto-sender] quick reply falhou, tentando texto simples:', result.error);
         }
       }
 
