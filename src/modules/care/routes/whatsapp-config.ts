@@ -16,31 +16,31 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       type: 'APPOINTMENT_CREATED',
       name: 'Resumo de Agendamento',
       hsmTemplateName: 'resumo_agendamento',
-      message: 'Olá, {{paciente_nome}}! 😊\nSeu atendimento está confirmado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\n📎 Para agilizar seu atendimento, pedimos que envie seus documentos pelo link abaixo:\n👉 {{link_documentos}}\nEm caso de necessidade, fale conosco por aqui.\n{{clinica_nome}}',
+      message: 'Olá, {{paciente_nome}}! 😊\nSomos da {{clinica_nome}}.\nSeu atendimento está confirmado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\n📎 Para agilizar seu atendimento, pedimos que envie seus documentos pelo link abaixo:\n👉 {{link_documentos}}\nEm caso de necessidade, fale conosco por aqui.',
     },
     {
       type: 'APPOINTMENT_CONFIRMATION',
       name: 'Confirmação de Agendamento',
       hsmTemplateName: 'confirmacao_agendamento',
-      message: 'Olá, {{paciente_nome}}! 😊\nEstamos entrando em contato para confirmar seu agendamento:\n📅 Data: {{data}}\n⏰ Horário: {{hora}}\n👩‍⚕️ Profissional: {{profissional}}\n📍 Local: {{local}}\nPor favor, escolha uma das opções nos botões abaixo.\nFicamos no aguardo.\n{{clinica_nome}}',
+      message: 'Olá, {{paciente_nome}}! 😊\nSomos da {{clinica_nome}}.\nEstamos entrando em contato para confirmar seu agendamento:\n📅 Data: {{data}}\n⏰ Horário: {{hora}}\n👩‍⚕️ Profissional: {{profissional}}\n📍 Local: {{local}}\nPor favor, escolha uma das opções abaixo:\n✅ Confirmar\n❌ Reagendar\nFicamos no aguardo.',
     },
     {
       type: 'CONFIRMATION_REPLY_CONFIRMED',
       name: 'Resposta Confirmado',
       hsmTemplateName: 'resposta_confirmado',
-      message: '✅ Agendamento confirmado com sucesso!\n📅 {{data}}\n⏰ {{hora}}\n👩‍⚕️ {{profissional}}\nQualquer imprevisto, fale conosco por este canal.\nAté breve! 💙\n{{clinica_nome}}',
+      message: '✅ Agendamento confirmado com sucesso!\n📅 {{data}}\n⏰ {{hora}}\n👩‍⚕️ {{profissional}}\nQualquer imprevisto, fale conosco por este canal.\nAté breve! 💙',
     },
     {
       type: 'CONFIRMATION_REPLY_RESCHEDULE',
       name: 'Resposta Reagendar',
       hsmTemplateName: 'resposta_reagendar',
-      message: 'Em breve um atendente entrará em contato para seguir com seu reagendamento.',
+      message: 'Em breve um atendente entrará em contato para realizar seu reagendamento.',
     },
     {
       type: 'NO_SHOW',
       name: 'Falta',
       hsmTemplateName: 'falta_agendamento',
-      message: 'Olá, {{paciente_nome}}.\nNotamos que você não compareceu ao atendimento agendado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\nCaso tenha ocorrido algum imprevisto, pedimos que nos informe por aqui.\n{{clinica_nome}}',
+      message: 'Olá, {{paciente_nome}}.\nSomos da {{clinica_nome}}.\nNotamos que você não apareceu para o seu agendamento:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\nCaso tenha ocorrido algum imprevisto, pedimos que nos informe por aqui.',
     },
   ] as const;
 
@@ -276,6 +276,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         hsmTemplateId: null,
         hsmTemplateStatus: null,
         hsmTemplateApproved: false,
+        importedFromGupshupSync: false,
         isActive: data.isActive ?? true,
       },
       update: {
@@ -350,6 +351,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
             name: item.name,
             message: item.message,
             hsmTemplateName: item.hsmTemplateName,
+            importedFromGupshupSync: false,
             isActive: true,
           },
         });
@@ -748,11 +750,43 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       };
     }
 
-    // Atualizar templates locais
+    // Importar templates padrão conhecidos que existam no Gupshup mas ainda não existam localmente
     const localTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
+    const localTemplateTypes = new Set(localTemplates.map((tmpl: any) => tmpl.type));
+    let created = 0;
+
+    for (const defaultTemplate of DEFAULT_TEMPLATES) {
+      const hsmTemplateName = String(defaultTemplate.hsmTemplateName || '').trim().toLowerCase();
+      if (!hsmTemplateName) continue;
+      if (localTemplateTypes.has(defaultTemplate.type as any)) continue;
+
+      const gupshupTemplate = gupshupTemplates[hsmTemplateName];
+      if (!gupshupTemplate) continue;
+
+      await prisma.whatsAppMessageTemplate.create({
+        data: {
+          branchId,
+          type: defaultTemplate.type as any,
+          name: defaultTemplate.name,
+          message: defaultTemplate.message,
+          hsmTemplateName: defaultTemplate.hsmTemplateName,
+          hsmTemplateId: gupshupTemplate.id,
+          hsmTemplateStatus: gupshupTemplate.status || null,
+          hsmTemplateApproved: gupshupTemplate.status === 'APPROVED',
+          importedFromGupshupSync: true,
+          isActive: true,
+        },
+      });
+
+      localTemplateTypes.add(defaultTemplate.type as any);
+      created++;
+    }
+
+    // Atualizar templates locais
+    const refreshedLocalTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
     let updated = 0;
 
-    for (const tmpl of localTemplates) {
+    for (const tmpl of refreshedLocalTemplates) {
       if (!tmpl.hsmTemplateName) continue;
       const gupshupTemplate = gupshupTemplates[tmpl.hsmTemplateName.toLowerCase()];
       const gupshupStatus = gupshupTemplate?.status || null;
@@ -777,7 +811,8 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     }
 
     return {
-      synced: localTemplates.filter((t: any) => t.hsmTemplateName).length,
+      synced: refreshedLocalTemplates.filter((tmpl: any) => tmpl.hsmTemplateName).length,
+      created,
       updated,
       gupshupTemplates,
     };

@@ -1555,6 +1555,7 @@ model WhatsAppMessageTemplate {
     hsmTemplateId       String?             // ID interno do template retornado pelo Gupshup
     hsmTemplateStatus   String?             // Status raw: APPROVED, REJECTED, PENDING, etc.
     hsmTemplateApproved Boolean             @default(false) // true = aprovado pela Meta
+    importedFromGupshupSync Boolean         @default(false)
     isActive            Boolean             @default(true)
     createdAt           DateTime            @default(now())
     updatedAt           DateTime            @updatedAt
