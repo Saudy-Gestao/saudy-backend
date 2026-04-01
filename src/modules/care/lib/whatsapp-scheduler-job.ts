@@ -1,7 +1,40 @@
 import type { Prisma } from '@prisma/client';
 import prisma from './prisma';
 import WhatsAppAutoSender from './whatsapp-auto-sender';
-import dayjs from 'dayjs';
+
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+
+const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const readPart = (type: string) => parts.find((item) => item.type === type)?.value || '';
+
+  return {
+    year: readPart('year'),
+    month: readPart('month'),
+    day: readPart('day'),
+    hour: readPart('hour'),
+    minute: readPart('minute'),
+  };
+};
+
+const formatDateInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const { year, month, day } = getTimeZoneParts(date, timeZone);
+  return `${year}-${month}-${day}`;
+};
+
+const formatTimeInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const { hour, minute } = getTimeZoneParts(date, timeZone);
+  return `${hour}:${minute}`;
+};
 
 /**
  * Job para processar e enviar mensagens de confirmação de agendamentos
@@ -78,9 +111,13 @@ export class WhatsAppSchedulerJob {
     let failed = 0;
 
     try {
-      // Janela real: do momento atual até as próximas N horas
-      const now = dayjs();
-      const windowEnd = now.add(hoursBefore, 'hour');
+      // Janela real: do momento atual até as próximas N horas, no fuso da clínica.
+      const now = new Date();
+      const windowEnd = new Date(now.getTime() + (hoursBefore * 60 * 60 * 1000));
+      const nowDate = formatDateInTimeZone(now);
+      const windowEndDate = formatDateInTimeZone(windowEnd);
+      const nowComparable = `${nowDate} ${formatTimeInTimeZone(now)}`;
+      const windowEndComparable = `${windowEndDate} ${formatTimeInTimeZone(windowEnd)}`;
 
       // Buscar agendamentos ativos da filial e filtrar pela janela
       const appointments = await prisma.appointment.findMany({
@@ -88,11 +125,11 @@ export class WhatsAppSchedulerJob {
           branchId,
           isActive: true,
           status: {
-            notIn: ['CANCELADO', 'CANCELED', 'NAO_COMPARECEU', 'NO_SHOW', 'COMPLETED', 'FINALIZADO', 'REALIZADO'],
+            notIn: ['CANCELADO', 'CANCELED', 'NAO_COMPARECEU', 'NO_SHOW', 'COMPLETED', 'FINALIZADO', 'REALIZADO', 'CONFIRMADO', 'CONFIRMED'],
           },
           date: {
-            gte: now.format('YYYY-MM-DD'),
-            lte: windowEnd.format('YYYY-MM-DD'),
+            gte: nowDate,
+            lte: windowEndDate,
           },
         },
       });
@@ -106,7 +143,7 @@ export class WhatsAppSchedulerJob {
             appointmentId: appointment.id,
             messageType: 'APPOINTMENT_CONFIRMATION',
             status: {
-              in: ['SENT', 'PENDING'],
+              in: ['SENT', 'PENDING', 'RESPONDED_CONFIRMED', 'RESPONDED_RESCHEDULE'],
             },
           },
         });
@@ -119,12 +156,9 @@ export class WhatsAppSchedulerJob {
           continue;
         }
 
-        const appointmentDateTime = dayjs(`${appointment.date} ${appointment.time}`);
-        if (!appointmentDateTime.isValid()) {
-          continue;
-        }
+        const appointmentComparable = `${appointment.date} ${appointment.time.slice(0, 5)}`;
 
-        if (appointmentDateTime.isBefore(now) || appointmentDateTime.isAfter(windowEnd)) {
+        if (appointmentComparable < nowComparable || appointmentComparable > windowEndComparable) {
           continue;
         }
 
@@ -160,9 +194,9 @@ export class WhatsAppSchedulerJob {
     try {
       const settings = await prisma.branchSettings.findUnique({ where: { branchId } });
       const toleranceMinutes = Math.max(0, Number(settings?.noShowToleranceMinutes ?? 30));
-      const threshold = dayjs().subtract(toleranceMinutes, 'minute');
-      const thresholdDate = threshold.format('YYYY-MM-DD');
-      const thresholdTime = threshold.format('HH:mm');
+      const threshold = new Date(Date.now() - (toleranceMinutes * 60 * 1000));
+      const thresholdDate = formatDateInTimeZone(threshold);
+      const thresholdTime = formatTimeInTimeZone(threshold);
 
       const candidates = await prisma.appointment.findMany({
         where: {
