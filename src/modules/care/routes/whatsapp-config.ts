@@ -1,49 +1,54 @@
 import { FastifyInstance } from 'fastify';
+import { v4 as uuidv4 } from 'uuid';
 import prisma from '../lib/prisma';
 import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
+import { ACTIVE_TEMPLATE_TYPES, DEFAULT_TEMPLATES } from '../lib/whatsapp-default-templates';
+import { syncBranchHsmTemplates } from '../lib/whatsapp-hsm-sync';
+
+const hasDatabaseWhatsAppCredentials = (config: any) => Boolean(
+  config?.accountSid?.trim()
+  && config?.authToken?.trim()
+  && config?.fromNumber?.trim(),
+);
+
+const GENERATED_HSM_NAME_REGEX = /^[a-z0-9_]+_[0-9a-f]{32}$/;
+
+const normalizeTemplateBaseName = (value: string) => {
+  const normalized = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+
+  return normalized || 'template_whatsapp';
+};
+
+const generateHsmTemplateName = (value: string) => `${normalizeTemplateBaseName(value)}_${uuidv4().replace(/-/g, '')}`;
+
+const validateTemplateBusinessRules = (data: { message?: string; hsmTemplateName?: string | null }) => {
+  const message = String(data.message || '').trim();
+  const hsmTemplateName = String(data.hsmTemplateName || '').trim();
+  const foundVariables = message.match(/\{\{[^}]+\}\}/g) || [];
+
+  if (hsmTemplateName && !GENERATED_HSM_NAME_REGEX.test(hsmTemplateName)) {
+    return 'O nome interno do template HSM precisa seguir o formato normalizado com UUID final.';
+  }
+
+  if (/^\{\{[^}]+\}\}$/.test(message)) {
+    return 'Não é permitido cadastrar uma variável sozinha no conteúdo do template.';
+  }
+
+  const lastVariable = foundVariables[foundVariables.length - 1];
+  if (lastVariable && message.endsWith(lastVariable)) {
+    return 'Não é permitido cadastrar variável no final do template.';
+  }
+
+  return null;
+};
 
 export default async function whatsappConfigRoutes(app: FastifyInstance) {
-  const ACTIVE_TEMPLATE_TYPES = [
-    'APPOINTMENT_CREATED',
-    'APPOINTMENT_CONFIRMATION',
-    'NO_SHOW',
-    'CONFIRMATION_REPLY_CONFIRMED',
-    'CONFIRMATION_REPLY_RESCHEDULE',
-  ] as const;
-
-  const DEFAULT_TEMPLATES = [
-    {
-      type: 'APPOINTMENT_CREATED',
-      name: 'Resumo de Agendamento',
-      hsmTemplateName: 'resumo_agendamento',
-      message: 'Olá, {{paciente_nome}}! 😊\nSeu atendimento está confirmado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\n📎 Para agilizar seu atendimento, pedimos que envie seus documentos pelo link abaixo:\n👉 {{link_documentos}}\nEm caso de necessidade, fale conosco por aqui.\n{{clinica_nome}}',
-    },
-    {
-      type: 'APPOINTMENT_CONFIRMATION',
-      name: 'Confirmação de Agendamento',
-      hsmTemplateName: 'confirmacao_agendamento',
-      message: 'Olá, {{paciente_nome}}! 😊\nEstamos entrando em contato para confirmar seu agendamento:\n📅 Data: {{data}}\n⏰ Horário: {{hora}}\n👩‍⚕️ Profissional: {{profissional}}\n📍 Local: {{local}}\nPor favor, escolha uma das opções nos botões abaixo.\nFicamos no aguardo.\n{{clinica_nome}}',
-    },
-    {
-      type: 'CONFIRMATION_REPLY_CONFIRMED',
-      name: 'Resposta Confirmado',
-      hsmTemplateName: 'resposta_confirmado',
-      message: '✅ Agendamento confirmado com sucesso!\n📅 {{data}}\n⏰ {{hora}}\n👩‍⚕️ {{profissional}}\nQualquer imprevisto, fale conosco por este canal.\nAté breve! 💙\n{{clinica_nome}}',
-    },
-    {
-      type: 'CONFIRMATION_REPLY_RESCHEDULE',
-      name: 'Resposta Reagendar',
-      hsmTemplateName: 'resposta_reagendar',
-      message: 'Em breve um atendente entrará em contato para seguir com seu reagendamento.',
-    },
-    {
-      type: 'NO_SHOW',
-      name: 'Falta',
-      hsmTemplateName: 'falta_agendamento',
-      message: 'Olá, {{paciente_nome}}.\nNotamos que você não compareceu ao atendimento agendado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\nCaso tenha ocorrido algum imprevisto, pedimos que nos informe por aqui.\n{{clinica_nome}}',
-    },
-  ] as const;
-
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
     if (!userId) return null;
@@ -185,12 +190,20 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       tags: ['WhatsApp'],
       response: {
         200: { type: 'array' },
+        400: { type: 'object' },
         403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    if (!hasDatabaseWhatsAppCredentials(whatsappConfig)) {
+      return reply.code(400).send({
+        error: 'Credenciais do WhatsApp não configuradas para esta filial. Acesse Configurações para salvar a credencial no banco.',
+      });
+    }
 
     const templates = await prisma.whatsAppMessageTemplate.findMany({
       where: {
@@ -213,6 +226,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         type: 'object',
         required: ['type', 'name', 'message'],
         properties: {
+          id: { type: 'string' },
           type: { 
             type: 'string',
             enum: [...ACTIVE_TEMPLATE_TYPES],
@@ -227,6 +241,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         200: { type: 'object', additionalProperties: true },
         400: { type: 'object', additionalProperties: true },
         403: { type: 'object', additionalProperties: true },
+        404: { type: 'object', additionalProperties: true },
       },
     },
   }, async (request, reply) => {
@@ -234,6 +249,12 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const data = request.body as any;
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    if (!hasDatabaseWhatsAppCredentials(whatsappConfig)) {
+      return reply.code(400).send({
+        error: 'Credenciais do WhatsApp não configuradas para esta filial. Salve a credencial no banco antes de editar templates.',
+      });
+    }
 
     // Validar template
     const validation = WhatsAppMessageBuilder.validateTemplate(data.message);
@@ -245,6 +266,11 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       });
     }
 
+    const businessValidationError = validateTemplateBusinessRules(data);
+    if (businessValidationError) {
+      return reply.code(400).send({ error: businessValidationError });
+    }
+
     const existingTemplate = await prisma.whatsAppMessageTemplate.findUnique({
       where: {
         branchId_type: {
@@ -254,10 +280,28 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       },
     });
 
-    const nextHsmTemplateName = data.hsmTemplateName !== undefined ? (data.hsmTemplateName || null) : undefined;
+    if (data.id) {
+      if (!existingTemplate || existingTemplate.id !== data.id) {
+        return reply.code(404).send({ error: 'Template não encontrado para edição.' });
+      }
+    } else if (existingTemplate) {
+      return reply.code(400).send({
+        error: `Já existe um template do tipo "${data.type}" cadastrado para esta filial.`,
+      });
+    }
+
+    const normalizedName = String(data.name || '').trim();
+    const shouldRegenerateHsmTemplateName =
+      !existingTemplate
+      || !existingTemplate.hsmTemplateName
+      || String(existingTemplate.name || '').trim() !== normalizedName;
+
+    const nextHsmTemplateName = shouldRegenerateHsmTemplateName
+      ? generateHsmTemplateName(normalizedName)
+      : (existingTemplate?.hsmTemplateName || null);
+
     const shouldResetHsmSyncFields =
-      nextHsmTemplateName !== undefined
-      && existingTemplate
+      existingTemplate
       && (existingTemplate.hsmTemplateName || null) !== nextHsmTemplateName;
 
     const template = await prisma.whatsAppMessageTemplate.upsert({
@@ -272,11 +316,12 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         type: data.type,
         name: data.name,
         message: data.message,
-        hsmTemplateName: data.hsmTemplateName || null,
+        hsmTemplateName: nextHsmTemplateName,
         hsmTemplateId: null,
         hsmTemplateStatus: null,
         hsmTemplateApproved: false,
-        isActive: data.isActive ?? true,
+        importedFromGupshupSync: false,
+        isActive: data.isActive ?? false,
       },
       update: {
         name: data.name,
@@ -302,12 +347,20 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       tags: ['WhatsApp'],
       response: {
         200: { type: 'object' },
+        400: { type: 'object' },
         403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    if (!hasDatabaseWhatsAppCredentials(whatsappConfig)) {
+      return reply.code(400).send({
+        error: 'Credenciais do WhatsApp não configuradas para esta filial. Salve a credencial no banco antes de carregar templates.',
+      });
+    }
 
     let created = 0;
     let updated = 0;
@@ -332,13 +385,14 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       });
 
       if (existing) {
+        const nextHsmTemplateName = existing.hsmTemplateName || generateHsmTemplateName(item.name);
         await prisma.whatsAppMessageTemplate.update({
           where: { id: existing.id },
           data: {
             name: item.name,
             message: item.message,
-            hsmTemplateName: item.hsmTemplateName,
-            isActive: true,
+            hsmTemplateName: nextHsmTemplateName,
+            isActive: false,
           },
         });
         updated += 1;
@@ -349,8 +403,9 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
             type: item.type as any,
             name: item.name,
             message: item.message,
-            hsmTemplateName: item.hsmTemplateName,
-            isActive: true,
+            hsmTemplateName: generateHsmTemplateName(item.name),
+            importedFromGupshupSync: false,
+            isActive: false,
           },
         });
         created += 1;
@@ -376,6 +431,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       },
       response: {
         200: { type: 'object' },
+        400: { type: 'object' },
         403: { type: 'object' },
         404: { type: 'object' },
       },
@@ -383,6 +439,13 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    if (!hasDatabaseWhatsAppCredentials(whatsappConfig)) {
+      return reply.code(400).send({
+        error: 'Credenciais do WhatsApp não configuradas para esta filial. Salve a credencial no banco antes de acessar templates.',
+      });
+    }
 
     const { id } = request.params as any;
     
@@ -417,6 +480,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
 
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
     const { id } = request.params as any;
 
     const template = await prisma.whatsAppMessageTemplate.findFirst({
@@ -427,60 +491,92 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Template not found' });
     }
 
-    // Se existir vínculo HSM, exige remover no Gupshup antes de remover local
+    // Se existir vínculo HSM, tentamos remover no Gupshup apenas quando ele realmente existir lá.
     if (template.hsmTemplateId || template.hsmTemplateName) {
-      const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-      const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
-      const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+      const gupshupAppId = whatsappConfig?.appId || '';
+      const apiKey = whatsappConfig?.accountSid || '';
+      const hasRemoteSignals = Boolean(
+        template.hsmTemplateId
+        || template.hsmTemplateStatus
+        || template.importedFromGupshupSync,
+      );
 
-      if (!gupshupAppId || !apiKey) {
-        return reply.code(400).send({
-          error: 'Não foi possível excluir o template no Gupshup: App ID/API Key não configurados.',
-        });
-      }
+      if (gupshupAppId && apiKey) {
+        const listRes = await fetch(
+          `https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template`,
+          { headers: { apikey: apiKey } },
+        );
 
-      const encodedTemplateId = template.hsmTemplateId ? encodeURIComponent(template.hsmTemplateId) : null;
-      const encodedElementName = template.hsmTemplateName ? encodeURIComponent(template.hsmTemplateName) : null;
-      const deleteAttempts: string[] = [];
+        if (listRes.ok) {
+          const listData = await listRes.json() as { templates?: any[] };
+          const remoteTemplate = (listData.templates || []).find((item: any) => {
+            const remoteId = String(item?.id ?? item?.templateId ?? item?.templateID ?? item?.elementId ?? '').trim();
+            const remoteName = String(item?.elementName || '').trim().toLowerCase();
+            return (
+              (template.hsmTemplateId && remoteId === template.hsmTemplateId)
+              || (template.hsmTemplateName && remoteName === String(template.hsmTemplateName).trim().toLowerCase())
+            );
+          });
 
-      const candidates: string[] = [
-        // Endpoint principal com query params (templateId + elementName)
-        `https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template?${new URLSearchParams({
-          ...(template.hsmTemplateId ? { templateId: template.hsmTemplateId } : {}),
-          ...(template.hsmTemplateName ? { elementName: template.hsmTemplateName } : {}),
-        }).toString()}`,
-        // Variação por path com templateId
-        ...(encodedTemplateId
-          ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedTemplateId}${encodedElementName ? `?elementName=${encodedElementName}` : ''}`]
-          : []),
-        // Variação por path com elementName
-        ...(encodedElementName
-          ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedElementName}`]
-          : []),
-      ];
+          if (remoteTemplate) {
+            const remoteTemplateId = String(
+              remoteTemplate?.id
+              ?? remoteTemplate?.templateId
+              ?? remoteTemplate?.templateID
+              ?? remoteTemplate?.elementId
+              ?? '',
+            ).trim();
+            const remoteElementName = String(remoteTemplate?.elementName || template.hsmTemplateName || '').trim();
+            const encodedTemplateId = remoteTemplateId ? encodeURIComponent(remoteTemplateId) : null;
+            const encodedElementName = remoteElementName ? encodeURIComponent(remoteElementName) : null;
+            const deleteAttempts: string[] = [];
+            const candidates: string[] = [
+              `https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template?${new URLSearchParams({
+                ...(remoteTemplateId ? { templateId: remoteTemplateId } : {}),
+                ...(remoteElementName ? { elementName: remoteElementName } : {}),
+              }).toString()}`,
+              ...(encodedTemplateId
+                ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedTemplateId}${encodedElementName ? `?elementName=${encodedElementName}` : ''}`]
+                : []),
+              ...(encodedElementName
+                ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedElementName}`]
+                : []),
+            ];
 
-      let deletedInGupshup = false;
-      for (const url of candidates) {
-        const gupshupRes = await fetch(url, {
-          method: 'DELETE',
-          headers: { apikey: apiKey },
-        });
+            let deletedInGupshup = false;
+            for (const url of candidates) {
+              const gupshupRes = await fetch(url, {
+                method: 'DELETE',
+                headers: { apikey: apiKey },
+              });
 
-        const responseBody = await gupshupRes.text();
-        const shortBody = responseBody.length > 600 ? `${responseBody.slice(0, 600)}...` : responseBody;
-        deleteAttempts.push(`[${gupshupRes.status}] ${url} => ${shortBody}`);
+              const responseBody = await gupshupRes.text();
+              const shortBody = responseBody.length > 600 ? `${responseBody.slice(0, 600)}...` : responseBody;
+              deleteAttempts.push(`[${gupshupRes.status}] ${url} => ${shortBody}`);
 
-        // 404 significa que já não existe no provedor; podemos seguir com cleanup local
-        if (gupshupRes.ok || gupshupRes.status === 404) {
-          deletedInGupshup = true;
-          break;
+              if (gupshupRes.ok || gupshupRes.status === 404) {
+                deletedInGupshup = true;
+                break;
+              }
+            }
+
+            if (!deletedInGupshup) {
+              return reply.code(400).send({
+                error: 'Falha ao excluir template no Gupshup. O template local não foi removido.',
+                details: deleteAttempts,
+              });
+            }
+          }
+        } else if (hasRemoteSignals) {
+          const body = await listRes.text();
+          return reply.code(400).send({
+            error: 'Falha ao verificar a existência do template no Gupshup antes da exclusão.',
+            details: body,
+          });
         }
-      }
-
-      if (!deletedInGupshup) {
+      } else if (hasRemoteSignals) {
         return reply.code(400).send({
-          error: 'Falha ao excluir template no Gupshup. O template local não foi removido.',
-          details: deleteAttempts,
+          error: 'Não foi possível confirmar a exclusão no Gupshup porque a filial não possui App ID/API Key configurados.',
         });
       }
     }
@@ -514,12 +610,25 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
 
-    const template = await prisma.whatsAppMessageTemplate.findFirst({ where: { id, branchId } });
-    if (!template) return reply.code(404).send({ error: 'Template não encontrado' });
+    const currentTemplate = await prisma.whatsAppMessageTemplate.findFirst({ where: { id, branchId } });
+    if (!currentTemplate) return reply.code(404).send({ error: 'Template não encontrado' });
+
+    let template = currentTemplate;
+    if (!template.hsmTemplateName || !GENERATED_HSM_NAME_REGEX.test(template.hsmTemplateName)) {
+      template = await prisma.whatsAppMessageTemplate.update({
+        where: { id: currentTemplate.id },
+        data: {
+          hsmTemplateName: generateHsmTemplateName(currentTemplate.name),
+          hsmTemplateId: null,
+          hsmTemplateStatus: null,
+          hsmTemplateApproved: false,
+        },
+      });
+    }
 
     if (!template.hsmTemplateName) {
       return reply.code(400).send({
-        error: 'Preencha o campo "Nome do Template (Gupshup/Meta HSM)" antes de enviar para o Gupshup.',
+        error: 'O nome interno do template HSM não foi gerado corretamente. Salve o template novamente antes de enviar para o Gupshup.',
       });
     }
 
@@ -537,7 +646,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     let varIndex = 1;
     const numberedContent = template.message.replace(/\{\{[^}]+\}\}/g, () => `{{${varIndex++}}}`);
 
-    // Montar exemplo com valores fictícios
+    // Mantemos o formato antigo que já funcionava neste projeto ao enviar o template.
     const exampleMessage = template.message
       .replace(/\{\{paciente_nome\}\}/gi, 'João Silva')
       .replace(/\{\{paciente_cpf\}\}/gi, '123.456.789-00')
@@ -546,29 +655,13 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       .replace(/\{\{data\}\}/gi, '18/03/2026 (Quarta-feira)')
       .replace(/\{\{hora\}\}/gi, '14:00')
       .replace(/\{\{convenio\}\}/gi, 'Plano Saúdy')
-      .replace(/\{\{observacoes\}\}/gi, '-')
-      .replace(/\{\{profissional\}\}/gi, 'Dra. Mariana Souza')
-      .replace(/\{\{local\}\}/gi, 'Clínica Saúdy - Unidade Centro')
-      .replace(/\{\{link_documentos\}\}/gi, 'https://saudy.app/documentos')
-      .replace(/\{\{clinica_nome\}\}/gi, 'Clínica Saúdy');
-
-    // Regra de categoria para criação de template no Gupshup:
-    // - UTILITY para comunicações transacionais de atendimento/agendamento
-    // - MARKETING para campanhas/promocionais
-    const gupshupCategory =
-      template.type === 'APPOINTMENT_CREATED'
-      || template.type === 'APPOINTMENT_CONFIRMATION'
-      || template.type === 'NO_SHOW'
-      || template.type === 'CONFIRMATION_REPLY_CONFIRMED'
-      || template.type === 'CONFIRMATION_REPLY_RESCHEDULE'
-        ? 'UTILITY'
-        : 'MARKETING';
+      .replace(/\{\{observacoes\}\}/gi, '-');
 
     const body = new URLSearchParams({
       elementName: template.hsmTemplateName,
       languageCode: 'pt_BR',
       content: numberedContent,
-      category: gupshupCategory,
+      category: 'UTILITY',
       templateType: 'TEXT',
       vertical: 'Healthcare',
       example: exampleMessage,
@@ -601,8 +694,16 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     try { parsed = JSON.parse(rawText); } catch { parsed = rawText; }
 
     if (!gupshupRes.ok) {
+      console.error('[push-to-gupshup] error response:', gupshupRes.status, parsed);
+      const providerMessage =
+        parsed?.message
+        || parsed?.error
+        || parsed?.details
+        || parsed?.detail
+        || rawText;
+
       return reply.code(400).send({
-        error: `Erro ao criar template no Gupshup (${gupshupRes.status}): ${rawText}`,
+        error: `Erro ao criar template no Gupshup (${gupshupRes.status}): ${providerMessage}`,
         detail: parsed,
       });
     }
@@ -621,12 +722,20 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
           type: 'object',
           additionalProperties: true,
         },
+        400: { type: 'object' },
         403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    if (!hasDatabaseWhatsAppCredentials(whatsappConfig)) {
+      return reply.code(400).send({
+        error: 'Credenciais do WhatsApp não configuradas para esta filial. Salve a credencial no banco antes de editar notificações.',
+      });
+    }
 
     const config = await prisma.whatsAppNotificationConfig.findUnique({ where: { branchId } });
     return config;
@@ -648,12 +757,20 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       },
       response: {
         200: { type: 'object' },
+        400: { type: 'object' },
         403: { type: 'object' },
       },
     },
   }, async (request, reply) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    if (!hasDatabaseWhatsAppCredentials(whatsappConfig)) {
+      return reply.code(400).send({
+        error: 'Credenciais do WhatsApp não configuradas para esta filial. Salve a credencial no banco antes de editar notificações.',
+      });
+    }
 
     const data = request.body as any;
 
@@ -708,79 +825,11 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
-
-    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-
-    const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
-    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
-
-    if (!gupshupAppId || !apiKey) {
-      return reply.code(400).send({
-        error: 'App ID do Gupshup não configurado. Preencha o campo App ID nas configurações.',
-      });
+    try {
+      return await syncBranchHsmTemplates(branchId);
+    } catch (error: any) {
+      return reply.code(400).send({ error: error.message || 'Erro ao sincronizar templates HSM' });
     }
-
-    // Buscar templates no Gupshup
-    const gupshupRes = await fetch(
-      `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
-      { headers: { apikey: apiKey } },
-    );
-
-    if (!gupshupRes.ok) {
-      const body = await gupshupRes.text();
-      return reply.code(400).send({ error: `Erro ao consultar Gupshup: ${body}` });
-    }
-
-    const gupshupData = await gupshupRes.json() as { status: string; templates: any[] };
-    // Map: elementName (lowercase) -> { status, id }
-    const gupshupTemplates: Record<string, { status: string; id: string | null }> = {};
-    for (const t of (gupshupData.templates || [])) {
-      if (!t.elementName) continue;
-      const templateId =
-        t.id
-        ?? t.templateId
-        ?? t.templateID
-        ?? t.elementId
-        ?? null;
-      gupshupTemplates[t.elementName.toLowerCase()] = {
-        status: String(t.status || ''),
-        id: templateId ? String(templateId) : null,
-      };
-    }
-
-    // Atualizar templates locais
-    const localTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
-    let updated = 0;
-
-    for (const tmpl of localTemplates) {
-      if (!tmpl.hsmTemplateName) continue;
-      const gupshupTemplate = gupshupTemplates[tmpl.hsmTemplateName.toLowerCase()];
-      const gupshupStatus = gupshupTemplate?.status || null;
-      const approved = gupshupStatus === 'APPROVED';
-      const hsmTemplateId = gupshupTemplate?.id || null;
-      const shouldUpdate =
-        tmpl.hsmTemplateApproved !== approved
-        || (tmpl.hsmTemplateStatus || null) !== gupshupStatus
-        || (tmpl.hsmTemplateId || null) !== hsmTemplateId;
-
-      if (shouldUpdate) {
-        await prisma.whatsAppMessageTemplate.update({
-          where: { id: tmpl.id },
-          data: {
-            hsmTemplateApproved: approved,
-            hsmTemplateStatus: gupshupStatus,
-            hsmTemplateId,
-          },
-        });
-        updated++;
-      }
-    }
-
-    return {
-      synced: localTemplates.filter((t: any) => t.hsmTemplateName).length,
-      updated,
-      gupshupTemplates,
-    };
   });
 
 }

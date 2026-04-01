@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-import GupshupService from '../lib/gupshup';
+import GupshupService, { SendMessageResponse } from '../lib/gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from '../lib/whatsapp-message-builder';
 
 type WhatsAppMessageType =
@@ -172,28 +172,16 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
 
       // Tenta HSM template se configurado (funciona sem sessão ativa)
       // Se HSM falhar, cai para session text message
-      let result;
+      let result: SendMessageResponse | undefined;
       const templateRecord = data.customMessage ? null : await prisma.whatsAppMessageTemplate.findFirst({
         where: { branchId, type: data.messageType, isActive: true },
       });
 
-      if (!data.customMessage && data.messageType === 'APPOINTMENT_CONFIRMATION') {
-        result = await gupshup.sendQuickReplyMessage({
-          to: patientPhone,
-          body: message,
-          msgId: messageLog.id,
-          options: [
-            { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
-            { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
-          ],
-        });
-
-        if (result.status === 'error') {
-          console.warn('[whatsapp-send] quick reply falhou, tentando HSM/text:', result.error);
-        }
-      }
-
-      if ((!result || result.status === 'error') && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName) && !data.customMessage) {
+      if (
+        (!result || result.status === 'error')
+        && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName)
+        && !data.customMessage
+      ) {
         const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
           patientName: appointment.patientName,
           patientCpf: appointment.patientCpf,
@@ -214,8 +202,23 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
           params: hsmParams,
         });
         if (result.status === 'error') {
-          console.warn('[whatsapp-send] HSM template falhou, tentando session text:', result.error);
-          result = await gupshup.sendTextMessage({ to: patientPhone, message });
+          console.warn('[whatsapp-send] HSM template falhou:', result.error);
+        }
+      }
+
+      if ((!result || result.status === 'error') && !data.customMessage && data.messageType === 'APPOINTMENT_CONFIRMATION') {
+        result = await gupshup.sendQuickReplyMessage({
+          to: patientPhone,
+          body: message,
+          msgId: messageLog.id,
+          options: [
+            { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
+            { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
+          ],
+        });
+
+        if (result.status === 'error') {
+          console.warn('[whatsapp-send] quick reply falhou, tentando texto simples:', result.error);
         }
       }
 
