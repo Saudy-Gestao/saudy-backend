@@ -345,9 +345,6 @@ export default async function ticketRoutes(app: FastifyInstance) {
     const ticket = await prisma.ticket.findUnique({ where: { id } });
     if (!ticket) return reply.code(404).send({ error: 'Ticket not found' });
     if (ticket.createdByUserId !== userId) return reply.code(403).send({ error: 'Forbidden' });
-    if (ticket.status === TicketStatus.CLOSED) {
-      return reply.code(409).send({ error: 'Ticket is closed and does not accept new messages' });
-    }
 
     const items = await prisma.ticketMessage.findMany({
       where: { ticketId: id },
@@ -410,6 +407,9 @@ export default async function ticketRoutes(app: FastifyInstance) {
     const ticket = await prisma.ticket.findUnique({ where: { id } });
     if (!ticket) return reply.code(404).send({ error: 'Ticket not found' });
     if (ticket.createdByUserId !== userId) return reply.code(403).send({ error: 'Forbidden' });
+    if (ticket.status === TicketStatus.CLOSED) {
+      return reply.code(409).send({ error: 'Ticket is closed and does not accept new messages' });
+    }
 
     let attachmentPayload: {
       attachmentName: string;
