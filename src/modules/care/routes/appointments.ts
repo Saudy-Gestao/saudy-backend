@@ -117,6 +117,11 @@ const hasBlockingStatus = (status?: string | null) => {
   return !(CANCELED_STATUSES.has(normalized) || COMPLETED_STATUSES.has(normalized) || NO_SHOW_STATUSES.has(normalized));
 };
 
+const isNoShowAppointmentStatus = (status?: string | null) => {
+  const normalized = normalizeStatus(status);
+  return NO_SHOW_STATUSES.has(normalized);
+};
+
 async function findDoctorScheduleConflict(params: {
   tx: Prisma.TransactionClient;
   branchId: string;
@@ -223,6 +228,10 @@ const applyAutomaticNoShowForBranch = async (branchId: string) => {
       data: { status: 'cancelado', isActive: false },
     });
   });
+
+  for (const appointmentId of appointmentIds) {
+    void WhatsAppAutoSender.sendNoShowMessageIfNeeded(branchId, appointmentId);
+  }
 };
 
 // Creates or updates the MwlEntry linked to this appointment.
@@ -831,6 +840,11 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         await syncMwlFromAppointment(tx, updated, branchId);
         return updated;
       });
+
+      if (!isNoShowAppointmentStatus(existing.status) && isNoShowAppointmentStatus(item.status)) {
+        void WhatsAppAutoSender.sendNoShowMessageIfNeeded(branchId, item.id);
+      }
+
       if (shouldResendAppointmentNotification) {
         WhatsAppAutoSender.sendAppointmentCreatedMessage(branchId, item.id);
       }

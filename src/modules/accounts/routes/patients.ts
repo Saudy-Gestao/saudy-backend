@@ -3,6 +3,34 @@ import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
+const getUniqueConstraintField = (target: unknown): string | null => {
+  if (Array.isArray(target)) {
+    const first = target.find((item) => typeof item === 'string' && item.trim().length > 0);
+    return typeof first === 'string' ? first : null;
+  }
+
+  if (typeof target === 'string' && target.trim().length > 0) {
+    const normalized = target.trim();
+    if (normalized.includes('cpf')) return 'cpf';
+    if (normalized.includes('email')) return 'email';
+    if (normalized.includes('guardianCpf')) return 'guardianCpf';
+    return normalized;
+  }
+
+  return null;
+};
+
+const getUniqueConstraintMessage = (field: string) => {
+  const messages: Record<string, string> = {
+    cpf: 'Já existe um paciente com este CPF',
+    email: 'Já existe um paciente com este e-mail',
+    guardianCpf: 'Já existe um paciente com este CPF do responsável',
+    registro: 'Já existe um registro com estes dados',
+  };
+
+  return messages[field] || `Já existe um registro com o campo ${field}`;
+};
+
 export default async function patientRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -261,8 +289,12 @@ export default async function patientRoutes(app: FastifyInstance) {
     } catch (error: any) {
       request.log.error({ err: error }, 'Failed to create patient');
       if (error.code === 'P2002') {
-        const field = error.meta?.target?.[0];
-        return reply.code(400).send({ error: 'Validation failed', fields: { [field]: `${field} já existe` } });
+        const field = getUniqueConstraintField(error.meta?.target) || 'registro';
+        return reply.code(400).send({
+          error: 'Validation failed',
+          message: getUniqueConstraintMessage(field),
+          fields: { [field]: getUniqueConstraintMessage(field) },
+        });
       }
       return reply.code(400).send({ error: 'Failed to create patient', details: error.message });
     }
@@ -375,8 +407,12 @@ export default async function patientRoutes(app: FastifyInstance) {
       return patient;
     } catch (error: any) {
       if (error.code === 'P2002') {
-        const field = error.meta?.target?.[0];
-        return reply.code(400).send({ error: 'Validation failed', fields: { [field]: `${field} já existe` } });
+        const field = getUniqueConstraintField(error.meta?.target) || 'registro';
+        return reply.code(400).send({
+          error: 'Validation failed',
+          message: getUniqueConstraintMessage(field),
+          fields: { [field]: getUniqueConstraintMessage(field) },
+        });
       }
       return reply.code(400).send({ error: 'Failed to update patient', details: error.message });
     }
