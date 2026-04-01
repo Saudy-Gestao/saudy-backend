@@ -35,6 +35,8 @@ const generateAccessionNumber = () => {
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
 const APPOINTMENT_MUTABLE_FIELDS = new Set([
   'rescheduledFromAppointmentId',
+  'sourceConsultationId',
+  'sourceProcedureId',
   'patientName',
   'patientCpf',
   'patientId',
@@ -49,6 +51,13 @@ const APPOINTMENT_MUTABLE_FIELDS = new Set([
   'accessionNumber',
   'authorizationStatus',
   'authorizationNotes',
+  'orderPriority',
+  'orderNotes',
+  'preferredDate',
+  'preferredTime',
+  'orderedAt',
+  'requestedByDoctor',
+  'scheduledByDoctor',
   'observations',
   'totem',
   'isActive',

@@ -1,19 +1,25 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
+import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 
 export default async function reportRoutes(app: FastifyInstance) {
   const getLoggedUser = async (request: any) => {
     const userId = (request.user as any)?.id;
-    if (!userId) return { userId: null, userName: null, branchId: null };
+    if (!userId) return { userId: null, userName: null, branchId: null, doctorName: null, doctorId: null };
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { sector: { include: { branch: true } } },
+      include: {
+        sector: { include: { branch: true } },
+        doctor: { select: { id: true, name: true } },
+      },
     });
     return {
       userId: user?.id || null,
       userName: (user as any)?.name || null,
       branchId: user?.sector?.branch?.id || null,
+      doctorName: user?.doctor?.name || null,
+      doctorId: user?.doctor?.id || null,
     };
   };
 
@@ -63,7 +69,8 @@ export default async function reportRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const context = await getLoggedUser(request);
+    const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { search, status, exam, worklistItemId, appointmentId, limit = 50, offset = 0 } = request.query as any;
@@ -79,6 +86,18 @@ export default async function reportRoutes(app: FastifyInstance) {
         { cpf: { contains: search, mode: 'insensitive' } },
         { requestingDoctor: { contains: search, mode: 'insensitive' } },
       ];
+    }
+    if (context?.doctorName) {
+      where.AND = where.AND || [];
+      where.AND.push({
+        OR: [
+          { requestingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+          { reportingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+          { reviewingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+          { responsibleDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+          { appointment: { doctorName: { equals: context.doctorName, mode: 'insensitive' } } },
+        ],
+      });
     }
 
     const [items, total] = await Promise.all([
@@ -106,12 +125,27 @@ export default async function reportRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const context = await getLoggedUser(request);
+    const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
     const item = await prisma.report.findFirst({
-      where: { id, branchId },
+      where: {
+        id,
+        branchId,
+        ...(context?.doctorName
+          ? {
+              OR: [
+                { requestingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+                { reportingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+                { reviewingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+                { responsibleDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+                { appointment: { doctorName: { equals: context.doctorName, mode: 'insensitive' } } },
+              ],
+            }
+          : {}),
+      },
       include: {
         appointment: { select: { id: true, patientName: true, patientCpf: true, specialty: true, date: true, time: true, doctorName: true, status: true } },
         worklistItem: { select: { id: true, dicomStudyUid: true, dicomUrl: true, dicomReceivedAt: true, accessionNumber: true } },
@@ -332,6 +366,51 @@ export default async function reportRoutes(app: FastifyInstance) {
         performedByName: userName,
         details: JSON.stringify(auditDetails),
       });
+
+      if (existing.status !== 'finalizado' && item.status === 'finalizado' && item.appointmentId) {
+        void (async () => {
+          try {
+            const alreadyNotified = await prisma.reportAuditLog.findFirst({
+              where: {
+                branchId,
+                reportId: id,
+                action: 'notificacao_exame_pronto_enviada',
+              },
+              select: { id: true },
+            });
+
+            if (alreadyNotified) return;
+
+            const branch = await prisma.branch.findUnique({
+              where: { id: branchId },
+              select: { tradeName: true },
+            });
+
+            const result = await WhatsAppAutoSender.sendExamResultReadyMessage({
+              branchId,
+              appointmentId: item.appointmentId,
+              patientName: item.patientName || null,
+              examName: item.exam || null,
+              clinicName: branch?.tradeName || null,
+            });
+
+            await createAuditLog({
+              branchId,
+              reportId: id,
+              action: result.success ? 'notificacao_exame_pronto_enviada' : 'notificacao_exame_pronto_falhou',
+              performedByUserId: userId,
+              performedByName: userName,
+              details: JSON.stringify({
+                appointmentId: item.appointmentId,
+                statusLaudo: item.status,
+                error: result.error || null,
+              }),
+            });
+          } catch (notifyError: any) {
+            request.log.warn({ err: notifyError, reportId: id }, 'Failed to notify patient about ready report');
+          }
+        })();
+      }
 
       return item;
     } catch (err: any) {

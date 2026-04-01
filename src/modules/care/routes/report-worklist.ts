@@ -33,14 +33,21 @@ const toWorklistView = (item: any, appointment: any | null) => ({
 });
 
 export default async function reportWorklistRoutes(app: FastifyInstance) {
-  const getLoggedBranchId = async (request: any) => {
+  const getLoggedContext = async (request: any) => {
     const userId = (request.user as any)?.id;
-    if (!userId) return null;
+    if (!userId) return { branchId: null, doctorName: null, doctorId: null };
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { sector: { include: { branch: true } } },
+      include: {
+        sector: { include: { branch: true } },
+        doctor: { select: { id: true, name: true } },
+      },
     });
-    return user?.sector?.branch?.id || null;
+    return {
+      branchId: user?.sector?.branch?.id || null,
+      doctorName: user?.doctor?.name || null,
+      doctorId: user?.doctor?.id || null,
+    };
   };
 
   app.addHook('onRequest', async (request, reply) => {
@@ -67,7 +74,8 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { search, status, examType, limit = 50, offset = 0 } = request.query as any;
@@ -84,6 +92,15 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
           { patientCpf: { contains: search, mode: 'insensitive' } },
           { examType: { contains: search, mode: 'insensitive' } },
           { accessionNumber: { contains: search, mode: 'insensitive' } },
+        ],
+      });
+    }
+    if (context?.doctorName) {
+      where.AND = where.AND || [];
+      where.AND.push({
+        OR: [
+          { requestingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
+          { appointment: { doctorName: { equals: context.doctorName, mode: 'insensitive' } } },
         ],
       });
     }
@@ -140,7 +157,8 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
@@ -156,6 +174,14 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
           select: APPOINTMENT_SELECT,
         })
       : null;
+
+    if (context?.doctorName) {
+      const isRequestingDoctorMatch = String(item.requestingDoctor || '').trim().toLowerCase() === String(context.doctorName || '').trim().toLowerCase();
+      const isAppointmentDoctorMatch = String(appointment?.doctorName || '').trim().toLowerCase() === String(context.doctorName || '').trim().toLowerCase();
+      if (!isRequestingDoctorMatch && !isAppointmentDoctorMatch) {
+        return reply.code(404).send({ error: 'Report worklist item not found' });
+      }
+    }
 
     const finalizedAddendumCount = await prisma.reportAddendum.count({
       where: {
@@ -201,7 +227,8 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const data = request.body as any;
@@ -298,7 +325,8 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
@@ -381,7 +409,8 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;

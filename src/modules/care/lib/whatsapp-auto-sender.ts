@@ -17,6 +17,7 @@ export interface SendWhatsAppParams {
   appointmentId: string;
   messageType: WhatsAppMessageType;
   customMessage?: string;
+  skipNotificationSettings?: boolean;
 }
 
 interface FailedLogParams {
@@ -202,7 +203,7 @@ export class WhatsAppAutoSender {
       });
 
       // Verificar se deve enviar mensagem baseado no tipo
-      if (params.messageType === 'APPOINTMENT_CREATED' && notificationConfig && !notificationConfig.sendOnAppointmentCreated) {
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CREATED' && notificationConfig && !notificationConfig.sendOnAppointmentCreated) {
         const errorMessage = 'Envio de mensagem ao criar agendamento está desativado';
         await this.createFailedLog({
           branchId: params.branchId,
@@ -215,7 +216,7 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      if (params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig && !notificationConfig.sendConfirmationEnabled) {
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig && !notificationConfig.sendConfirmationEnabled) {
         const errorMessage = 'Envio de confirmação de agendamento está desativado';
         await this.createFailedLog({
           branchId: params.branchId,
@@ -228,7 +229,7 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      if (params.messageType === 'APPOINTMENT_REMINDER' && notificationConfig && !notificationConfig.sendReminderEnabled) {
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_REMINDER' && notificationConfig && !notificationConfig.sendReminderEnabled) {
         const errorMessage = 'Envio de lembrete está desativado';
         await this.createFailedLog({
           branchId: params.branchId,
@@ -450,6 +451,33 @@ export class WhatsAppAutoSender {
     } catch (err) {
       console.error('Failed to send no-show message:', err);
     }
+  }
+
+  static async sendExamResultReadyMessage(params: {
+    branchId: string;
+    appointmentId: string;
+    patientName?: string | null;
+    examName?: string | null;
+    clinicName?: string | null;
+  }): Promise<{ success: boolean; error?: string }> {
+    const patientName = (params.patientName || '').trim();
+    const examName = (params.examName || 'seu exame').trim();
+    const clinicName = (params.clinicName || 'nossa clínica').trim();
+
+    const message = [
+      `Olá${patientName ? `, ${patientName}` : ''}!`,
+      `Seu resultado de ${examName} já está pronto em ${clinicName}.`,
+      'Recomendamos agendar sua consulta de retorno para avaliação médica.',
+      'Se precisar, nossa equipe pode ajudar com o agendamento.',
+    ].join('\n');
+
+    return this.sendMessage({
+      branchId: params.branchId,
+      appointmentId: params.appointmentId,
+      messageType: 'APPOINTMENT_REMINDER',
+      customMessage: message,
+      skipNotificationSettings: true,
+    });
   }
 }
 

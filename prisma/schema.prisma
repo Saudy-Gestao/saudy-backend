@@ -84,6 +84,7 @@ model BranchSettings {
     id                                   String   @id @default(uuid())
     branchId                             String   @unique
     branch                               Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+    doctorCanScheduleExamFromConsultation Boolean @default(false)
     requireFacialForReportDelivery       Boolean  @default(false)
     requireFacialForPatientRegistration  Boolean  @default(true)
     noShowToleranceMinutes               Int      @default(30)
@@ -749,6 +750,8 @@ model Appointment {
     rescheduledFromAppointmentId String?
     rescheduledFromAppointment Appointment? @relation("AppointmentReschedule", fields: [rescheduledFromAppointmentId], references: [id], onDelete: SetNull)
     rescheduledAppointments Appointment[] @relation("AppointmentReschedule")
+    sourceConsultationId String?
+    sourceProcedureId String?
     patientName     String?
     patientCpf      String?
     patientId       String?
@@ -765,6 +768,13 @@ model Appointment {
     authorizationNotes  String? @db.Text
     authorizedAt        DateTime?
     inventoryConsumedAt DateTime?
+    orderPriority   String?
+    orderNotes      String? @db.Text
+    preferredDate   String?
+    preferredTime   String?
+    orderedAt       DateTime?
+    requestedByDoctor Boolean @default(false)
+    scheduledByDoctor Boolean @default(false)
     observations    String?
     totem           Int?
     preSchedulingFlow PreSchedulingFlow?
@@ -779,6 +789,8 @@ model Appointment {
     consultations   Consultation[]
 
     @@index([branchId])
+    @@index([sourceConsultationId])
+    @@index([sourceProcedureId])
     @@index([rescheduledFromAppointmentId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
     @@map("appointments")

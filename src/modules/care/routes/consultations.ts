@@ -96,6 +96,52 @@ const isExamAppointment = (value?: string | null) => {
   return normalized === 'EXAME' || normalized === 'EXAM';
 };
 
+const NON_BLOCKING_APPOINTMENT_STATUSES = new Set([
+  'CANCELADO',
+  'CANCELED',
+  'REALIZADO',
+  'COMPLETED',
+  'FINALIZADO',
+  'NO_SHOW',
+  'NAO_COMPARECEU',
+  'NÃO_COMPARECEU',
+  'AUSENTE',
+  'FALTOU',
+]);
+
+const parseTimeToMinutes = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return (hours * 60) + minutes;
+};
+
+const rangesOverlap = (
+  startA?: string | null,
+  durationA?: number | null,
+  startB?: string | null,
+  durationB?: number | null,
+) => {
+  const startMinutesA = parseTimeToMinutes(startA);
+  const startMinutesB = parseTimeToMinutes(startB);
+  if (startMinutesA === null || startMinutesB === null) return false;
+  const safeDurationA = Number.isFinite(Number(durationA)) && Number(durationA) > 0 ? Number(durationA) : 30;
+  const safeDurationB = Number.isFinite(Number(durationB)) && Number(durationB) > 0 ? Number(durationB) : 30;
+  const endA = startMinutesA + safeDurationA;
+  const endB = startMinutesB + safeDurationB;
+  return startMinutesA < endB && startMinutesB < endA;
+};
+
+const formatDateToIso = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
 const normalizeNursingAnswers = (answers: unknown) => {
   if (!Array.isArray(answers)) return [];
 
@@ -711,6 +757,76 @@ export default async function consultationRoutes(app: FastifyInstance) {
     };
   };
 
+  const getExamOrderBranchSettings = async (branchId: string) => {
+    const settings = await prisma.branchSettings.upsert({
+      where: { branchId },
+      update: {},
+      create: { branchId },
+      select: { doctorCanScheduleExamFromConsultation: true },
+    });
+    return {
+      doctorCanScheduleExamFromConsultation: Boolean(settings?.doctorCanScheduleExamFromConsultation),
+    };
+  };
+
+  const resolveAvailableExamSlots = async (params: {
+    branchId: string;
+    doctorName?: string | null;
+    durationMinutes?: number | null;
+    limit?: number;
+  }) => {
+    const limit = Math.max(3, Math.min(Number(params.limit || 5), 5));
+    const duration = Number.isFinite(Number(params.durationMinutes)) && Number(params.durationMinutes) > 0
+      ? Number(params.durationMinutes)
+      : 30;
+    const doctorName = String(params.doctorName || '').trim();
+    if (!doctorName) return [] as Array<{ date: string; time: string }>;
+
+    const now = new Date();
+    const suggested: Array<{ date: string; time: string }> = [];
+
+    for (let dayOffset = 0; dayOffset < 30 && suggested.length < limit; dayOffset += 1) {
+      const day = new Date(now);
+      day.setDate(now.getDate() + dayOffset);
+      const weekDay = day.getDay();
+      if (weekDay === 0) continue;
+
+      const dateIso = formatDateToIso(day);
+      const appointments = await prisma.appointment.findMany({
+        where: {
+          branchId: params.branchId,
+          doctorName: { equals: doctorName, mode: 'insensitive' },
+          date: dateIso,
+          isActive: true,
+        },
+        select: { time: true, durationMinutes: true, status: true },
+      });
+
+      const busy = appointments.filter((item: any) =>
+        !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeStatusKey(item?.status || '')));
+
+      const startHour = 8;
+      const endHour = 18;
+      for (let hour = startHour; hour < endHour && suggested.length < limit; hour += 1) {
+        for (const minute of [0, 30]) {
+          const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+          if (dayOffset === 0) {
+            const slotDate = new Date(`${dateIso}T${time}:00`);
+            if (slotDate <= now) continue;
+          }
+          const hasConflict = busy.some((item: any) =>
+            rangesOverlap(time, duration, item?.time, item?.durationMinutes));
+          if (!hasConflict) {
+            suggested.push({ date: dateIso, time });
+            if (suggested.length >= limit) break;
+          }
+        }
+      }
+    }
+
+    return suggested;
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     try {
       await request.jwtVerify();
@@ -1148,6 +1264,320 @@ export default async function consultationRoutes(app: FastifyInstance) {
         collectPregnancyCheck: nursingTemplate.collectPregnancyCheck,
         questions: nursingTemplate.questions || [],
       },
+    });
+  });
+
+  app.get('/exam-order-config', {
+    schema: {
+      summary: 'Get exam order configuration for the branch',
+      tags: ['Consultations'],
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+    return getExamOrderBranchSettings(branchId);
+  });
+
+  app.put('/exam-order-config', {
+    schema: {
+      summary: 'Update exam order configuration for the branch',
+      tags: ['Consultations'],
+      body: {
+        type: 'object',
+        required: ['doctorCanScheduleExamFromConsultation'],
+        properties: {
+          doctorCanScheduleExamFromConsultation: { type: 'boolean' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const data = request.body as any;
+    const updated = await prisma.branchSettings.upsert({
+      where: { branchId },
+      update: {
+        doctorCanScheduleExamFromConsultation: Boolean(data?.doctorCanScheduleExamFromConsultation),
+      },
+      create: {
+        branchId,
+        doctorCanScheduleExamFromConsultation: Boolean(data?.doctorCanScheduleExamFromConsultation),
+      },
+      select: { doctorCanScheduleExamFromConsultation: true },
+    });
+
+    return {
+      doctorCanScheduleExamFromConsultation: Boolean(updated?.doctorCanScheduleExamFromConsultation),
+    };
+  });
+
+  app.get('/:id/exam-procedures', {
+    schema: {
+      summary: 'List exam procedures available to consultation context',
+      tags: ['Consultations'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const consultation = await prisma.consultation.findFirst({
+      where: { id, branchId, isActive: true },
+      select: { id: true, doctorId: true },
+    });
+    if (!consultation) return reply.code(404).send({ error: 'Consultation not found' });
+
+    const doctorId = String(consultation.doctorId || context?.doctorId || '').trim();
+    const procedures = await prisma.procedure.findMany({
+      where: {
+        branchId,
+        isActive: true,
+        appointmentType: { in: ['EXAME', 'EXAM'] },
+      },
+      include: { doctors: { select: { doctorId: true } } },
+      orderBy: { name: 'asc' },
+      take: 300,
+    });
+
+    const filtered = doctorId
+      ? procedures.filter((item: any) => item.doctors.length === 0 || item.doctors.some((link: any) => String(link.doctorId) === doctorId))
+      : procedures;
+
+    return {
+      items: filtered.map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        durationMinutes: item.durationMinutes || 30,
+        price: item.price || null,
+      })),
+      total: filtered.length,
+    };
+  });
+
+  app.get('/:id/exam-slots', {
+    schema: {
+      summary: 'Suggest available exam slots for doctor scheduling',
+      tags: ['Consultations'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      querystring: {
+        type: 'object',
+        required: ['procedureId'],
+        properties: {
+          procedureId: { type: 'string' },
+          limit: { type: 'number', default: 5 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const { procedureId, limit = 5 } = request.query as any;
+    const settings = await getExamOrderBranchSettings(branchId);
+    if (!settings.doctorCanScheduleExamFromConsultation) {
+      return reply.code(403).send({ error: 'Doctor scheduling from consultation is disabled for this branch' });
+    }
+
+    const consultation = await prisma.consultation.findFirst({
+      where: { id, branchId, isActive: true },
+      include: { appointment: true },
+    });
+    if (!consultation) return reply.code(404).send({ error: 'Consultation not found' });
+
+    const procedure = await prisma.procedure.findFirst({
+      where: {
+        id: String(procedureId),
+        branchId,
+        isActive: true,
+        appointmentType: { in: ['EXAME', 'EXAM'] },
+      },
+      select: { id: true, name: true, durationMinutes: true },
+    });
+    if (!procedure) return reply.code(404).send({ error: 'Procedure not found' });
+
+    const doctorName = String(consultation.doctorName || consultation.appointment?.doctorName || '').trim();
+    const slots = await resolveAvailableExamSlots({
+      branchId,
+      doctorName,
+      durationMinutes: procedure.durationMinutes || 30,
+      limit,
+    });
+
+    return {
+      procedure: {
+        id: procedure.id,
+        name: procedure.name,
+        durationMinutes: procedure.durationMinutes || 30,
+      },
+      items: slots,
+      total: slots.length,
+    };
+  });
+
+  app.post('/:id/exam-orders', {
+    schema: {
+      summary: 'Create structured exam order from consultation',
+      tags: ['Consultations'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        properties: {
+          procedureId: { type: 'string' },
+          examType: { type: 'string' },
+          priority: { type: 'string' },
+          notes: { type: 'string' },
+          preferredDate: { type: 'string' },
+          preferredTime: { type: 'string' },
+          scheduleDate: { type: 'string' },
+          scheduleTime: { type: 'string' },
+        },
+      },
+      response: {
+        201: { type: 'object' },
+        400: { type: 'object', additionalProperties: true },
+        403: { type: 'object', additionalProperties: true },
+        409: { type: 'object', additionalProperties: true },
+        404: { type: 'object', additionalProperties: true },
+      },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const data = request.body as any;
+
+    const procedureId = String(data?.procedureId || '').trim();
+    const settings = await getExamOrderBranchSettings(branchId);
+
+    const consultation = await prisma.consultation.findFirst({
+      where: {
+        id,
+        branchId,
+        isActive: true,
+        ...((context?.doctorId || context?.doctorName)
+          ? {
+              OR: [
+                ...(context?.doctorId ? [{ doctorId: context.doctorId }] : []),
+                ...(context?.doctorName ? [{ doctorName: context.doctorName }] : []),
+              ],
+            }
+          : {}),
+      },
+      include: {
+        appointment: true,
+      },
+    });
+    if (!consultation) return reply.code(404).send({ error: 'Consultation not found' });
+
+    let procedure = null as any;
+    if (procedureId) {
+      procedure = await prisma.procedure.findFirst({
+        where: {
+          id: procedureId,
+          branchId,
+          isActive: true,
+          appointmentType: { in: ['EXAME', 'EXAM'] },
+        },
+        select: { id: true, name: true, durationMinutes: true },
+      });
+      if (!procedure) return reply.code(404).send({ error: 'Procedure not found' });
+    }
+
+    const examType = String(procedure?.name || data?.examType || '').trim();
+    if (!examType) return reply.code(400).send({ error: 'procedureId or examType is required' });
+
+    const requestedScheduleDate = String(data?.scheduleDate || '').trim();
+    const requestedScheduleTime = String(data?.scheduleTime || '').trim();
+    const hasRequestedScheduling = Boolean(requestedScheduleDate && requestedScheduleTime);
+    if (hasRequestedScheduling && !settings.doctorCanScheduleExamFromConsultation) {
+      return reply.code(403).send({ error: 'Doctor scheduling from consultation is disabled for this branch' });
+    }
+
+    const sourceAppointment = consultation.appointmentId
+      ? await prisma.appointment.findFirst({
+          where: { id: consultation.appointmentId, branchId, isActive: true },
+        })
+      : null;
+
+    const resolvedDate = hasRequestedScheduling
+      ? requestedScheduleDate
+      : (data?.preferredDate ? String(data.preferredDate).trim() : null);
+    const resolvedTime = hasRequestedScheduling
+      ? requestedScheduleTime
+      : (data?.preferredTime ? String(data.preferredTime).trim() : null);
+
+    if (hasRequestedScheduling && !/^\d{4}-\d{2}-\d{2}$/.test(requestedScheduleDate)) {
+      return reply.code(400).send({ error: 'scheduleDate must be YYYY-MM-DD' });
+    }
+    if (hasRequestedScheduling && !/^\d{2}:\d{2}$/.test(requestedScheduleTime)) {
+      return reply.code(400).send({ error: 'scheduleTime must be HH:mm' });
+    }
+
+    if (hasRequestedScheduling) {
+      const doctorName = String(consultation.doctorName || sourceAppointment?.doctorName || '').trim();
+      const conflicts = await prisma.appointment.findMany({
+        where: {
+          branchId,
+          doctorName: { equals: doctorName, mode: 'insensitive' },
+          date: requestedScheduleDate,
+          isActive: true,
+        },
+        select: { id: true, time: true, durationMinutes: true, status: true },
+      });
+      const duration = Number(procedure?.durationMinutes || 30);
+      const hasConflict = conflicts
+        .filter((item: any) => !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeStatusKey(item?.status || '')))
+        .some((item: any) => rangesOverlap(requestedScheduleTime, duration, item?.time, item?.durationMinutes));
+      if (hasConflict) {
+        return reply.code(409).send({ error: 'Scheduling conflict for selected slot' });
+      }
+    }
+
+    const normalizedPriority = data?.priority ? String(data.priority).trim().toUpperCase() : null;
+    const normalizedOrderNotes = data?.notes ? String(data.notes).trim() : null;
+    const normalizedPreferredDate = data?.preferredDate ? String(data.preferredDate).trim() : null;
+    const normalizedPreferredTime = data?.preferredTime ? String(data.preferredTime).trim() : null;
+    const normalizedProcedureId = procedureId || null;
+
+    const created = await prisma.appointment.create({
+      data: {
+        branchId,
+        sourceConsultationId: consultation.id,
+        sourceProcedureId: normalizedProcedureId,
+        patientName: sourceAppointment?.patientName || consultation.patientName || null,
+        patientCpf: sourceAppointment?.patientCpf || null,
+        patientId: sourceAppointment?.patientId || null,
+        doctorName: consultation.doctorName || sourceAppointment?.doctorName || null,
+        specialty: examType,
+        durationMinutes: Number(procedure?.durationMinutes || 30),
+        convenio: sourceAppointment?.convenio || consultation.convenio || null,
+        date: hasRequestedScheduling ? resolvedDate : null,
+        time: hasRequestedScheduling ? resolvedTime : null,
+        type: 'EXAME',
+        status: hasRequestedScheduling ? 'AGENDADO' : 'PEDIDO_MEDICO',
+        orderPriority: normalizedPriority,
+        orderNotes: normalizedOrderNotes,
+        preferredDate: normalizedPreferredDate,
+        preferredTime: normalizedPreferredTime,
+        orderedAt: new Date(),
+        requestedByDoctor: true,
+        scheduledByDoctor: hasRequestedScheduling,
+        observations: normalizedOrderNotes,
+      },
+    });
+
+    return reply.code(201).send({
+      message: hasRequestedScheduling ? 'Exam scheduled from consultation' : 'Exam order created',
+      appointment: created,
     });
   });
 
