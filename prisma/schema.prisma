@@ -110,6 +110,54 @@ model BranchPublicCheckInAuditLog {
     @@map("branch_public_check_in_audit_logs")
 }
 
+model PatientPortalAccessLog {
+    id        String   @id @default(uuid())
+    branchId  String?
+    patientId String?
+    cpf       String?
+    event     String
+    status    String
+    message   String   @db.Text
+    ipAddress String
+    userAgent String?  @db.Text
+    createdAt DateTime @default(now())
+
+    @@index([patientId, createdAt])
+    @@index([cpf, createdAt])
+    @@index([event, createdAt])
+    @@index([status, createdAt])
+    @@index([branchId, createdAt])
+    @@map("patient_portal_access_logs")
+}
+
+model PatientPortalDependentAuthorization {
+    id                   String   @id @default(uuid())
+    branchId             String?
+    guardianPatientId    String?
+    guardianCpf          String   @db.VarChar(11)
+    dependentPatientId   String
+    dependentCpf         String   @db.VarChar(11)
+    relationship         String?
+    authorizedByUserId   String?
+    authorizedByName     String?
+    status               String   @default("ACTIVE")
+    startsAt             DateTime @default(now())
+    expiresAt            DateTime?
+    revokedAt            DateTime?
+    revokedByUserId      String?
+    revokedByName        String?
+    notes                String?  @db.Text
+    createdAt            DateTime @default(now())
+    updatedAt            DateTime @updatedAt
+
+    @@index([guardianPatientId, status, startsAt, expiresAt])
+    @@index([guardianCpf, status, startsAt, expiresAt])
+    @@index([dependentPatientId, status])
+    @@index([dependentCpf, status])
+    @@index([branchId, status])
+    @@map("patient_portal_dependent_authorizations")
+}
+
 model Sector {
     id          String @id @default(uuid())
     branchId    String

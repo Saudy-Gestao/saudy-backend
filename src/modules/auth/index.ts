@@ -7,6 +7,7 @@ import accessRoutes from './routes/accesses';
 import moduleRoutes from './routes/modules';
 import userRoutes from './routes/users';
 import authRoutes from './routes/auth';
+import patientPortalRoutes from './routes/patient-portal';
 import { registerSchemas } from './lib/openapi';
 
 export default async function authModule(app: FastifyInstance) {
@@ -19,5 +20,6 @@ export default async function authModule(app: FastifyInstance) {
   app.register(accessRoutes);
   app.register(userRoutes);
   app.register(authRoutes);
+  app.register(patientPortalRoutes);
   app.register(moduleRoutes);
 }
