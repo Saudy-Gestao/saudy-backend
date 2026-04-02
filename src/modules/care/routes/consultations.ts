@@ -1148,7 +1148,9 @@ export default async function consultationRoutes(app: FastifyInstance) {
       const defaultQueue = isExamAppointment(linkedAppointment?.type)
         ? (nursingTemplate ? 'Aguardando triagem' : 'Aguardando exame')
         : 'Aguardando atendimento';
-      const resolvedQueue = nursingTemplate ? defaultQueue : (data.queue || defaultQueue);
+      const resolvedQueue = isExamAppointment(linkedAppointment?.type)
+        ? defaultQueue
+        : (nursingTemplate ? defaultQueue : (data.queue || defaultQueue));
 
       const isClinicalQueueCreate = canonicalClinicalQueueStatus(data?.queueType) === 'FILA_CLINICA';
       if (isClinicalQueueCreate) {
