@@ -41,6 +41,8 @@ const APPOINTMENT_MUTABLE_FIELDS = new Set([
   'patientCpf',
   'patientId',
   'doctorName',
+  'roomId',
+  'medicalEquipmentId',
   'specialty',
   'convenio',
   'date',
@@ -166,6 +168,57 @@ async function findDoctorScheduleConflict(params: {
     select: {
       id: true,
       patientName: true,
+      time: true,
+      durationMinutes: true,
+      status: true,
+    },
+  });
+
+  return candidates.find((candidate: any) => (
+    timeRangesOverlap(time, durationMinutes, candidate?.time, candidate?.durationMinutes)
+  )) || null;
+}
+
+async function findResourceScheduleConflict(params: {
+  tx: Prisma.TransactionClient;
+  branchId: string;
+  roomId?: string | null;
+  medicalEquipmentId?: string | null;
+  date?: string | null;
+  time?: string | null;
+  durationMinutes?: number | null;
+  excludeAppointmentId?: string | null;
+}) {
+  const { tx, branchId, roomId, medicalEquipmentId, date, time, durationMinutes, excludeAppointmentId } = params;
+  if ((!roomId && !medicalEquipmentId) || !date || !time) return null;
+
+  const candidates = await tx.appointment.findMany({
+    where: {
+      branchId,
+      date,
+      isActive: true,
+      ...(excludeAppointmentId ? { id: { not: excludeAppointmentId } } : {}),
+      OR: [
+        ...(roomId ? [{ roomId }] : []),
+        ...(medicalEquipmentId ? [{ medicalEquipmentId }] : []),
+      ],
+      NOT: [
+        { status: 'CANCELED' },
+        { status: 'CANCELADO' },
+        { status: 'COMPLETED' },
+        { status: 'CONCLUIDO' },
+        { status: 'NAO_COMPARECEU' },
+        { status: 'NÃO_COMPARECEU' },
+        { status: 'NO_SHOW' },
+        { status: 'NO-SHOW' },
+        { status: 'AUSENTE' },
+        { status: 'FALTOU' },
+      ],
+    },
+    select: {
+      id: true,
+      roomId: true,
+      medicalEquipmentId: true,
       time: true,
       durationMinutes: true,
       status: true,
@@ -655,6 +708,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           patientCpf: { type: 'string' },
           patientId: { type: 'string' },
           doctorName: { type: 'string' },
+          roomId: { type: 'string' },
+          medicalEquipmentId: { type: 'string' },
           specialty: { type: 'string' },
           durationMinutes: { type: 'number' },
           convenio: { type: 'string' },
@@ -713,6 +768,26 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         });
       }
 
+      const resourceConflict = await prisma.$transaction(async (tx: Prisma.TransactionClient) => (
+        findResourceScheduleConflict({
+          tx,
+          branchId,
+          roomId: data.roomId || null,
+          medicalEquipmentId: data.medicalEquipmentId || null,
+          date: data.date || null,
+          time: data.time || null,
+          durationMinutes: requestedDurationMinutes,
+        })
+      ));
+
+      if (resourceConflict) {
+        return reply.code(409).send({
+          error: 'Scheduling conflict',
+          message: 'A sala ou o equipamento já está reservado nesse horário.',
+          details: 'Conflito identificado no recurso selecionado.',
+        });
+      }
+
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const created = await tx.appointment.create({ data: {
           branchId,
@@ -721,6 +796,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           patientCpf: data.patientCpf || null,
           patientId: data.patientId || null,
           doctorName: data.doctorName || null,
+          roomId: data.roomId || null,
+          medicalEquipmentId: data.medicalEquipmentId || null,
           specialty: data.specialty || null,
           durationMinutes: Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : null,
           convenio: data.convenio || null,
@@ -793,6 +870,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           Object.entries(data || {}).filter(([key]) => APPOINTMENT_MUTABLE_FIELDS.has(key))
         ) as Record<string, any>;
         const resolvedDoctorName = updateData.doctorName ?? existing.doctorName;
+        const resolvedRoomId = updateData.roomId ?? existing.roomId;
+        const resolvedMedicalEquipmentId = updateData.medicalEquipmentId ?? existing.medicalEquipmentId;
         const resolvedDate = updateData.date ?? existing.date;
         const resolvedTime = updateData.time ?? existing.time;
         const resolvedDurationMinutes = Number.isFinite(updateData.durationMinutes)
@@ -801,6 +880,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         const nextStatusForConflict = updateData.status ?? existing.status;
         const schedulingChanged = (
           resolvedDoctorName !== existing.doctorName
+          || resolvedRoomId !== existing.roomId
+          || resolvedMedicalEquipmentId !== existing.medicalEquipmentId
           || resolvedDate !== existing.date
           || resolvedTime !== existing.time
           || resolvedDurationMinutes !== (Number.isFinite(existing.durationMinutes) ? Number(existing.durationMinutes) : 30)
@@ -818,6 +899,20 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           });
           if (doctorConflict) {
             throw new Error('DOCTOR_SCHEDULE_CONFLICT::' + String(doctorConflict.patientName || 'outro paciente') + '::' + String(doctorConflict.time || ''));
+          }
+
+          const resourceConflict = await findResourceScheduleConflict({
+            tx,
+            branchId,
+            roomId: resolvedRoomId,
+            medicalEquipmentId: resolvedMedicalEquipmentId,
+            date: resolvedDate,
+            time: resolvedTime,
+            durationMinutes: resolvedDurationMinutes,
+            excludeAppointmentId: id,
+          });
+          if (resourceConflict) {
+            throw new Error('RESOURCE_SCHEDULE_CONFLICT');
           }
         }
         if (updateData.authorizationStatus === 'AUTHORIZED' && !existing.authorizedAt) {
@@ -866,6 +961,13 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           error: 'Scheduling conflict',
           message: 'O médico já possui outra consulta nesse horário.',
           details: 'Conflito com ' + String(patientName || 'outro paciente') + ' às ' + String(conflictTime || '') + '.',
+        });
+      }
+      if (String(err?.message || '').startsWith('RESOURCE_SCHEDULE_CONFLICT')) {
+        return reply.code(409).send({
+          error: 'Scheduling conflict',
+          message: 'A sala ou o equipamento já está reservado nesse horário.',
+          details: 'Conflito identificado no recurso selecionado.',
         });
       }
       return reply.code(400).send({ error: 'Failed to update appointment', details: err.message });

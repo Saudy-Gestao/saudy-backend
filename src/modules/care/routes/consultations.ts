@@ -771,6 +771,8 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
   const resolveAvailableExamSlots = async (params: {
     branchId: string;
+    procedureId: string;
+    doctorId?: string | null;
     doctorName?: string | null;
     durationMinutes?: number | null;
     limit?: number;
@@ -780,10 +782,66 @@ export default async function consultationRoutes(app: FastifyInstance) {
       ? Number(params.durationMinutes)
       : 30;
     const doctorName = String(params.doctorName || '').trim();
-    if (!doctorName) return [] as Array<{ date: string; time: string }>;
+    if (!doctorName && !params.doctorId) return [] as Array<any>;
+
+    const doctor = params.doctorId
+      ? await prisma.doctor.findFirst({
+          where: { id: String(params.doctorId), isActive: true },
+          select: { id: true, name: true, roomId: true, roomLinks: { select: { roomId: true } } },
+        })
+      : await prisma.doctor.findFirst({
+          where: {
+            branchId: params.branchId,
+            name: { equals: doctorName, mode: 'insensitive' },
+            isActive: true,
+          },
+          select: { id: true, name: true, roomId: true, roomLinks: { select: { roomId: true } } },
+        });
+    if (!doctor) return [] as Array<any>;
+
+    const roomIds = Array.from(new Set([
+      String(doctor.roomId || '').trim(),
+      ...((doctor.roomLinks || []).map((link: any) => String(link.roomId || '').trim())),
+    ].filter(Boolean)));
+    if (roomIds.length === 0) return [] as Array<any>;
+
+    const equipmentLinks = await prisma.medicalEquipmentProcedure.findMany({
+      where: { procedureId: String(params.procedureId) },
+      include: {
+        medicalEquipment: {
+          select: {
+            id: true,
+            branchId: true,
+            roomId: true,
+            name: true,
+            status: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+
+    const eligibleResources = equipmentLinks
+      .map((link: any) => link.medicalEquipment)
+      .filter((eq: any) => eq
+        && eq.isActive
+        && String(eq.branchId || '') === String(params.branchId)
+        && eq.roomId
+        && roomIds.includes(String(eq.roomId))
+        && !['INATIVO', 'MANUTENCAO', 'MANUTENÇÃO'].includes(normalizeStatusKey(eq.status || '')));
+    if (eligibleResources.length === 0) return [] as Array<any>;
+
+    const equipmentIds = eligibleResources.map((eq: any) => String(eq.id));
 
     const now = new Date();
-    const suggested: Array<{ date: string; time: string }> = [];
+    const suggested: Array<{
+      date: string;
+      time: string;
+      roomId: string;
+      medicalEquipmentId: string;
+      roomName?: string | null;
+      medicalEquipmentName?: string | null;
+    }> = [];
 
     for (let dayOffset = 0; dayOffset < 30 && suggested.length < limit; dayOffset += 1) {
       const day = new Date(now);
@@ -795,11 +853,15 @@ export default async function consultationRoutes(app: FastifyInstance) {
       const appointments = await prisma.appointment.findMany({
         where: {
           branchId: params.branchId,
-          doctorName: { equals: doctorName, mode: 'insensitive' },
           date: dateIso,
           isActive: true,
+          OR: [
+            { doctorName: { equals: doctor.name, mode: 'insensitive' } },
+            { roomId: { in: roomIds } },
+            { medicalEquipmentId: { in: equipmentIds } },
+          ],
         },
-        select: { time: true, durationMinutes: true, status: true },
+        select: { time: true, durationMinutes: true, status: true, doctorName: true, roomId: true, medicalEquipmentId: true },
       });
 
       const busy = appointments.filter((item: any) =>
@@ -814,14 +876,51 @@ export default async function consultationRoutes(app: FastifyInstance) {
             const slotDate = new Date(`${dateIso}T${time}:00`);
             if (slotDate <= now) continue;
           }
-          const hasConflict = busy.some((item: any) =>
-            rangesOverlap(time, duration, item?.time, item?.durationMinutes));
-          if (!hasConflict) {
-            suggested.push({ date: dateIso, time });
-            if (suggested.length >= limit) break;
+
+          const doctorConflict = busy
+            .filter((item: any) => String(item?.doctorName || '').trim().toLowerCase() === String(doctor.name || '').trim().toLowerCase())
+            .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
+          if (doctorConflict) continue;
+
+          const availableResource = eligibleResources.find((resource: any) => {
+            const roomConflict = busy
+              .filter((item: any) => String(item?.roomId || '') === String(resource.roomId || ''))
+              .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
+            if (roomConflict) return false;
+            const equipmentConflict = busy
+              .filter((item: any) => String(item?.medicalEquipmentId || '') === String(resource.id || ''))
+              .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
+            return !equipmentConflict;
+          });
+
+          if (availableResource) {
+            suggested.push({
+              date: dateIso,
+              time,
+              roomId: String(availableResource.roomId),
+              medicalEquipmentId: String(availableResource.id),
+              roomName: null,
+              medicalEquipmentName: availableResource.name || null,
+            });
+            if (suggested.length >= limit) {
+              break;
+            }
           }
         }
       }
+    }
+
+    const roomIdsUsed = Array.from(new Set(suggested.map((slot) => slot.roomId)));
+    const rooms = roomIdsUsed.length
+      ? await prisma.sector.findMany({
+          where: { id: { in: roomIdsUsed } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const roomById = new Map<string, any>(rooms.map((room: any) => [String(room.id), room]));
+
+    for (const slot of suggested) {
+      slot.roomName = roomById.get(String(slot.roomId))?.name || null;
     }
 
     return suggested;
@@ -1405,6 +1504,8 @@ export default async function consultationRoutes(app: FastifyInstance) {
     const doctorName = String(consultation.doctorName || consultation.appointment?.doctorName || '').trim();
     const slots = await resolveAvailableExamSlots({
       branchId,
+      procedureId: procedure.id,
+      doctorId: consultation.doctorId || context?.doctorId || null,
       doctorName,
       durationMinutes: procedure.durationMinutes || 30,
       limit,
@@ -1437,6 +1538,8 @@ export default async function consultationRoutes(app: FastifyInstance) {
           preferredTime: { type: 'string' },
           scheduleDate: { type: 'string' },
           scheduleTime: { type: 'string' },
+          scheduleRoomId: { type: 'string' },
+          scheduleMedicalEquipmentId: { type: 'string' },
         },
       },
       response: {
@@ -1497,6 +1600,8 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
     const requestedScheduleDate = String(data?.scheduleDate || '').trim();
     const requestedScheduleTime = String(data?.scheduleTime || '').trim();
+    const requestedScheduleRoomId = String(data?.scheduleRoomId || '').trim();
+    const requestedScheduleMedicalEquipmentId = String(data?.scheduleMedicalEquipmentId || '').trim();
     const hasRequestedScheduling = Boolean(requestedScheduleDate && requestedScheduleTime);
     if (hasRequestedScheduling && !settings.doctorCanScheduleExamFromConsultation) {
       return reply.code(403).send({ error: 'Doctor scheduling from consultation is disabled for this branch' });
@@ -1521,24 +1626,65 @@ export default async function consultationRoutes(app: FastifyInstance) {
     if (hasRequestedScheduling && !/^\d{2}:\d{2}$/.test(requestedScheduleTime)) {
       return reply.code(400).send({ error: 'scheduleTime must be HH:mm' });
     }
+    if (hasRequestedScheduling && (!requestedScheduleRoomId || !requestedScheduleMedicalEquipmentId)) {
+      return reply.code(400).send({ error: 'scheduleRoomId and scheduleMedicalEquipmentId are required when scheduling from consultation' });
+    }
 
     if (hasRequestedScheduling) {
       const doctorName = String(consultation.doctorName || sourceAppointment?.doctorName || '').trim();
+      const validEquipmentLink = procedure?.id
+        ? await prisma.medicalEquipmentProcedure.findFirst({
+            where: {
+              procedureId: procedure.id,
+              medicalEquipmentId: requestedScheduleMedicalEquipmentId,
+              medicalEquipment: {
+                branchId,
+                isActive: true,
+                roomId: requestedScheduleRoomId,
+              },
+            },
+            select: { medicalEquipmentId: true },
+          })
+        : null;
+      if (!validEquipmentLink) {
+        return reply.code(400).send({ error: 'Selected room/equipment is not valid for this procedure' });
+      }
+
       const conflicts = await prisma.appointment.findMany({
         where: {
           branchId,
-          doctorName: { equals: doctorName, mode: 'insensitive' },
           date: requestedScheduleDate,
           isActive: true,
+          OR: [
+            { doctorName: { equals: doctorName, mode: 'insensitive' } },
+            { roomId: requestedScheduleRoomId },
+            { medicalEquipmentId: requestedScheduleMedicalEquipmentId },
+          ],
         },
-        select: { id: true, time: true, durationMinutes: true, status: true },
+        select: { id: true, time: true, durationMinutes: true, status: true, doctorName: true, roomId: true, medicalEquipmentId: true },
       });
       const duration = Number(procedure?.durationMinutes || 30);
-      const hasConflict = conflicts
-        .filter((item: any) => !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeStatusKey(item?.status || '')))
+      const blocking = conflicts.filter((item: any) => !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeStatusKey(item?.status || '')));
+
+      const doctorConflict = blocking
+        .filter((item: any) => String(item?.doctorName || '').trim().toLowerCase() === doctorName.toLowerCase())
         .some((item: any) => rangesOverlap(requestedScheduleTime, duration, item?.time, item?.durationMinutes));
-      if (hasConflict) {
-        return reply.code(409).send({ error: 'Scheduling conflict for selected slot' });
+      if (doctorConflict) {
+        return reply.code(409).send({ error: 'Scheduling conflict: doctor is busy on selected slot' });
+      }
+
+      const roomConflict = blocking
+        .filter((item: any) => String(item?.roomId || '') === requestedScheduleRoomId)
+        .some((item: any) => rangesOverlap(requestedScheduleTime, duration, item?.time, item?.durationMinutes));
+      if (roomConflict) {
+        return reply.code(409).send({ error: 'Scheduling conflict: room is busy on selected slot' });
+      }
+
+      const equipmentConflict = blocking
+        .filter((item: any) => String(item?.medicalEquipmentId || '') === requestedScheduleMedicalEquipmentId)
+        .some((item: any) => rangesOverlap(requestedScheduleTime, duration, item?.time, item?.durationMinutes));
+      if (equipmentConflict) {
+        return reply.code(409).send({ error: 'Scheduling conflict: equipment is busy on selected slot' });
       }
     }
 
@@ -1571,6 +1717,8 @@ export default async function consultationRoutes(app: FastifyInstance) {
         orderedAt: new Date(),
         requestedByDoctor: true,
         scheduledByDoctor: hasRequestedScheduling,
+        roomId: hasRequestedScheduling ? requestedScheduleRoomId : null,
+        medicalEquipmentId: hasRequestedScheduling ? requestedScheduleMedicalEquipmentId : null,
         observations: normalizedOrderNotes,
       },
     });

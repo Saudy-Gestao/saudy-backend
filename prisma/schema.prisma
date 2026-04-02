@@ -117,6 +117,9 @@ model Sector {
     branch      Branch @relation(fields: [branchId], references: [id])
     name        String
     description String
+    workingDays String[] @default([])
+    workingHoursStart String?
+    workingHoursEnd String?
     users       User[]
     doctors     Doctor[]
     doctorRooms DoctorRoom[]
@@ -756,6 +759,8 @@ model Appointment {
     patientCpf      String?
     patientId       String?
     doctorName      String?
+    roomId          String?
+    medicalEquipmentId String?
     specialty       String?
     convenio        String?
     date            String?
@@ -789,6 +794,8 @@ model Appointment {
     consultations   Consultation[]
 
     @@index([branchId])
+    @@index([roomId])
+    @@index([medicalEquipmentId])
     @@index([sourceConsultationId])
     @@index([sourceProcedureId])
     @@index([rescheduledFromAppointmentId])

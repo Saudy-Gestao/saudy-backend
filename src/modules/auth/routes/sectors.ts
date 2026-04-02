@@ -2,6 +2,26 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
 export default async function sectorRoutes(app: FastifyInstance) {
+  const normalizeWeekday = (value?: string | null) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  const VALID_WEEKDAYS = new Set(['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado']);
+  const normalizeWorkingDays = (days: any): string[] => {
+    if (!Array.isArray(days)) return [];
+    return Array.from(new Set(
+      days
+        .map((value) => normalizeWeekday(value))
+        .filter((value) => VALID_WEEKDAYS.has(value)),
+    ));
+  };
+  const normalizeTime = (value?: string | null): string | null => {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    return /^\d{2}:\d{2}$/.test(raw) ? raw : null;
+  };
+
   const getLoggedContext = async (userId: string) => {
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -49,13 +69,16 @@ export default async function sectorRoutes(app: FastifyInstance) {
       tags: ['Sectors'],
       security: [{ bearerAuth: [] }],
       body: { $ref: 'SectorCreate#' },
-      response: { 200: { $ref: 'Sector#' }, 403: { type: 'object' } },
+      response: { 200: { $ref: 'Sector#' }, 400: { type: 'object' }, 403: { type: 'object' } },
     },
   }, async (request, reply) => {
-    const { branchId, name, description } = request.body as {
+    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd } = request.body as {
       branchId: string;
       name: string;
       description: string;
+      workingDays?: string[];
+      workingHoursStart?: string;
+      workingHoursEnd?: string;
     };
 
     const userId = (request.user as any).id;
@@ -69,8 +92,28 @@ export default async function sectorRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Você só pode cadastrar setor na sua filial' });
     }
 
+    const normalizedWorkingDays = normalizeWorkingDays(workingDays);
+    const normalizedWorkingHoursStart = normalizeTime(workingHoursStart);
+    const normalizedWorkingHoursEnd = normalizeTime(workingHoursEnd);
+    if ((workingHoursStart && !normalizedWorkingHoursStart) || (workingHoursEnd && !normalizedWorkingHoursEnd)) {
+      return reply.code(400).send({ error: 'Horário de funcionamento deve estar no formato HH:mm' });
+    }
+    if ((normalizedWorkingHoursStart && !normalizedWorkingHoursEnd) || (!normalizedWorkingHoursStart && normalizedWorkingHoursEnd)) {
+      return reply.code(400).send({ error: 'Informe hora inicial e final do funcionamento da sala' });
+    }
+    if (normalizedWorkingHoursStart && normalizedWorkingHoursEnd && normalizedWorkingHoursEnd <= normalizedWorkingHoursStart) {
+      return reply.code(400).send({ error: 'Hora final da sala deve ser maior que a inicial' });
+    }
+
     const sector = await prisma.sector.create({
-      data: { branchId: loggedContext.branchId, name, description },
+      data: {
+        branchId: loggedContext.branchId,
+        name,
+        description,
+        workingDays: normalizedWorkingDays,
+        workingHoursStart: normalizedWorkingHoursStart,
+        workingHoursEnd: normalizedWorkingHoursEnd,
+      },
     });
     return sector;
   });
@@ -116,14 +159,17 @@ export default async function sectorRoutes(app: FastifyInstance) {
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object' },
-      response: { 200: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object' }, 400: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { branchId, name, description } = request.body as {
+    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd } = request.body as {
       branchId?: string;
       name?: string;
       description?: string;
+      workingDays?: string[];
+      workingHoursStart?: string;
+      workingHoursEnd?: string;
     };
 
     const userId = (request.user as any).id;
@@ -145,9 +191,32 @@ export default async function sectorRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: 'Você só pode mover setor para sua filial' });
       }
 
+      const normalizedWorkingDays = workingDays !== undefined ? normalizeWorkingDays(workingDays) : undefined;
+      const normalizedWorkingHoursStart = workingHoursStart !== undefined ? normalizeTime(workingHoursStart) : undefined;
+      const normalizedWorkingHoursEnd = workingHoursEnd !== undefined ? normalizeTime(workingHoursEnd) : undefined;
+      if ((workingHoursStart !== undefined && !normalizedWorkingHoursStart && String(workingHoursStart || '').trim())
+        || (workingHoursEnd !== undefined && !normalizedWorkingHoursEnd && String(workingHoursEnd || '').trim())) {
+        return reply.code(400).send({ error: 'Horário de funcionamento deve estar no formato HH:mm' });
+      }
+      const resolvedStart = normalizedWorkingHoursStart !== undefined ? normalizedWorkingHoursStart : current.workingHoursStart;
+      const resolvedEnd = normalizedWorkingHoursEnd !== undefined ? normalizedWorkingHoursEnd : current.workingHoursEnd;
+      if ((resolvedStart && !resolvedEnd) || (!resolvedStart && resolvedEnd)) {
+        return reply.code(400).send({ error: 'Informe hora inicial e final do funcionamento da sala' });
+      }
+      if (resolvedStart && resolvedEnd && resolvedEnd <= resolvedStart) {
+        return reply.code(400).send({ error: 'Hora final da sala deve ser maior que a inicial' });
+      }
+
       const sector = await prisma.sector.update({
         where: { id },
-        data: { branchId: loggedContext.branchId, name, description },
+        data: {
+          branchId: loggedContext.branchId,
+          name,
+          description,
+          ...(normalizedWorkingDays !== undefined ? { workingDays: normalizedWorkingDays } : {}),
+          ...(normalizedWorkingHoursStart !== undefined ? { workingHoursStart: normalizedWorkingHoursStart } : {}),
+          ...(normalizedWorkingHoursEnd !== undefined ? { workingHoursEnd: normalizedWorkingHoursEnd } : {}),
+        },
       });
       return sector;
     } catch (error) {
