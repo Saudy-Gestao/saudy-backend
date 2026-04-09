@@ -6,6 +6,7 @@ import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
 const CHATBOT_BRANCH_ID = String(process.env.WHATSAPP_CHATBOT_BRANCH_ID || '').trim();
 const DEFAULT_SEARCH_DAYS = Math.max(1, Number(process.env.WHATSAPP_CHATBOT_SEARCH_DAYS || 30));
+const CONVERSATION_TIMEOUT_MS = 2 * 60 * 1000;
 const OPEN_APPOINTMENT_STATUSES = new Set([
   'AGENDADO',
   'CONFIRMADO',
@@ -32,6 +33,7 @@ type ConversationContext = {
   nameCandidate?: string | null;
   options?: Array<{ value: string; label: string }>;
   lastPrompt?: string | null;
+  history?: ConversationHistoryEntry[];
 };
 
 type ChatbotInput = {
@@ -39,9 +41,14 @@ type ChatbotInput = {
   text: string;
 };
 
+type ChatbotResponse = {
+  text: string;
+  binaryOptions?: boolean;
+};
+
 type ChatbotResult = {
   handled: boolean;
-  response?: string;
+  response?: ChatbotResponse;
 };
 
 type BranchConfig = {
@@ -65,6 +72,12 @@ type SlotSuggestion = {
   date: string;
   time: string;
   durationMinutes: number;
+};
+
+type ConversationHistoryEntry = {
+  state: string;
+  prompt: string;
+  context: Omit<ConversationContext, 'history'>;
 };
 
 const normalizeDigits = (value: unknown) => String(value || '').replace(/\D/g, '');
@@ -100,10 +113,13 @@ const buildMenuMessage = (patientName?: string | null) => {
     ? `Olá, ${patientName}. Como posso te ajudar hoje?`
     : 'Olá. Como posso te ajudar hoje?';
 
-  return `${greeting}\n\n1. Marcação de consulta\n2. Marcação de exame\n3. Dúvidas`;
+  return `${greeting}\n\n1. Marcação de consulta\n2. Marcação de exame\n3. Dúvidas\n\nSe quiser voltar, escreva VOLTAR.\nSe quiser encerrar e recomeçar, escreva SAIR.`;
 };
 
-const buildYesNoMessage = (body: string) => `${body}\n\n1. Sim\n2. Não`;
+const buildYesNoMessage = (body: string): ChatbotResponse => ({
+  text: body,
+  binaryOptions: true,
+});
 
 const parseYesNo = (text: string): boolean | null => {
   const normalized = normalizeText(text);
@@ -124,7 +140,8 @@ const parseServiceType = (text: string): 'CONSULTA' | 'EXAME' | 'DUVIDAS' | null
 
 const shouldResetConversation = (text: string) => {
   const normalized = normalizeText(text);
-  return normalized === 'menu'
+  return normalized === 'sair'
+    || normalized === 'menu'
     || normalized === 'inicio'
     || normalized === 'início'
     || normalized === 'oi'
@@ -133,6 +150,65 @@ const shouldResetConversation = (text: string) => {
     || normalized === 'bom dia'
     || normalized === 'boa tarde'
     || normalized === 'boa noite';
+};
+
+const shouldGoBackConversation = (text: string) => normalizeText(text) === 'voltar';
+
+const isConversationExpired = (lastInteractionAt?: string | Date | null) => {
+  if (!lastInteractionAt) return false;
+  const timestamp = new Date(lastInteractionAt).getTime();
+  if (Number.isNaN(timestamp)) return false;
+  return (Date.now() - timestamp) > CONVERSATION_TIMEOUT_MS;
+};
+
+const BINARY_RESPONSE_STATES = new Set([
+  'AWAITING_SLOT_CONFIRMATION',
+  'AWAITING_CPF_CONFIRMATION',
+  'AWAITING_FINAL_CONFIRMATION',
+]);
+
+const stripHistoryFromContext = (context: ConversationContext): Omit<ConversationContext, 'history'> => {
+  const { history: _history, ...rest } = context;
+  return rest;
+};
+
+const pushHistoryEntry = (
+  context: ConversationContext,
+  state: string,
+  prompt: string,
+): ConversationContext => ({
+  ...context,
+  history: [
+    ...((context.history || []).slice(-9)),
+    {
+      state,
+      prompt,
+      context: stripHistoryFromContext(context),
+    },
+  ],
+});
+
+const restorePreviousStep = (context: ConversationContext): {
+  state: string;
+  context: ConversationContext;
+  response: ChatbotResponse;
+} | null => {
+  const history = context.history || [];
+  const previous = history[history.length - 1];
+  if (!previous) return null;
+
+  return {
+    state: previous.state,
+    context: {
+      ...previous.context,
+      lastPrompt: previous.prompt,
+      history: history.slice(0, -1),
+    },
+    response: {
+      text: previous.prompt,
+      binaryOptions: BINARY_RESPONSE_STATES.has(previous.state),
+    },
+  };
 };
 
 const pad = (value: number) => String(value).padStart(2, '0');
@@ -341,16 +417,27 @@ async function resolveBranchConfig(): Promise<BranchConfig | null> {
   return null;
 }
 
-async function sendText(branchConfig: BranchConfig, phone: string, message: string) {
+async function sendResponse(branchConfig: BranchConfig, phone: string, response: ChatbotResponse) {
   const gupshup = new GupshupService({
     apiKey: branchConfig.apiKey,
     appName: branchConfig.appName,
     sourceNumber: branchConfig.sourceNumber,
   });
 
+  if (response.binaryOptions) {
+    return gupshup.sendQuickReplyMessage({
+      to: phone,
+      body: response.text,
+      options: [
+        { title: 'Sim', postbackText: 'SIM' },
+        { title: 'Não', postbackText: 'NAO' },
+      ],
+    });
+  }
+
   return gupshup.sendTextMessage({
     to: phone,
-    message,
+    message: response.text,
   });
 }
 
@@ -806,14 +893,40 @@ async function processFlow(params: {
     return { handled: false } satisfies ChatbotResult;
   }
 
-  if (shouldResetConversation(text) || conversation.state === 'MENU' || conversation.state === 'COMPLETED' || conversation.state === 'HANDED_OFF') {
-    const response = buildMenuMessage(patient?.name || conversation.patientName || null);
+  if (
+    shouldGoBackConversation(text)
+    && conversation.state !== 'MENU'
+    && conversation.state !== 'COMPLETED'
+    && conversation.state !== 'HANDED_OFF'
+  ) {
+    const restored = restorePreviousStep(context);
+    const response = restored?.response || { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
+    await saveConversation(conversation.id, {
+      state: restored?.state || 'AWAITING_SERVICE',
+      selectedService: restored?.state === 'AWAITING_SERVICE' ? null : conversation.selectedService,
+      context: restored?.context || {},
+      lastInboundMessage: text,
+      lastOutboundMessage: response.text,
+      patientId: patient?.id || conversation.patientId || null,
+      patientName: patient?.name || conversation.patientName || null,
+    });
+    return { handled: true, response };
+  }
+
+  if (
+    shouldResetConversation(text)
+    || isConversationExpired(conversation.lastInteractionAt)
+    || conversation.state === 'MENU'
+    || conversation.state === 'COMPLETED'
+    || conversation.state === 'HANDED_OFF'
+  ) {
+    const response = { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
     await saveConversation(conversation.id, {
       state: 'AWAITING_SERVICE',
       selectedService: null,
       context: {},
       lastInboundMessage: text,
-      lastOutboundMessage: response,
+      lastOutboundMessage: response.text,
       patientId: patient?.id || conversation.patientId || null,
       patientName: patient?.name || conversation.patientName || null,
     });
@@ -824,10 +937,10 @@ async function processFlow(params: {
     case 'AWAITING_SERVICE': {
       const selected = parseServiceType(text);
       if (!selected) {
-        const response = buildMenuMessage(patient?.name || conversation.patientName || null);
+        const response = { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -842,13 +955,13 @@ async function processFlow(params: {
           description: 'Paciente solicitou atendimento humano pelo fluxo de dúvidas do WhatsApp.',
         });
 
-        const response = 'Perfeito. Vou encaminhar você para um dos nossos atendentes.';
+        const response = { text: 'Perfeito. Vou encaminhar você para um dos nossos atendentes.' };
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           selectedService: 'DUVIDAS',
           handoffTicketId: ticket.id,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -858,31 +971,41 @@ async function processFlow(params: {
       };
 
       if (patient?.healthInsuranceName) {
+        context = pushHistoryEntry(
+          context,
+          'AWAITING_SERVICE',
+          buildMenuMessage(patient?.name || conversation.patientName || null),
+        );
         context.selectedInsurance = patient.healthInsuranceName;
         const procedureOptions = await listProcedureOptions(branchConfig.branchId, selected, patient.healthInsuranceName);
-        const response = `Certo. Encontrei o convênio ${patient.healthInsuranceName} no seu cadastro.\n\nQual procedimento você deseja?\n${serializeOptions(procedureOptions)}`;
+        const response = { text: `Certo. Encontrei o convênio ${patient.healthInsuranceName} no seu cadastro.\n\nQual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
         context.options = procedureOptions;
-        context.lastPrompt = response;
+        context.lastPrompt = response.text;
         await saveConversation(conversation.id, {
           state: 'AWAITING_PROCEDURE',
           selectedService: selected,
           context,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_SERVICE',
+        buildMenuMessage(patient?.name || conversation.patientName || null),
+      );
       const insuranceOptions = await listInsuranceOptions(branchConfig.branchId, selected);
-      const response = `Qual é o seu convênio?\n${serializeOptions(insuranceOptions)}`;
+      const response = { text: `Qual é o seu convênio?\n${serializeOptions(insuranceOptions)}` };
       context.options = insuranceOptions;
-      context.lastPrompt = response;
+      context.lastPrompt = response.text;
       await saveConversation(conversation.id, {
         state: 'AWAITING_INSURANCE',
         selectedService: selected,
         context,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -890,10 +1013,10 @@ async function processFlow(params: {
     case 'AWAITING_INSURANCE': {
       const selected = resolveOptionSelection(text, context.options || []);
       if (!selected) {
-        const response = context.lastPrompt || 'Qual é o seu convênio?';
+        const response = { text: context.lastPrompt || 'Qual é o seu convênio?' };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -908,32 +1031,37 @@ async function processFlow(params: {
           description: `Fluxo: ${context.serviceType}\nPaciente não encontrou o convênio na lista automática.`,
         });
 
-        const response = 'Tudo bem. Vou redirecionar você para um dos nossos atendentes.';
+        const response = { text: 'Tudo bem. Vou redirecionar você para um dos nossos atendentes.' };
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
           context: {
             ...context,
             options: [],
-            lastPrompt: response,
+            lastPrompt: response.text,
           },
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_INSURANCE',
+        context.lastPrompt || 'Qual é o seu convênio?',
+      );
       context.selectedInsurance = selected.label;
       const procedureOptions = await listProcedureOptions(branchConfig.branchId, context.serviceType || 'CONSULTA', selected.label);
-      const response = `Qual procedimento você deseja?\n${serializeOptions(procedureOptions)}`;
+      const response = { text: `Qual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
       context.options = procedureOptions;
-      context.lastPrompt = response;
+      context.lastPrompt = response.text;
 
       await saveConversation(conversation.id, {
         state: 'AWAITING_PROCEDURE',
         context,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -941,10 +1069,10 @@ async function processFlow(params: {
     case 'AWAITING_PROCEDURE': {
       const selected = resolveOptionSelection(text, context.options || []);
       if (!selected) {
-        const response = context.lastPrompt || 'Qual procedimento você deseja?';
+        const response = { text: context.lastPrompt || 'Qual procedimento você deseja?' };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -959,24 +1087,29 @@ async function processFlow(params: {
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nPaciente não encontrou o procedimento na lista automática.`,
         });
 
-        const response = 'Tudo bem. Vou redirecionar você para um dos nossos atendentes.';
+        const response = { text: 'Tudo bem. Vou redirecionar você para um dos nossos atendentes.' };
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
           context: {
             ...context,
             options: [],
-            lastPrompt: response,
+            lastPrompt: response.text,
           },
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_PROCEDURE',
+        context.lastPrompt || 'Qual procedimento você deseja?',
+      );
       const procedure = await getProcedureById(branchConfig.branchId, selected.value);
       if (!procedure) {
-        const response = 'Não consegui localizar esse procedimento agora. Vou encaminhar você para um atendente.';
+        const response = { text: 'Não consegui localizar esse procedimento agora. Vou encaminhar você para um atendente.' };
         const ticket = await createHandoffTicket({
           branchId: branchConfig.branchId,
           branchName: branchConfig.branchName,
@@ -989,7 +1122,7 @@ async function processFlow(params: {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1001,7 +1134,7 @@ async function processFlow(params: {
       });
 
       if (!slot) {
-        const response = 'Não encontrei um horário disponível agora. Vou encaminhar você para um dos nossos atendentes.';
+        const response = { text: 'Não encontrei um horário disponível agora. Vou encaminhar você para um dos nossos atendentes.' };
         const ticket = await createHandoffTicket({
           branchId: branchConfig.branchId,
           branchName: branchConfig.branchName,
@@ -1014,7 +1147,7 @@ async function processFlow(params: {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1034,13 +1167,13 @@ async function processFlow(params: {
         `Profissional: ${slot.doctorName}\n\n` +
         'Deseja seguir com esse horário?',
       );
-      context.lastPrompt = response;
+      context.lastPrompt = response.text;
 
       await saveConversation(conversation.id, {
         state: 'AWAITING_SLOT_CONFIRMATION',
         context,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -1048,22 +1181,27 @@ async function processFlow(params: {
     case 'AWAITING_SLOT_CONFIRMATION': {
       const accepted = parseYesNo(text);
       if (accepted === null) {
-        const response = context.lastPrompt || 'Deseja seguir com esse horário?';
+        const response = { text: context.lastPrompt || 'Deseja seguir com esse horário?' };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_SLOT_CONFIRMATION',
+        context.lastPrompt || 'Deseja seguir com esse horário?',
+      );
       if (!accepted) {
-        const response = 'Certo. Qual é a sua preferência de dia? Você pode responder, por exemplo, com 15/04/2026, hoje, amanhã ou segunda.';
-        context.lastPrompt = response;
+        const response = { text: 'Certo. Qual é a sua preferência de dia? Você pode responder, por exemplo, com 15/04/2026, hoje, amanhã ou segunda.' };
+        context.lastPrompt = response.text;
         await saveConversation(conversation.id, {
           state: 'AWAITING_PREFERRED_DATE',
           context,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1074,18 +1212,18 @@ async function processFlow(params: {
           state: 'AWAITING_FINAL_CONFIRMATION',
           context,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
-      const response = 'Para continuar, informe seu CPF.';
-      context.lastPrompt = response;
+      const response = { text: 'Para continuar, informe seu CPF.' };
+      context.lastPrompt = response.text;
       await saveConversation(conversation.id, {
         state: 'AWAITING_CPF',
         context,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -1093,14 +1231,19 @@ async function processFlow(params: {
     case 'AWAITING_PREFERRED_DATE': {
       const preferredDate = parsePreferredDate(text);
       if (!preferredDate) {
-        const response = 'Não consegui entender a data. Responda no formato DD/MM/AAAA, ou diga hoje, amanhã ou o nome do dia da semana.';
+        const response = { text: 'Não consegui entender a data. Responda no formato DD/MM/AAAA, ou diga hoje, amanhã ou o nome do dia da semana.' };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_PREFERRED_DATE',
+        context.lastPrompt || 'Qual é a sua preferência de dia?',
+      );
       const slot = context.selectedProcedureId
         ? await findNextAvailableSlot({
           branchId: branchConfig.branchId,
@@ -1111,7 +1254,7 @@ async function processFlow(params: {
         : null;
 
       if (!slot) {
-        const response = 'Não encontrei disponibilidade a partir desse dia. Vou encaminhar você para um dos nossos atendentes.';
+        const response = { text: 'Não encontrei disponibilidade a partir desse dia. Vou encaminhar você para um dos nossos atendentes.' };
         const ticket = await createHandoffTicket({
           branchId: branchConfig.branchId,
           branchName: branchConfig.branchName,
@@ -1124,7 +1267,7 @@ async function processFlow(params: {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1142,13 +1285,13 @@ async function processFlow(params: {
         `Profissional: ${slot.doctorName}\n\n` +
         'Deseja seguir com esse horário?',
       );
-      context.lastPrompt = response;
+      context.lastPrompt = response.text;
 
       await saveConversation(conversation.id, {
         state: 'AWAITING_SLOT_CONFIRMATION',
         context,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -1156,22 +1299,27 @@ async function processFlow(params: {
     case 'AWAITING_CPF': {
       const cpf = normalizeCpf(text);
       if (!isValidCpf(cpf)) {
-        const response = 'O CPF informado parece inválido. Por favor, envie novamente apenas com os números.';
+        const response = { text: 'O CPF informado parece inválido. Por favor, envie novamente apenas com os números.' };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_CPF',
+        context.lastPrompt || 'Para continuar, informe seu CPF.',
+      );
       context.cpfCandidate = cpf;
       const response = buildYesNoMessage(`Confirma que o CPF ${formatCpf(cpf)} está correto?`);
-      context.lastPrompt = response;
+      context.lastPrompt = response.text;
       await saveConversation(conversation.id, {
         state: 'AWAITING_CPF_CONFIRMATION',
         context,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -1179,25 +1327,30 @@ async function processFlow(params: {
     case 'AWAITING_CPF_CONFIRMATION': {
       const accepted = parseYesNo(text);
       if (accepted === null) {
-        const response = context.lastPrompt || 'Confirma o CPF informado?';
+        const response = { text: context.lastPrompt || 'Confirma o CPF informado?' };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_CPF_CONFIRMATION',
+        context.lastPrompt || 'Confirma o CPF informado?',
+      );
       if (!accepted) {
-        const response = 'Tudo bem. Informe seu CPF novamente.';
+        const response = { text: 'Tudo bem. Informe seu CPF novamente.' };
         await saveConversation(conversation.id, {
           state: 'AWAITING_CPF',
           context: {
             ...context,
             cpfCandidate: null,
-            lastPrompt: response,
+            lastPrompt: response.text,
           },
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1229,17 +1382,17 @@ async function processFlow(params: {
       }
 
       if (!resolvedPatient?.name) {
-        const response = 'Perfeito. Agora informe seu nome completo.';
+        const response = { text: 'Perfeito. Agora informe seu nome completo.' };
         await saveConversation(conversation.id, {
           state: 'AWAITING_NEW_PATIENT_NAME',
           context: {
             ...context,
-            lastPrompt: response,
+            lastPrompt: response.text,
           },
           patientId: resolvedPatient?.id || null,
           patientName: resolvedPatient?.name || null,
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1255,7 +1408,7 @@ async function processFlow(params: {
         patientId: resolvedPatient.id,
         patientName: resolvedPatient.name,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -1263,14 +1416,19 @@ async function processFlow(params: {
     case 'AWAITING_NEW_PATIENT_NAME': {
       const name = String(text || '').trim();
       if (name.length < 3) {
-        const response = 'Por favor, informe seu nome completo.';
+        const response = { text: 'Por favor, informe seu nome completo.' };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_NEW_PATIENT_NAME',
+        context.lastPrompt || 'Perfeito. Agora informe seu nome completo.',
+      );
       context.nameCandidate = name;
       const response = buildFinalSummary({
         ...conversation,
@@ -1282,7 +1440,7 @@ async function processFlow(params: {
         context,
         patientName: name,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -1290,22 +1448,24 @@ async function processFlow(params: {
     case 'AWAITING_FINAL_CONFIRMATION': {
       const accepted = parseYesNo(text);
       if (accepted === null) {
-        const response = context.lastPrompt || buildFinalSummary(conversation, context, patient);
+        const response = context.lastPrompt
+          ? { text: context.lastPrompt, binaryOptions: true }
+          : buildFinalSummary(conversation, context, patient);
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
 
       if (!accepted) {
-        const response = buildMenuMessage(patient?.name || conversation.patientName || context.nameCandidate || null);
+        const response = { text: buildMenuMessage(patient?.name || conversation.patientName || context.nameCandidate || null) };
         await saveConversation(conversation.id, {
           state: 'AWAITING_SERVICE',
           selectedService: null,
           context: {},
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1338,11 +1498,11 @@ async function processFlow(params: {
         : null;
 
       if (!slot || !context.selectedProcedureName || !context.selectedInsurance || !context.serviceType) {
-        const response = 'Não consegui concluir o agendamento automaticamente. Por favor, envie "menu" para recomeçar.';
+        const response = { text: 'Não consegui concluir o agendamento automaticamente. Por favor, envie "menu" para recomeçar.' };
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           lastInboundMessage: text,
-          lastOutboundMessage: response,
+          lastOutboundMessage: response.text,
         });
         return { handled: true, response };
       }
@@ -1359,26 +1519,26 @@ async function processFlow(params: {
         cpf: context.cpfCandidate || resolvedPatient?.cpf || null,
       });
 
-      const response = 'Sua solicitação foi registrada com sucesso e já entrou na fila de pré-agendamento da clínica.';
+      const response = { text: 'Sua solicitação foi registrada com sucesso e já entrou na fila de pré-agendamento da clínica.' };
       await saveConversation(conversation.id, {
         state: 'COMPLETED',
         reservedAppointmentId: appointment.id,
         patientId: resolvedPatient?.id || conversation.patientId || null,
         patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
 
     default: {
-      const response = buildMenuMessage(patient?.name || conversation.patientName || null);
+      const response = { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
       await saveConversation(conversation.id, {
         state: 'AWAITING_SERVICE',
         selectedService: null,
         context: {},
         lastInboundMessage: text,
-        lastOutboundMessage: response,
+        lastOutboundMessage: response.text,
       });
       return { handled: true, response };
     }
@@ -1411,7 +1571,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
   });
 
   if (result.handled && result.response) {
-    await sendText(branchConfig, phone, result.response);
+    await sendResponse(branchConfig, phone, result.response);
   }
 
   return result;
