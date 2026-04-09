@@ -162,6 +162,13 @@ const buildYesNoMessage = (body: string): ChatbotResponse => ({
   binaryOptions: true,
 });
 
+const buildHumanHandoffMessage = (protocolNumber?: string | null) => ({
+  text: [
+    'Perfeito. Vou encaminhar você para um dos nossos atendentes.',
+    protocolNumber ? `Seu protocolo de atendimento é: ${protocolNumber}` : null,
+  ].filter(Boolean).join('\n\n'),
+});
+
 const parseYesNo = (text: string): boolean | null => {
   const normalized = normalizeText(text);
   if (!normalized) return null;
@@ -1086,6 +1093,7 @@ async function openHumanHandoffConversation(params: {
 
   return {
     id: params.conversationId,
+    protocolNumber,
   };
 }
 
@@ -1328,7 +1336,7 @@ async function processFlow(params: {
           description: 'Paciente solicitou atendimento humano pelo fluxo de dúvidas do WhatsApp.',
         });
 
-        const response = { text: 'Perfeito. Vou encaminhar você para um dos nossos atendentes.' };
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           selectedService: 'DUVIDAS',
@@ -1438,7 +1446,7 @@ async function processFlow(params: {
           description: `Fluxo: ${context.serviceType}\nPaciente não encontrou o convênio na lista automática.`,
         });
 
-        const response = { text: 'Tudo bem. Vou redirecionar você para um dos nossos atendentes.' };
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
@@ -1513,7 +1521,6 @@ async function processFlow(params: {
       );
       const procedure = await getProcedureById(getTargetBranchId(), selected.value);
       if (!procedure) {
-        const response = { text: 'Não consegui localizar esse procedimento agora. Vou encaminhar você para um atendente.' };
         const ticket = await openHumanHandoffConversation({
           conversationId: conversation.id,
           branchId: getTargetBranchId(),
@@ -1524,6 +1531,7 @@ async function processFlow(params: {
           flowLabel: 'Procedimento inválido',
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nProcedimento selecionado não foi encontrado no cadastro.`,
         });
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
@@ -1540,7 +1548,6 @@ async function processFlow(params: {
       });
 
       if (!slot) {
-        const response = { text: 'Não encontrei um horário disponível agora. Vou encaminhar você para um dos nossos atendentes.' };
         const ticket = await openHumanHandoffConversation({
           conversationId: conversation.id,
           branchId: getTargetBranchId(),
@@ -1551,6 +1558,7 @@ async function processFlow(params: {
           flowLabel: 'Sem horário automático',
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nProcedimento: ${procedure.name}`,
         });
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
@@ -1610,7 +1618,7 @@ async function processFlow(params: {
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nPaciente não encontrou o procedimento na lista automática.`,
         });
 
-        const response = { text: 'Perfeito. Vou redirecionar você para um dos nossos atendentes.' };
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
@@ -1725,7 +1733,7 @@ async function processFlow(params: {
             flowLabel: 'Procedimento não encontrado',
             description: `Fluxo: ${context.serviceType}\nPaciente tentou consultar no particular e não encontramos correspondência para "${context.privateProcedureSearchText || 'Não informado'}".`,
           });
-          const response = { text: 'Não consegui localizar esse procedimento no particular após as tentativas. Vou encaminhar você para um atendente.' };
+          const response = buildHumanHandoffMessage(ticket.protocolNumber);
           await saveConversation(conversation.id, {
             state: 'HANDED_OFF',
             handoffTicketId: ticket.id,
@@ -1810,7 +1818,7 @@ async function processFlow(params: {
             flowLabel: 'Procedimento não encontrado',
             description: `Fluxo: ${context.serviceType}\nPaciente recusou o procedimento particular sugerido após as tentativas automáticas.`,
           });
-          const response = { text: 'Tudo bem. Vou encaminhar você para um atendente para continuarmos por lá.' };
+          const response = buildHumanHandoffMessage(ticket.protocolNumber);
           await saveConversation(conversation.id, {
             state: 'HANDED_OFF',
             handoffTicketId: ticket.id,
@@ -1846,7 +1854,6 @@ async function processFlow(params: {
         : null;
 
       if (!procedure) {
-        const response = { text: 'Não consegui manter esse procedimento disponível agora. Vou encaminhar você para um atendente.' };
         const ticket = await openHumanHandoffConversation({
           conversationId: conversation.id,
           branchId: getTargetBranchId(),
@@ -1857,6 +1864,7 @@ async function processFlow(params: {
           flowLabel: 'Procedimento inválido',
           description: `Fluxo: ${context.serviceType}\nPaciente aceitou o procedimento particular, mas ele não foi encontrado no cadastro.`,
         });
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
@@ -1873,7 +1881,6 @@ async function processFlow(params: {
       });
 
       if (!slot) {
-        const response = { text: 'Não encontrei um horário disponível agora para esse procedimento particular. Vou encaminhar você para um dos nossos atendentes.' };
         const ticket = await openHumanHandoffConversation({
           conversationId: conversation.id,
           branchId: getTargetBranchId(),
@@ -1884,6 +1891,7 @@ async function processFlow(params: {
           flowLabel: 'Sem horário automático',
           description: `Fluxo: ${context.serviceType}\nConvênio: Particular\nProcedimento: ${procedure.name}`,
         });
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
@@ -1998,7 +2006,6 @@ async function processFlow(params: {
         : null;
 
       if (!slot) {
-        const response = { text: 'Não encontrei disponibilidade a partir desse dia. Vou encaminhar você para um dos nossos atendentes.' };
         const ticket = await openHumanHandoffConversation({
           conversationId: conversation.id,
           branchId: getTargetBranchId(),
@@ -2009,6 +2016,7 @@ async function processFlow(params: {
           flowLabel: 'Preferência sem disponibilidade',
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nProcedimento: ${context.selectedProcedureName || 'Não informado'}\nPreferência: ${preferredDate}`,
         });
+        const response = buildHumanHandoffMessage(ticket.protocolNumber);
         await saveConversation(conversation.id, {
           state: 'HANDED_OFF',
           handoffTicketId: ticket.id,
