@@ -1652,6 +1652,26 @@ async function processFlow(params: {
         context.lastPrompt || 'Perfeito. Agora informe seu nome completo.',
       );
       context.nameCandidate = name;
+
+      if (context.birthDateCandidate) {
+        const response = buildFinalSummary({
+          ...conversation,
+          patientName: name,
+        }, context, patient);
+
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_FINAL_CONFIRMATION',
+          context: {
+            ...context,
+            lastPrompt: response.text,
+          },
+          patientName: name,
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
       const response = { text: 'Informe sua data de nascimento no formato DD/MM/AAAA.' };
 
       await saveConversation(conversation.id, {
