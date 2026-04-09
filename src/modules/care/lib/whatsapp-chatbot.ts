@@ -20,6 +20,8 @@ const OPEN_APPOINTMENT_STATUSES = new Set([
 
 type ConversationContext = {
   serviceType?: 'CONSULTA' | 'EXAME';
+  selectedBranchId?: string | null;
+  selectedBranchName?: string | null;
   selectedInsurance?: string | null;
   selectedProcedureId?: string | null;
   selectedProcedureName?: string | null;
@@ -36,6 +38,16 @@ type ConversationContext = {
   lastPrompt?: string | null;
   history?: ConversationHistoryEntry[];
 };
+
+type EditableStepKey =
+  | 'UNIT'
+  | 'SERVICE'
+  | 'INSURANCE'
+  | 'PROCEDURE'
+  | 'SLOT'
+  | 'CPF'
+  | 'NAME'
+  | 'BIRTHDATE';
 
 type ChatbotInput = {
   phone: string;
@@ -139,6 +151,27 @@ const parseServiceType = (text: string): 'CONSULTA' | 'EXAME' | 'DUVIDAS' | null
   return null;
 };
 
+const parseEditableStepSelection = (text: string): EditableStepKey | null => {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+
+  if (normalized === '0' || normalized.includes('unidade') || normalized.includes('filial')) return 'UNIT';
+  if (normalized === '1' || normalized.includes('tipo') || normalized.includes('consulta') || normalized.includes('exame')) return 'SERVICE';
+  if (normalized === '2' || normalized.includes('convenio') || normalized.includes('convênio')) return 'INSURANCE';
+  if (normalized === '3' || normalized.includes('procedimento')) return 'PROCEDURE';
+  if (normalized === '4' || normalized.includes('horario') || normalized.includes('horário') || normalized.includes('data')) return 'SLOT';
+  if (normalized === '5' || normalized === 'cpf') return 'CPF';
+  if (normalized === '6' || normalized.includes('nome')) return 'NAME';
+  if (
+    normalized === '7'
+    || normalized.includes('nascimento')
+    || normalized.includes('data de nascimento')
+    || normalized.includes('birth')
+  ) return 'BIRTHDATE';
+
+  return null;
+};
+
 const shouldResetConversation = (text: string) => {
   const normalized = normalizeText(text);
   return normalized === 'sair'
@@ -167,6 +200,29 @@ const BINARY_RESPONSE_STATES = new Set([
   'AWAITING_CPF_CONFIRMATION',
   'AWAITING_FINAL_CONFIRMATION',
 ]);
+
+const buildEditSelectionPrompt = (params: {
+  patient: PatientLookup | null;
+  conversation: any;
+  context: ConversationContext;
+}) => {
+  const isNewPatient = !params.patient?.id && !params.conversation.patientId;
+  const options = [
+    '0. Unidade',
+    '1. Tipo de atendimento',
+    '2. Convênio',
+    '3. Procedimento',
+    '4. Data ou horário',
+    '5. CPF',
+  ];
+
+  if (isNewPatient) {
+    options.push('6. Nome completo');
+    options.push('7. Data de nascimento');
+  }
+
+  return `Sem problema. Qual etapa você deseja alterar?\n${options.join('\n')}\n\nVocê pode responder com o número da opção ou com o nome da etapa.`;
+};
 
 const stripHistoryFromContext = (context: ConversationContext): Omit<ConversationContext, 'history'> => {
   const { history: _history, ...rest } = context;
@@ -490,6 +546,38 @@ async function lookupPatient(branchId: string, phone: string): Promise<PatientLo
         healthInsuranceName: candidates[0].healthInsuranceName || null,
       }
     : null;
+}
+
+async function listUnitOptions(referenceBranchId: string) {
+  const referenceBranch = await prisma.branch.findUnique({
+    where: { id: referenceBranchId },
+    select: { id: true, companyId: true },
+  });
+
+  if (!referenceBranch?.companyId) {
+    const fallbackBranch = await prisma.branch.findUnique({
+      where: { id: referenceBranchId },
+      select: { id: true, tradeName: true },
+    });
+
+    return fallbackBranch
+      ? [{ value: fallbackBranch.id, label: fallbackBranch.tradeName || 'Unidade principal' }]
+      : [];
+  }
+
+  const branches = await prisma.branch.findMany({
+    where: { companyId: referenceBranch.companyId },
+    select: {
+      id: true,
+      tradeName: true,
+    },
+    orderBy: { tradeName: 'asc' },
+  });
+
+  return branches.map((branch: any) => ({
+    value: String(branch.id),
+    label: String(branch.tradeName || 'Unidade sem nome'),
+  }));
 }
 
 async function upsertConversation(params: {
@@ -954,6 +1042,7 @@ const buildFinalSummary = (conversation: any, context: ConversationContext, pati
       'Confirma os dados abaixo?',
       `Paciente: ${patientName}`,
       `CPF: ${cpf !== 'Não informado' ? formatCpf(cpf) : cpf}`,
+      `Unidade: ${context.selectedBranchName || 'Não informada'}`,
       ...(isNewPatient ? [
         `Data de nascimento: ${formatBirthDateLabel(context.birthDateCandidate)}`,
       ] : []),
@@ -976,6 +1065,8 @@ async function processFlow(params: {
   const { branchConfig, conversation, patient, input } = params;
   const text = String(input.text || '').trim();
   let context = parseJsonContext(conversation.context);
+  const getTargetBranchId = () => context.selectedBranchId || branchConfig.branchId;
+  const getTargetBranchName = () => context.selectedBranchName || branchConfig.branchName || null;
 
   if (!text) {
     return { handled: false } satisfies ChatbotResult;
@@ -1058,21 +1149,30 @@ async function processFlow(params: {
         serviceType: selected,
       };
 
-      if (patient?.healthInsuranceName) {
-        context = pushHistoryEntry(
-          context,
-          'AWAITING_SERVICE',
-          buildMenuMessage(patient?.name || conversation.patientName || null),
-        );
-        context.selectedInsurance = patient.healthInsuranceName;
-        const procedureOptions = await listProcedureOptions(branchConfig.branchId, selected, patient.healthInsuranceName);
-        const response = { text: `Certo. Encontrei o convênio ${patient.healthInsuranceName} no seu cadastro.\n\nQual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
-        context.options = procedureOptions;
-        context.lastPrompt = response.text;
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_SERVICE',
+        buildMenuMessage(patient?.name || conversation.patientName || null),
+      );
+      const unitOptions = await listUnitOptions(branchConfig.branchId);
+      const response = { text: `Qual unidade você deseja?\n${serializeOptions(unitOptions)}` };
+      context.options = unitOptions;
+      context.lastPrompt = response.text;
+      await saveConversation(conversation.id, {
+        state: 'AWAITING_UNIT',
+        selectedService: selected,
+        context,
+        lastInboundMessage: text,
+        lastOutboundMessage: response.text,
+      });
+      return { handled: true, response };
+    }
+
+    case 'AWAITING_UNIT': {
+      const selected = resolveOptionSelection(text, context.options || []);
+      if (!selected) {
+        const response = { text: context.lastPrompt || 'Qual unidade você deseja?' };
         await saveConversation(conversation.id, {
-          state: 'AWAITING_PROCEDURE',
-          selectedService: selected,
-          context,
           lastInboundMessage: text,
           lastOutboundMessage: response.text,
         });
@@ -1081,17 +1181,40 @@ async function processFlow(params: {
 
       context = pushHistoryEntry(
         context,
-        'AWAITING_SERVICE',
-        buildMenuMessage(patient?.name || conversation.patientName || null),
+        'AWAITING_UNIT',
+        context.lastPrompt || 'Qual unidade você deseja?',
       );
-      const insuranceOptions = await listInsuranceOptions(branchConfig.branchId, selected);
-      const response = { text: `Qual é o seu convênio?\n${serializeOptions(insuranceOptions)}` };
+      context.selectedBranchId = selected.value;
+      context.selectedBranchName = selected.label;
+
+      const patientAtSelectedUnit = await lookupPatient(selected.value, input.phone);
+
+      if (patientAtSelectedUnit?.healthInsuranceName) {
+        context.selectedInsurance = patientAtSelectedUnit.healthInsuranceName;
+        const procedureOptions = await listProcedureOptions(selected.value, context.serviceType || 'CONSULTA', patientAtSelectedUnit.healthInsuranceName);
+        const response = { text: `Certo. Na unidade ${selected.label}, encontrei o convênio ${patientAtSelectedUnit.healthInsuranceName} no seu cadastro.\n\nQual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
+        context.options = procedureOptions;
+        context.lastPrompt = response.text;
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_PROCEDURE',
+          context,
+          patientId: patientAtSelectedUnit.id,
+          patientName: patientAtSelectedUnit.name,
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      const insuranceOptions = await listInsuranceOptions(selected.value, context.serviceType || 'CONSULTA');
+      const response = { text: `Qual é o seu convênio na unidade ${selected.label}?\n${serializeOptions(insuranceOptions)}` };
       context.options = insuranceOptions;
       context.lastPrompt = response.text;
       await saveConversation(conversation.id, {
         state: 'AWAITING_INSURANCE',
-        selectedService: selected,
         context,
+        patientId: patientAtSelectedUnit?.id || null,
+        patientName: patientAtSelectedUnit?.name || null,
         lastInboundMessage: text,
         lastOutboundMessage: response.text,
       });
@@ -1111,8 +1234,8 @@ async function processFlow(params: {
 
       if (selected.value === '__HANDOFF__') {
         const ticket = await createHandoffTicket({
-          branchId: branchConfig.branchId,
-          branchName: branchConfig.branchName,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
           title: 'Encaminhamento WhatsApp - Convênio não encontrado',
@@ -1140,7 +1263,7 @@ async function processFlow(params: {
         context.lastPrompt || 'Qual é o seu convênio?',
       );
       context.selectedInsurance = selected.label;
-      const procedureOptions = await listProcedureOptions(branchConfig.branchId, context.serviceType || 'CONSULTA', selected.label);
+      const procedureOptions = await listProcedureOptions(getTargetBranchId(), context.serviceType || 'CONSULTA', selected.label);
       const response = { text: `Qual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
       context.options = procedureOptions;
       context.lastPrompt = response.text;
@@ -1167,8 +1290,8 @@ async function processFlow(params: {
 
       if (selected.value === '__HANDOFF__') {
         const ticket = await createHandoffTicket({
-          branchId: branchConfig.branchId,
-          branchName: branchConfig.branchName,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
           title: 'Encaminhamento WhatsApp - Procedimento não encontrado',
@@ -1195,12 +1318,12 @@ async function processFlow(params: {
         'AWAITING_PROCEDURE',
         context.lastPrompt || 'Qual procedimento você deseja?',
       );
-      const procedure = await getProcedureById(branchConfig.branchId, selected.value);
+      const procedure = await getProcedureById(getTargetBranchId(), selected.value);
       if (!procedure) {
         const response = { text: 'Não consegui localizar esse procedimento agora. Vou encaminhar você para um atendente.' };
         const ticket = await createHandoffTicket({
-          branchId: branchConfig.branchId,
-          branchName: branchConfig.branchName,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
           title: 'Encaminhamento WhatsApp - Procedimento inválido',
@@ -1216,7 +1339,7 @@ async function processFlow(params: {
       }
 
       const slot = await findNextAvailableSlot({
-        branchId: branchConfig.branchId,
+        branchId: getTargetBranchId(),
         patientId: patient?.id || conversation.patientId || null,
         procedureId: procedure.id,
       });
@@ -1224,8 +1347,8 @@ async function processFlow(params: {
       if (!slot) {
         const response = { text: 'Não encontrei um horário disponível agora. Vou encaminhar você para um dos nossos atendentes.' };
         const ticket = await createHandoffTicket({
-          branchId: branchConfig.branchId,
-          branchName: branchConfig.branchName,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
           title: 'Encaminhamento WhatsApp - Sem horário automático',
@@ -1334,7 +1457,7 @@ async function processFlow(params: {
       );
       const slot = context.selectedProcedureId
         ? await findNextAvailableSlot({
-          branchId: branchConfig.branchId,
+          branchId: getTargetBranchId(),
           patientId: patient?.id || conversation.patientId || null,
           procedureId: context.selectedProcedureId,
           startDateIso: preferredDate,
@@ -1344,8 +1467,8 @@ async function processFlow(params: {
       if (!slot) {
         const response = { text: 'Não encontrei disponibilidade a partir desse dia. Vou encaminhar você para um dos nossos atendentes.' };
         const ticket = await createHandoffTicket({
-          branchId: branchConfig.branchId,
-          branchName: branchConfig.branchName,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
           title: 'Encaminhamento WhatsApp - Preferência sem disponibilidade',
@@ -1447,7 +1570,7 @@ async function processFlow(params: {
       if (context.cpfCandidate) {
         const patientByCpf = await prisma.patient.findFirst({
           where: {
-            branchId: branchConfig.branchId,
+            branchId: getTargetBranchId(),
             cpf: context.cpfCandidate,
             isActive: true,
           },
@@ -1582,11 +1705,19 @@ async function processFlow(params: {
       }
 
       if (!accepted) {
-        const response = { text: buildMenuMessage(patient?.name || conversation.patientName || context.nameCandidate || null) };
+        const response = {
+          text: buildEditSelectionPrompt({
+            patient,
+            conversation,
+            context,
+          }),
+        };
         await saveConversation(conversation.id, {
-          state: 'AWAITING_SERVICE',
-          selectedService: null,
-          context: {},
+          state: 'AWAITING_CONFIRMATION_EDIT_SELECTION',
+          context: {
+            ...context,
+            lastPrompt: response.text,
+          },
           lastInboundMessage: text,
           lastOutboundMessage: response.text,
         });
@@ -1595,7 +1726,7 @@ async function processFlow(params: {
 
       let resolvedPatient = patient || (conversation.patientId
         ? await prisma.patient.findFirst({
-          where: { id: conversation.patientId, branchId: branchConfig.branchId, isActive: true },
+          where: { id: conversation.patientId, branchId: getTargetBranchId(), isActive: true },
           select: {
             id: true,
             name: true,
@@ -1609,16 +1740,6 @@ async function processFlow(params: {
           healthInsuranceName: item.healthInsuranceName || null,
         }) : null)
         : null);
-
-      resolvedPatient = await ensurePatientForConversation({
-        branchId: branchConfig.branchId,
-        patient: resolvedPatient,
-        patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
-        phone: input.phone,
-        cpf: context.cpfCandidate || resolvedPatient?.cpf || null,
-        birthDate: context.birthDateCandidate || null,
-        insuranceName: context.selectedInsurance || null,
-      });
 
       const slot: SlotSuggestion | null = context.suggestedDate && context.suggestedTime && context.selectedDoctorId && context.selectedDoctorName
         ? {
@@ -1640,8 +1761,18 @@ async function processFlow(params: {
         return { handled: true, response };
       }
 
+      resolvedPatient = await ensurePatientForConversation({
+        branchId: getTargetBranchId(),
+        patient: resolvedPatient,
+        patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
+        phone: input.phone,
+        cpf: context.cpfCandidate || resolvedPatient?.cpf || null,
+        birthDate: context.birthDateCandidate || null,
+        insuranceName: context.selectedInsurance || null,
+      });
+
       const appointment = await reserveAppointment({
-        branchId: branchConfig.branchId,
+        branchId: getTargetBranchId(),
         patient: resolvedPatient,
         patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
         phone: input.phone,
@@ -1658,6 +1789,189 @@ async function processFlow(params: {
         reservedAppointmentId: appointment.id,
         patientId: resolvedPatient?.id || conversation.patientId || null,
         patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
+        lastInboundMessage: text,
+        lastOutboundMessage: response.text,
+      });
+      return { handled: true, response };
+    }
+
+    case 'AWAITING_CONFIRMATION_EDIT_SELECTION': {
+      const selectedStep = parseEditableStepSelection(text);
+      const isNewPatient = !patient?.id && !conversation.patientId;
+
+      if (!selectedStep || (!isNewPatient && (selectedStep === 'NAME' || selectedStep === 'BIRTHDATE'))) {
+        const response = {
+          text: buildEditSelectionPrompt({
+            patient,
+            conversation,
+            context,
+          }),
+        };
+        await saveConversation(conversation.id, {
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selectedStep === 'SERVICE') {
+        const response = { text: buildMenuMessage(patient?.name || conversation.patientName || context.nameCandidate || null) };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_SERVICE',
+          selectedService: null,
+          context: {},
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selectedStep === 'UNIT') {
+        const unitOptions = await listUnitOptions(branchConfig.branchId);
+        const response = { text: `Qual unidade você deseja?\n${serializeOptions(unitOptions)}` };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_UNIT',
+          patientId: null,
+          patientName: null,
+          context: {
+            ...context,
+            selectedBranchId: null,
+            selectedBranchName: null,
+            selectedInsurance: null,
+            selectedProcedureId: null,
+            selectedProcedureName: null,
+            selectedDoctorId: null,
+            selectedDoctorName: null,
+            suggestedDate: null,
+            suggestedTime: null,
+            suggestedDurationMinutes: null,
+            preferredDate: null,
+            options: unitOptions,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selectedStep === 'INSURANCE') {
+        const insuranceOptions = await listInsuranceOptions(getTargetBranchId(), context.serviceType || 'CONSULTA');
+        const response = { text: `Qual é o seu convênio?\n${serializeOptions(insuranceOptions)}` };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_INSURANCE',
+          context: {
+            ...context,
+            selectedInsurance: null,
+            selectedProcedureId: null,
+            selectedProcedureName: null,
+            selectedDoctorId: null,
+            selectedDoctorName: null,
+            suggestedDate: null,
+            suggestedTime: null,
+            suggestedDurationMinutes: null,
+            preferredDate: null,
+            options: insuranceOptions,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selectedStep === 'PROCEDURE') {
+        const procedureOptions = await listProcedureOptions(
+          getTargetBranchId(),
+          context.serviceType || 'CONSULTA',
+          context.selectedInsurance || patient?.healthInsuranceName || '',
+        );
+        const response = { text: `Qual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_PROCEDURE',
+          context: {
+            ...context,
+            selectedProcedureId: null,
+            selectedProcedureName: null,
+            selectedDoctorId: null,
+            selectedDoctorName: null,
+            suggestedDate: null,
+            suggestedTime: null,
+            suggestedDurationMinutes: null,
+            preferredDate: null,
+            options: procedureOptions,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selectedStep === 'SLOT') {
+        const response = { text: 'Certo. Qual é a sua preferência de dia? Você pode responder, por exemplo, com 15/04/2026, hoje, amanhã ou segunda.' };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_PREFERRED_DATE',
+          context: {
+            ...context,
+            selectedDoctorId: null,
+            selectedDoctorName: null,
+            suggestedDate: null,
+            suggestedTime: null,
+            suggestedDurationMinutes: null,
+            preferredDate: null,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selectedStep === 'CPF') {
+        const response = { text: 'Tudo bem. Informe seu CPF novamente.' };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_CPF',
+          patientId: null,
+          patientName: isNewPatient ? null : conversation.patientName,
+          context: {
+            ...context,
+            cpfCandidate: null,
+            nameCandidate: isNewPatient ? null : context.nameCandidate,
+            birthDateCandidate: isNewPatient ? null : context.birthDateCandidate,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selectedStep === 'NAME') {
+        const response = { text: 'Perfeito. Agora informe seu nome completo.' };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_NEW_PATIENT_NAME',
+          patientName: null,
+          context: {
+            ...context,
+            nameCandidate: null,
+            birthDateCandidate: null,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      const response = { text: 'Informe sua data de nascimento no formato DD/MM/AAAA.' };
+      await saveConversation(conversation.id, {
+        state: 'AWAITING_NEW_PATIENT_BIRTHDATE',
+        context: {
+          ...context,
+          birthDateCandidate: null,
+          lastPrompt: response.text,
+        },
         lastInboundMessage: text,
         lastOutboundMessage: response.text,
       });
@@ -1686,12 +2000,17 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
   const branchConfig = await resolveBranchConfig();
   if (!branchConfig?.branchId) return { handled: false };
 
-  const patient = await lookupPatient(branchConfig.branchId, phone);
+  let patient = await lookupPatient(branchConfig.branchId, phone);
   const conversation = await upsertConversation({
     branchId: branchConfig.branchId,
     phone,
     patient,
   });
+
+  const conversationContext = parseJsonContext(conversation.context);
+  if (conversationContext.selectedBranchId) {
+    patient = await lookupPatient(conversationContext.selectedBranchId, phone);
+  }
 
   const result = await processFlow({
     branchConfig,
