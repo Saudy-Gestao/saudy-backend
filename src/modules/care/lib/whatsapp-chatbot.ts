@@ -93,6 +93,20 @@ type ConversationHistoryEntry = {
   context: Omit<ConversationContext, 'history'>;
 };
 
+export type HumanFlowDefinition = {
+  key: string;
+  label: string;
+};
+
+export const HUMAN_FLOWS: HumanFlowDefinition[] = [
+  { key: 'DUVIDAS', label: 'Dúvidas' },
+  { key: 'CONVENIO_NAO_ENCONTRADO', label: 'Convênio não encontrado' },
+  { key: 'PROCEDIMENTO_NAO_ENCONTRADO', label: 'Procedimento não encontrado' },
+  { key: 'PROCEDIMENTO_INVALIDO', label: 'Procedimento inválido' },
+  { key: 'SEM_HORARIO_AUTOMATICO', label: 'Sem horário automático' },
+  { key: 'PREFERENCIA_SEM_DISPONIBILIDADE', label: 'Preferência sem disponibilidade' },
+];
+
 const normalizeDigits = (value: unknown) => String(value || '').replace(/\D/g, '');
 
 const normalizeText = (value: unknown) => String(value || '')
@@ -643,6 +657,15 @@ async function saveConversation(conversationId: string, data: {
   patientName?: string | null;
   handoffTicketId?: string | null;
   reservedAppointmentId?: string | null;
+  humanStatus?: 'QUEUED' | 'ASSIGNED' | 'CLOSED' | null;
+  humanFlowKey?: string | null;
+  humanFlowLabel?: string | null;
+  humanAssignedUserId?: string | null;
+  humanAssignedUserName?: string | null;
+  humanAssignedAt?: Date | null;
+  humanClosedAt?: Date | null;
+  humanClosedByUserId?: string | null;
+  humanClosedByUserName?: string | null;
 }) {
   return prisma.whatsAppConversation.update({
     where: { id: conversationId },
@@ -656,7 +679,43 @@ async function saveConversation(conversationId: string, data: {
       ...(data.patientName !== undefined ? { patientName: data.patientName } : {}),
       ...(data.handoffTicketId !== undefined ? { handoffTicketId: data.handoffTicketId } : {}),
       ...(data.reservedAppointmentId !== undefined ? { reservedAppointmentId: data.reservedAppointmentId } : {}),
+      ...(data.humanStatus !== undefined ? { humanStatus: data.humanStatus } : {}),
+      ...(data.humanFlowKey !== undefined ? { humanFlowKey: data.humanFlowKey } : {}),
+      ...(data.humanFlowLabel !== undefined ? { humanFlowLabel: data.humanFlowLabel } : {}),
+      ...(data.humanAssignedUserId !== undefined ? { humanAssignedUserId: data.humanAssignedUserId } : {}),
+      ...(data.humanAssignedUserName !== undefined ? { humanAssignedUserName: data.humanAssignedUserName } : {}),
+      ...(data.humanAssignedAt !== undefined ? { humanAssignedAt: data.humanAssignedAt } : {}),
+      ...(data.humanClosedAt !== undefined ? { humanClosedAt: data.humanClosedAt } : {}),
+      ...(data.humanClosedByUserId !== undefined ? { humanClosedByUserId: data.humanClosedByUserId } : {}),
+      ...(data.humanClosedByUserName !== undefined ? { humanClosedByUserName: data.humanClosedByUserName } : {}),
       lastInteractionAt: new Date(),
+    },
+  });
+}
+
+async function recordConversationMessage(params: {
+  conversationId: string;
+  branchId: string;
+  phone: string;
+  flowKey?: string | null;
+  authorType: 'PATIENT' | 'BOT' | 'OPERATOR' | 'SYSTEM';
+  authorUserId?: string | null;
+  authorName?: string | null;
+  message: string;
+}) {
+  const normalizedMessage = String(params.message || '').trim();
+  if (!normalizedMessage) return null;
+
+  return prisma.whatsAppConversationMessage.create({
+    data: {
+      conversationId: params.conversationId,
+      branchId: params.branchId,
+      phone: formatPhoneForLookup(params.phone),
+      flowKey: params.flowKey || null,
+      authorType: params.authorType,
+      authorUserId: params.authorUserId || null,
+      authorName: params.authorName || null,
+      message: normalizedMessage,
     },
   });
 }
@@ -874,39 +933,42 @@ async function findNextAvailableSlot(params: {
   return null;
 }
 
-async function createHandoffTicket(params: {
+async function openHumanHandoffConversation(params: {
+  conversationId: string;
   branchId: string;
   branchName?: string | null;
   phone: string;
   patientName?: string | null;
-  title: string;
+  flowKey: string;
+  flowLabel: string;
   description: string;
 }) {
-  const ticket = await prisma.ticket.create({
-    data: {
-      flow: 'WHATSAPP',
-      module: 'AGENDAMENTO',
-      type: 'IMPROVEMENT',
-      status: 'OPEN',
-      priority: 'HIGH',
-      description: `${params.title}\n\n${params.description}`,
-      createdByName: params.patientName || 'Paciente WhatsApp',
-      branchId: params.branchId || null,
-      branchName: params.branchName || null,
-      lastUserMessageAt: new Date(),
-    },
+  await saveConversation(params.conversationId, {
+    state: 'HANDED_OFF',
+    humanStatus: 'QUEUED',
+    humanFlowKey: params.flowKey,
+    humanFlowLabel: params.flowLabel,
+    humanAssignedUserId: null,
+    humanAssignedUserName: null,
+    humanAssignedAt: null,
+    humanClosedAt: null,
+    humanClosedByUserId: null,
+    humanClosedByUserName: null,
   });
 
-  await prisma.ticketMessage.create({
-    data: {
-      ticketId: ticket.id,
-      authorRole: 'USER',
-      authorName: params.patientName || 'Paciente WhatsApp',
-      message: `Telefone: ${formatPhoneForLookup(params.phone)}\n\n${params.description}`,
-    },
+  await recordConversationMessage({
+    conversationId: params.conversationId,
+    branchId: params.branchId,
+    phone: params.phone,
+    flowKey: params.flowKey,
+    authorType: 'SYSTEM',
+    authorName: 'Sistema',
+    message: `[Fila humana] ${params.flowLabel}\n${params.description}`,
   });
 
-  return ticket;
+  return {
+    id: params.conversationId,
+  };
 }
 
 async function reserveAppointment(params: {
@@ -1136,12 +1198,14 @@ async function processFlow(params: {
       }
 
       if (selected === 'DUVIDAS') {
-        const ticket = await createHandoffTicket({
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
           branchId: branchConfig.branchId,
           branchName: branchConfig.branchName,
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
-          title: 'Encaminhamento WhatsApp - Dúvidas',
+          flowKey: 'DUVIDAS',
+          flowLabel: 'Dúvidas',
           description: 'Paciente solicitou atendimento humano pelo fluxo de dúvidas do WhatsApp.',
         });
 
@@ -1244,12 +1308,14 @@ async function processFlow(params: {
       }
 
       if (selected.value === '__HANDOFF__') {
-        const ticket = await createHandoffTicket({
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
           branchId: getTargetBranchId(),
           branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
-          title: 'Encaminhamento WhatsApp - Convênio não encontrado',
+          flowKey: 'CONVENIO_NAO_ENCONTRADO',
+          flowLabel: 'Convênio não encontrado',
           description: `Fluxo: ${context.serviceType}\nPaciente não encontrou o convênio na lista automática.`,
         });
 
@@ -1300,12 +1366,14 @@ async function processFlow(params: {
       }
 
       if (selected.value === '__HANDOFF__') {
-        const ticket = await createHandoffTicket({
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
           branchId: getTargetBranchId(),
           branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
-          title: 'Encaminhamento WhatsApp - Procedimento não encontrado',
+          flowKey: 'PROCEDIMENTO_NAO_ENCONTRADO',
+          flowLabel: 'Procedimento não encontrado',
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nPaciente não encontrou o procedimento na lista automática.`,
         });
 
@@ -1332,12 +1400,14 @@ async function processFlow(params: {
       const procedure = await getProcedureById(getTargetBranchId(), selected.value);
       if (!procedure) {
         const response = { text: 'Não consegui localizar esse procedimento agora. Vou encaminhar você para um atendente.' };
-        const ticket = await createHandoffTicket({
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
           branchId: getTargetBranchId(),
           branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
-          title: 'Encaminhamento WhatsApp - Procedimento inválido',
+          flowKey: 'PROCEDIMENTO_INVALIDO',
+          flowLabel: 'Procedimento inválido',
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nProcedimento selecionado não foi encontrado no cadastro.`,
         });
         await saveConversation(conversation.id, {
@@ -1357,12 +1427,14 @@ async function processFlow(params: {
 
       if (!slot) {
         const response = { text: 'Não encontrei um horário disponível agora. Vou encaminhar você para um dos nossos atendentes.' };
-        const ticket = await createHandoffTicket({
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
           branchId: getTargetBranchId(),
           branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
-          title: 'Encaminhamento WhatsApp - Sem horário automático',
+          flowKey: 'SEM_HORARIO_AUTOMATICO',
+          flowLabel: 'Sem horário automático',
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nProcedimento: ${procedure.name}`,
         });
         await saveConversation(conversation.id, {
@@ -1477,12 +1549,14 @@ async function processFlow(params: {
 
       if (!slot) {
         const response = { text: 'Não encontrei disponibilidade a partir desse dia. Vou encaminhar você para um dos nossos atendentes.' };
-        const ticket = await createHandoffTicket({
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
           branchId: getTargetBranchId(),
           branchName: getTargetBranchName(),
           phone: input.phone,
           patientName: patient?.name || conversation.patientName || null,
-          title: 'Encaminhamento WhatsApp - Preferência sem disponibilidade',
+          flowKey: 'PREFERENCIA_SEM_DISPONIBILIDADE',
+          flowLabel: 'Preferência sem disponibilidade',
           description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nProcedimento: ${context.selectedProcedureName || 'Não informado'}\nPreferência: ${preferredDate}`,
         });
         await saveConversation(conversation.id, {
@@ -2043,6 +2117,25 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
     patient = await lookupPatient(conversationContext.selectedBranchId, phone);
   }
 
+  await recordConversationMessage({
+    conversationId: conversation.id,
+    branchId: conversationContext.selectedBranchId || branchConfig.branchId,
+    phone,
+    flowKey: conversation.humanFlowKey || null,
+    authorType: 'PATIENT',
+    authorName: patient?.name || conversation.patientName || 'Paciente',
+    message: text,
+  });
+
+  if (conversation.humanStatus === 'QUEUED' || conversation.humanStatus === 'ASSIGNED') {
+    await saveConversation(conversation.id, {
+      lastInboundMessage: text,
+      patientId: patient?.id || conversation.patientId || null,
+      patientName: patient?.name || conversation.patientName || null,
+    });
+    return { handled: true };
+  }
+
   const result = await processFlow({
     branchConfig,
     conversation,
@@ -2055,6 +2148,15 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
 
   if (result.handled && result.response) {
     await sendResponse(branchConfig, phone, result.response);
+    await recordConversationMessage({
+      conversationId: conversation.id,
+      branchId: conversationContext.selectedBranchId || branchConfig.branchId,
+      phone,
+      flowKey: conversation.humanFlowKey || null,
+      authorType: 'BOT',
+      authorName: 'Saudy Bot',
+      message: result.response.text,
+    });
   }
 
   return result;

@@ -1685,16 +1685,74 @@ model WhatsAppConversation {
     lastOutboundMessage   String?
     handoffTicketId       String?
     reservedAppointmentId String?
+    humanStatus           WhatsAppHumanConversationStatus?
+    humanFlowKey          String?
+    humanFlowLabel        String?
+    humanAssignedUserId   String?
+    humanAssignedUserName String?
+    humanAssignedAt       DateTime?
+    humanClosedAt         DateTime?
+    humanClosedByUserId   String?
+    humanClosedByUserName String?
     lastInteractionAt     DateTime                  @default(now())
     createdAt             DateTime                  @default(now())
     updatedAt             DateTime                  @updatedAt
+    messages              WhatsAppConversationMessage[]
 
     @@unique([branchId, phone])
     @@index([branchId])
     @@index([patientId])
     @@index([state])
     @@index([lastInteractionAt])
+    @@index([humanStatus])
+    @@index([humanAssignedUserId])
+    @@index([humanFlowKey])
     @@map("whatsapp_conversations")
+}
+
+enum WhatsAppHumanConversationStatus {
+    QUEUED
+    ASSIGNED
+    CLOSED
+}
+
+enum WhatsAppConversationMessageAuthorType {
+    PATIENT
+    BOT
+    OPERATOR
+    SYSTEM
+}
+
+model WhatsAppConversationMessage {
+    id             String                             @id @default(uuid())
+    conversationId String
+    conversation   WhatsAppConversation               @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    branchId       String
+    phone          String
+    flowKey        String?
+    authorType     WhatsAppConversationMessageAuthorType
+    authorUserId   String?
+    authorName     String?
+    message        String                             @db.Text
+    createdAt      DateTime                           @default(now())
+
+    @@index([conversationId, createdAt])
+    @@index([branchId, createdAt])
+    @@index([phone, createdAt])
+    @@map("whatsapp_conversation_messages")
+}
+
+model WhatsAppConversationOperatorConfig {
+    id                     String   @id @default(uuid())
+    userId                 String   @unique
+    isActive               Boolean  @default(true)
+    flowKeys               String[] @default([])
+    maxActiveConversations Int      @default(3)
+    createdAt              DateTime @default(now())
+    updatedAt              DateTime @updatedAt
+
+    @@index([isActive])
+    @@map("whatsapp_conversation_operator_configs")
 }
 
 enum LeadStatus {
