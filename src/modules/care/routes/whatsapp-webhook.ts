@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
+import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -44,6 +45,31 @@ const appendObservation = (existing: string | null | undefined, note: string) =>
   return trimmedExisting ? `${trimmedExisting}\n${note}` : note;
 };
 
+const extractInboundMessageText = (payload: any): string => {
+  const candidates = [
+    payload?.payload?.text,
+    payload?.payload?.title,
+    payload?.payload?.postbackText,
+    payload?.payload?.reply,
+    payload?.text,
+    payload?.message?.text,
+    payload?.message?.content?.text,
+    payload?.content?.text,
+    payload?.interactive?.button_reply?.title,
+    payload?.interactive?.button_reply?.id,
+    payload?.interactive?.list_reply?.title,
+    payload?.interactive?.list_reply?.id,
+    payload?.button?.text,
+  ];
+
+  for (const candidate of candidates) {
+    const text = String(candidate || '').trim();
+    if (text) return text;
+  }
+
+  return '';
+};
+
 export default async function whatsappWebhookRoutes(app: FastifyInstance) {
   app.get('/whatsapp/webhook/gupshup', async () => ({ ok: true }));
 
@@ -66,6 +92,8 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const body = request.body as any;
     const inboundPayload = body?.payload || {};
     const action = parseConfirmationAction(inboundPayload);
+    const inboundText = extractInboundMessageText(inboundPayload);
+    const source = String(inboundPayload?.source || inboundPayload?.sender?.phone || '').replace(/\D/g, '');
 
     request.log.info({
       gupshupEventType: body?.type || inboundPayload?.type || null,
@@ -73,21 +101,13 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       contextGsId: inboundPayload?.context?.gsId || null,
       contextId: inboundPayload?.context?.id || null,
       confirmationAction: action,
+      inboundText,
       payloadPreview: inboundPayload,
     }, 'Received WhatsApp webhook event');
-
-    if (!action) {
-      request.log.warn({
-        reason: 'unsupported-action',
-        payload: inboundPayload,
-      }, 'Ignoring WhatsApp webhook event');
-      return { success: true, ignored: true, reason: 'unsupported-action' };
-    }
 
     const quickReplyMessageId = inboundPayload?.payload?.id;
     const contextGsId = inboundPayload?.context?.gsId;
     const contextId = inboundPayload?.context?.id;
-    const source = String(inboundPayload?.source || inboundPayload?.sender?.phone || '').replace(/\D/g, '');
 
     let originatingLog = null as Awaited<ReturnType<typeof prisma.whatsAppMessageLog.findFirst>>;
 
@@ -123,15 +143,33 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       });
     }
 
-    if (!originatingLog?.appointmentId || !originatingLog.branchId) {
+    if (!action || !originatingLog?.appointmentId || !originatingLog.branchId) {
+      if (source && inboundText) {
+        const chatbotResult = await handleWhatsAppChatbot({
+          phone: source,
+          text: inboundText,
+        });
+
+        if (chatbotResult.handled) {
+          return {
+            success: true,
+            chatbot: true,
+          };
+        }
+      }
+
       request.log.warn({
-        reason: 'originating-log-not-found',
+        reason: action ? 'originating-log-not-found' : 'unsupported-action',
         source,
         contextGsId,
         contextId,
         payload: inboundPayload,
       }, 'Could not match WhatsApp webhook event to appointment confirmation log');
-      return { success: true, ignored: true, reason: 'originating-log-not-found' };
+      return {
+        success: true,
+        ignored: true,
+        reason: action ? 'originating-log-not-found' : 'unsupported-action',
+      };
     }
 
     const appointment = await prisma.appointment.findFirst({

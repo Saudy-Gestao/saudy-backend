@@ -887,6 +887,7 @@ model PreSchedulingFlow {
     patientName           String?
     patientCpf            String?
     patientPhone          String?
+    source                String              @default("COMMON")
     status                PreSchedulingStatus @default(PENDING)
     preAuthorizedAt       DateTime?
     guideNumber           String?
@@ -1593,6 +1594,21 @@ enum WhatsAppMessageType {
     CONFIRMATION_REPLY_RESCHEDULE
 }
 
+enum WhatsAppConversationState {
+    MENU
+    AWAITING_SERVICE
+    AWAITING_INSURANCE
+    AWAITING_PROCEDURE
+    AWAITING_SLOT_CONFIRMATION
+    AWAITING_PREFERRED_DATE
+    AWAITING_CPF
+    AWAITING_CPF_CONFIRMATION
+    AWAITING_NEW_PATIENT_NAME
+    AWAITING_FINAL_CONFIRMATION
+    COMPLETED
+    HANDED_OFF
+}
+
 model WhatsAppMessageTemplate {
     id                  String              @id @default(uuid())
     branchId            String
@@ -1650,6 +1666,31 @@ model WhatsAppMessageLog {
     @@index([status])
     @@index([createdAt])
     @@map("whatsapp_message_logs")
+}
+
+model WhatsAppConversation {
+    id                    String                    @id @default(uuid())
+    branchId              String
+    phone                 String
+    patientId             String?
+    patientName           String?
+    state                 WhatsAppConversationState @default(MENU)
+    selectedService       String?
+    context               Json?
+    lastInboundMessage    String?
+    lastOutboundMessage   String?
+    handoffTicketId       String?
+    reservedAppointmentId String?
+    lastInteractionAt     DateTime                  @default(now())
+    createdAt             DateTime                  @default(now())
+    updatedAt             DateTime                  @updatedAt
+
+    @@unique([branchId, phone])
+    @@index([branchId])
+    @@index([patientId])
+    @@index([state])
+    @@index([lastInteractionAt])
+    @@map("whatsapp_conversations")
 }
 
 enum LeadStatus {
