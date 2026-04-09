@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import prisma from './prisma';
 import WhatsAppAutoSender from './whatsapp-auto-sender';
+import GupshupService from './gupshup';
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
 
@@ -40,6 +41,160 @@ const formatTimeInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
  * Job para processar e enviar mensagens de confirmação de agendamentos
  */
 export class WhatsAppSchedulerJob {
+  static async processHumanConversationTimeouts(): Promise<{ warned: number; closed: number; failed: number }> {
+    let warned = 0;
+    let closed = 0;
+    let failed = 0;
+
+    try {
+      const conversations = await prisma.whatsAppConversation.findMany({
+        where: {
+          humanStatus: 'ASSIGNED',
+          humanAssignedUserId: { not: null },
+        },
+        include: {
+          messages: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
+      });
+
+      for (const conversation of conversations) {
+        try {
+          const operatorConfig = conversation.humanAssignedUserId
+            ? await prisma.whatsAppConversationOperatorConfig.findUnique({
+              where: { userId: conversation.humanAssignedUserId },
+            })
+            : null;
+
+          const idleMinutes = Math.max(1, Number(operatorConfig?.idleTimeoutMinutes || 25));
+          const warningMinutes = Math.max(1, Number(operatorConfig?.closeWarningMinutes || 5));
+          const lastOperatorAt = conversation.humanLastOperatorMessageAt || null;
+          const lastPatientAt = conversation.humanLastPatientMessageAt || null;
+
+          if (!lastOperatorAt) continue;
+          if (lastPatientAt && lastPatientAt >= lastOperatorAt) continue;
+
+          const now = Date.now();
+          const idleMs = idleMinutes * 60 * 1000;
+          const warningMs = warningMinutes * 60 * 1000;
+          const branchConfig = await this.getBranchMessagingConfig(conversation.branchId);
+          if (!branchConfig) continue;
+
+          const gupshup = new GupshupService(branchConfig);
+
+          if (!conversation.humanIdleWarningSentAt && (now - lastOperatorAt.getTime()) >= idleMs) {
+            const warningMessage = `Como não tivemos retorno nos últimos ${idleMinutes} minutos, este atendimento será encerrado automaticamente em ${warningMinutes} minutos caso não haja nova mensagem.`;
+            const result = await gupshup.sendTextMessage({
+              to: conversation.phone,
+              message: warningMessage,
+            });
+
+            const sentAt = new Date();
+            await prisma.whatsAppConversation.update({
+              where: { id: conversation.id },
+              data: {
+                humanIdleWarningSentAt: sentAt,
+                lastOutboundMessage: warningMessage,
+                lastInteractionAt: sentAt,
+              },
+            });
+
+            await prisma.whatsAppConversationMessage.create({
+              data: {
+                conversationId: conversation.id,
+                branchId: conversation.branchId,
+                phone: conversation.phone,
+                flowKey: conversation.humanFlowKey || null,
+                authorType: 'SYSTEM',
+                authorUserId: conversation.humanAssignedUserId || null,
+                authorName: conversation.humanAssignedUserName || 'Sistema',
+                providerMessageId: result.messageId || null,
+                metadata: { event: 'idle-warning' },
+                message: warningMessage,
+              },
+            });
+            warned += 1;
+            continue;
+          }
+
+          if (conversation.humanIdleWarningSentAt && (now - conversation.humanIdleWarningSentAt.getTime()) >= warningMs) {
+            const closingMessage = 'Seu atendimento foi encerrado automaticamente por inatividade. Se precisar de algo mais, envie uma nova mensagem e o fluxo será iniciado novamente.';
+            const result = await gupshup.sendTextMessage({
+              to: conversation.phone,
+              message: closingMessage,
+            });
+
+            const closedAt = new Date();
+            await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+              await tx.whatsAppConversation.update({
+                where: { id: conversation.id },
+                data: {
+                  state: 'MENU',
+                  context: {},
+                  selectedService: null,
+                  humanStatus: 'CLOSED',
+                  humanClosedAt: closedAt,
+                  humanClosedByUserId: conversation.humanAssignedUserId || null,
+                  humanClosedByUserName: conversation.humanAssignedUserName || 'Sistema',
+                  humanProtocolClosedAt: closedAt,
+                  lastOutboundMessage: closingMessage,
+                  lastInteractionAt: closedAt,
+                },
+              });
+
+              await tx.whatsAppConversationMessage.create({
+                data: {
+                  conversationId: conversation.id,
+                  branchId: conversation.branchId,
+                  phone: conversation.phone,
+                  flowKey: conversation.humanFlowKey || null,
+                  authorType: 'SYSTEM',
+                  authorUserId: conversation.humanAssignedUserId || null,
+                  authorName: conversation.humanAssignedUserName || 'Sistema',
+                  providerMessageId: result.messageId || null,
+                  metadata: { event: 'idle-auto-close' },
+                  message: `[Protocolo ${conversation.humanProtocolNumber || '-'}] Atendimento encerrado automaticamente por inatividade.\n${closingMessage}`,
+                },
+              });
+            });
+            closed += 1;
+          }
+        } catch (error) {
+          failed += 1;
+          console.error(`Error processing human timeout for conversation ${conversation.id}:`, error);
+        }
+      }
+
+      return { warned, closed, failed };
+    } catch (error) {
+      console.error('Error processing human conversation timeouts:', error);
+      return { warned, closed, failed };
+    }
+  }
+
+  private static async getBranchMessagingConfig(branchId: string) {
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    if (whatsappConfig?.isActive) {
+      return {
+        apiKey: whatsappConfig.accountSid,
+        appName: whatsappConfig.authToken,
+        sourceNumber: whatsappConfig.fromNumber,
+      };
+    }
+
+    if (process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && process.env.GUPSHUP_SOURCE_NUMBER) {
+      return {
+        apiKey: String(process.env.GUPSHUP_API_KEY),
+        appName: String(process.env.GUPSHUP_APP_NAME),
+        sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
+      };
+    }
+
+    return null;
+  }
+
   static async processNoShows(): Promise<{ processed: number; updated: number; notified: number; failed: number }> {
     let processed = 0;
     let updated = 0;

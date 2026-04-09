@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { getAnexosStorage } from '../../../lib/storage';
+import GupshupService from '../lib/gupshup';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
 
@@ -390,7 +391,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
 
   app.post('/:appointmentId/send-link', {
     schema: {
-      summary: 'Send (mock) whatsapp link for patient document upload',
+      summary: 'Send whatsapp link for patient document upload',
       tags: ['PreScheduling'],
       params: {
         type: 'object',
@@ -457,14 +458,41 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       },
     });
 
-    return reply.send({
-      message: 'Link gerado e envio mockado com sucesso',
-      item: updatedFlow,
-      whatsappMock: {
-        provider: 'mock',
-        to: flow.patientPhone || null,
+    let whatsappResult: any = {
+      provider: 'mock',
+      to: flow.patientPhone || null,
+      message: mockMessage,
+    };
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+    const appName = whatsappConfig?.authToken || process.env.GUPSHUP_APP_NAME || '';
+    const sourceNumber = whatsappConfig?.fromNumber || process.env.GUPSHUP_SOURCE_NUMBER || '';
+
+    if ((whatsappConfig?.isActive || (!whatsappConfig && apiKey && appName && sourceNumber)) && flow.patientPhone) {
+      const gupshup = new GupshupService({
+        apiKey,
+        appName,
+        sourceNumber,
+      });
+      const sendResult = await gupshup.sendTextMessage({
+        to: flow.patientPhone,
         message: mockMessage,
-      },
+      });
+      whatsappResult = {
+        provider: 'gupshup',
+        to: flow.patientPhone,
+        message: mockMessage,
+        status: sendResult.status,
+        messageId: sendResult.messageId || null,
+        error: sendResult.error || null,
+      };
+    }
+
+    return reply.send({
+      message: 'Link gerado com sucesso',
+      item: updatedFlow,
+      whatsapp: whatsappResult,
       publicUrl,
       hasAnamnesis: Boolean(anamnesisTemplate),
     });

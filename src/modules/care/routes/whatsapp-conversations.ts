@@ -29,6 +29,16 @@ const buildOperatorSignature = (message: string, operatorName: string) => {
   return `${trimmed}\n\nAtendimento: ${name}`;
 };
 
+const buildOperatorGreeting = (operatorName: string) => {
+  const hour = new Date().getHours();
+  const period = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  return `${period}. Como posso ajudar?\n\nAtendimento: ${operatorName}`;
+};
+
+const buildTransferMessage = (operatorName: string) => (
+  `Estamos realizando uma alteração no seu atendimento. A partir de agora, ${operatorName} seguirá com você.\n\nAtendimento: ${operatorName}`
+);
+
 async function getCurrentUserScope(request: any) {
   const userId = String((request.user as any)?.id || '').trim();
   if (!userId) return null;
@@ -150,6 +160,8 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
           branchName: user.sector?.branch?.tradeName || null,
           isActive: config?.isActive ?? false,
           maxActiveConversations: config?.maxActiveConversations ?? 3,
+          idleTimeoutMinutes: config?.idleTimeoutMinutes ?? 25,
+          closeWarningMinutes: config?.closeWarningMinutes ?? 5,
           flowKeys: config?.flowKeys ?? [],
           activeConversationCount: activeCountByUserId.get(user.id) || 0,
         };
@@ -167,6 +179,8 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     const body = request.body as {
       isActive?: boolean;
       maxActiveConversations?: number;
+      idleTimeoutMinutes?: number;
+      closeWarningMinutes?: number;
       flowKeys?: string[];
     };
 
@@ -190,6 +204,8 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       : [];
 
     const maxActiveConversations = Math.max(1, Number(body?.maxActiveConversations || 3));
+    const idleTimeoutMinutes = Math.max(1, Number(body?.idleTimeoutMinutes || 25));
+    const closeWarningMinutes = Math.max(1, Number(body?.closeWarningMinutes || 5));
 
     const config = await prisma.whatsAppConversationOperatorConfig.upsert({
       where: { userId },
@@ -197,11 +213,15 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         userId,
         isActive: body?.isActive !== false,
         maxActiveConversations,
+        idleTimeoutMinutes,
+        closeWarningMinutes,
         flowKeys,
       },
       update: {
         isActive: body?.isActive !== false,
         maxActiveConversations,
+        idleTimeoutMinutes,
+        closeWarningMinutes,
         flowKeys,
       },
     });
@@ -242,6 +262,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         { patientName: { contains: search, mode: 'insensitive' } },
         { phone: { contains: normalizePhone(search) || search } },
         { humanFlowLabel: { contains: search, mode: 'insensitive' } },
+        { humanProtocolNumber: { contains: search, mode: 'insensitive' } },
         { lastInboundMessage: { contains: search, mode: 'insensitive' } },
         { lastOutboundMessage: { contains: search, mode: 'insensitive' } },
       ];
@@ -299,8 +320,31 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       orderBy: { createdAt: 'asc' },
     });
 
+    const patientDetails = conversation.patientId
+      ? await prisma.patient.findFirst({
+        where: {
+          id: conversation.patientId,
+          branchId: { in: scope.branchIds },
+        },
+        select: {
+          id: true,
+          name: true,
+          cpf: true,
+          cellphone: true,
+          phone: true,
+          birthDate: true,
+          healthInsuranceName: true,
+          healthInsuranceNumber: true,
+          email: true,
+          address: true,
+          observations: true,
+        },
+      })
+      : null;
+
     return {
       conversation,
+      patient: patientDetails,
       items,
     };
   });
@@ -326,6 +370,10 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Operator not enabled for WhatsApp conversations' });
     }
 
+    if (conversation.humanStatus === 'CLOSED') {
+      return reply.code(400).send({ error: 'Conversa encerrada não pode ser assumida novamente' });
+    }
+
     if (operatorConfig.flowKeys.length && conversation.humanFlowKey && !operatorConfig.flowKeys.includes(conversation.humanFlowKey)) {
       return reply.code(403).send({ error: 'Flow not allowed for this operator' });
     }
@@ -342,13 +390,68 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Operator reached active conversation limit' });
     }
 
+    const messagingConfig = await getBranchMessagingConfig(conversation.branchId);
+    if (!messagingConfig) {
+      return reply.code(400).send({ error: 'WhatsApp configuration not found for this branch' });
+    }
+
+    const gupshup = new GupshupService(messagingConfig);
+    const now = new Date();
+    const previousOperatorName = conversation.humanAssignedUserName || null;
+    const takeover = conversation.humanStatus === 'ASSIGNED' && conversation.humanAssignedUserId && conversation.humanAssignedUserId !== scope.currentUser.id;
+    const greetingMessage = takeover
+      ? buildTransferMessage(scope.currentUser.name)
+      : buildOperatorGreeting(scope.currentUser.name);
+    const queueMessage = takeover
+      ? `[Fila humana] Conversa transferida para ${scope.currentUser.name}.`
+      : `[Fila humana] Conversa assumida por ${scope.currentUser.name}.`;
+
+    const sendResult = await gupshup.sendTextMessage({
+      to: conversation.phone,
+      message: greetingMessage,
+    });
+
     const updated = await prisma.whatsAppConversation.update({
       where: { id },
       data: {
         humanStatus: 'ASSIGNED',
         humanAssignedUserId: scope.currentUser.id,
         humanAssignedUserName: scope.currentUser.name,
-        humanAssignedAt: new Date(),
+        humanAssignedAt: now,
+        humanIdleWarningSentAt: null,
+        humanLastOperatorMessageAt: now,
+        lastOutboundMessage: greetingMessage,
+        lastInteractionAt: now,
+      },
+    });
+
+    await prisma.whatsAppConversationMessage.create({
+      data: {
+        conversationId: conversation.id,
+        branchId: conversation.branchId,
+        phone: conversation.phone,
+        flowKey: conversation.humanFlowKey || null,
+        authorType: 'SYSTEM',
+        authorUserId: scope.currentUser.id,
+        authorName: scope.currentUser.name,
+        message: previousOperatorName && takeover
+          ? `${queueMessage}\nOperador anterior: ${previousOperatorName}.`
+          : queueMessage,
+      },
+    });
+
+    await prisma.whatsAppConversationMessage.create({
+      data: {
+        conversationId: conversation.id,
+        branchId: conversation.branchId,
+        phone: conversation.phone,
+        flowKey: conversation.humanFlowKey || null,
+        authorType: 'OPERATOR',
+        authorUserId: scope.currentUser.id,
+        authorName: scope.currentUser.name,
+        providerMessageId: sendResult.messageId || null,
+        metadata: sendResult.messageId ? { event: 'operator-claim-greeting' } : undefined,
+        message: greetingMessage,
       },
     });
 
@@ -385,16 +488,19 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
 
     const gupshup = new GupshupService(messagingConfig);
     const formattedMessage = buildOperatorSignature(message, scope.currentUser.name);
-    await gupshup.sendTextMessage({
+    const sendResult = await gupshup.sendTextMessage({
       to: conversation.phone,
       message: formattedMessage,
     });
 
+    const now = new Date();
     await prisma.whatsAppConversation.update({
       where: { id },
       data: {
         lastOutboundMessage: formattedMessage,
-        lastInteractionAt: new Date(),
+        lastInteractionAt: now,
+        humanLastOperatorMessageAt: now,
+        humanIdleWarningSentAt: null,
       },
     });
 
@@ -407,6 +513,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         authorType: 'OPERATOR',
         authorUserId: scope.currentUser.id,
         authorName: scope.currentUser.name,
+        providerMessageId: sendResult.messageId || null,
         message: formattedMessage,
       },
     });
@@ -421,7 +528,6 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     if (!scope) return reply.code(403).send({ error: 'User not associated with a company' });
 
     const { id } = request.params as { id: string };
-    const body = request.body as { message?: string };
     const conversation = await prisma.whatsAppConversation.findFirst({
       where: {
         id,
@@ -439,8 +545,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'WhatsApp configuration not found for this branch' });
     }
 
-    const closingMessage = normalizeOptionalString(body?.message)
-      || 'Seu atendimento via WhatsApp foi encerrado. Se precisar de algo mais, envie uma nova mensagem e o fluxo será iniciado novamente.';
+    const closingMessage = 'Seu atendimento via WhatsApp foi encerrado. Se precisar de algo mais, envie uma nova mensagem e o fluxo será iniciado novamente.';
 
     const gupshup = new GupshupService(messagingConfig);
     await gupshup.sendTextMessage({
@@ -459,6 +564,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         humanClosedAt: now,
         humanClosedByUserId: scope.currentUser.id,
         humanClosedByUserName: scope.currentUser.name,
+        humanProtocolClosedAt: now,
         lastOutboundMessage: closingMessage,
         lastInteractionAt: now,
       },
@@ -473,7 +579,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         authorType: 'SYSTEM',
         authorUserId: scope.currentUser.id,
         authorName: scope.currentUser.name,
-        message: closingMessage,
+        message: `[Protocolo ${conversation.humanProtocolNumber || '-'}] Atendimento encerrado.\n${closingMessage}`,
       },
     });
 

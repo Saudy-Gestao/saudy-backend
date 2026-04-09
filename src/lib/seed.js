@@ -110,6 +110,13 @@ const modules = [
     icon: 'MessageCircle',
     category: 'administrativo',
   },
+  {
+    name: 'conversas',
+    label: 'Conversas',
+    description: 'Atendimento humanizado do WhatsApp',
+    icon: 'MessageCircle',
+    category: 'administrativo',
+  },
   // Cadastros
   {
     name: 'cadastro-medico',

@@ -25,6 +25,7 @@ type ConversationContext = {
   selectedInsurance?: string | null;
   selectedProcedureId?: string | null;
   selectedProcedureName?: string | null;
+  selectedProcedurePrice?: number | null;
   selectedDoctorId?: string | null;
   selectedDoctorName?: string | null;
   suggestedDate?: string | null;
@@ -34,6 +35,11 @@ type ConversationContext = {
   cpfCandidate?: string | null;
   nameCandidate?: string | null;
   birthDateCandidate?: string | null;
+  privateProcedureSearchText?: string | null;
+  privateProcedureSearchAttempts?: number | null;
+  privateProcedureMatchId?: string | null;
+  privateProcedureMatchName?: string | null;
+  privateProcedureMatchPrice?: number | null;
   options?: Array<{ value: string; label: string }>;
   lastPrompt?: string | null;
   history?: ConversationHistoryEntry[];
@@ -126,6 +132,14 @@ const formatCpf = (cpf: string) => {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
 };
 
+const formatCurrency = (value: number | string | null | undefined) => {
+  const numeric = Number(value || 0);
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(Number.isFinite(numeric) ? numeric : 0);
+};
+
 const parseJsonContext = (value: unknown): ConversationContext => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value as ConversationContext;
@@ -186,6 +200,14 @@ const parseEditableStepSelection = (text: string): EditableStepKey | null => {
   return null;
 };
 
+const parseProcedureNotFoundAction = (text: string): 'HANDOFF' | 'PRIVATE' | null => {
+  const normalized = normalizeText(text);
+  if (!normalized) return null;
+  if (normalized === '1' || normalized.includes('atendente')) return 'HANDOFF';
+  if (normalized === '2' || normalized.includes('particular')) return 'PRIVATE';
+  return null;
+};
+
 const shouldResetConversation = (text: string) => {
   const normalized = normalizeText(text);
   return normalized === 'sair'
@@ -210,6 +232,9 @@ const isConversationExpired = (lastInteractionAt?: string | Date | null) => {
 };
 
 const BINARY_RESPONSE_STATES = new Set([
+  'AWAITING_PROCEDURE_NOT_FOUND_ACTION',
+  'AWAITING_PRIVATE_PROCEDURE_CONFIRMATION',
+  'AWAITING_PRIVATE_PROCEDURE_MATCH_CONFIRMATION',
   'AWAITING_SLOT_CONFIRMATION',
   'AWAITING_CPF_CONFIRMATION',
   'AWAITING_FINAL_CONFIRMATION',
@@ -666,6 +691,12 @@ async function saveConversation(conversationId: string, data: {
   humanClosedAt?: Date | null;
   humanClosedByUserId?: string | null;
   humanClosedByUserName?: string | null;
+  humanProtocolNumber?: string | null;
+  humanProtocolStartedAt?: Date | null;
+  humanProtocolClosedAt?: Date | null;
+  humanIdleWarningSentAt?: Date | null;
+  humanLastOperatorMessageAt?: Date | null;
+  humanLastPatientMessageAt?: Date | null;
 }) {
   return prisma.whatsAppConversation.update({
     where: { id: conversationId },
@@ -688,10 +719,25 @@ async function saveConversation(conversationId: string, data: {
       ...(data.humanClosedAt !== undefined ? { humanClosedAt: data.humanClosedAt } : {}),
       ...(data.humanClosedByUserId !== undefined ? { humanClosedByUserId: data.humanClosedByUserId } : {}),
       ...(data.humanClosedByUserName !== undefined ? { humanClosedByUserName: data.humanClosedByUserName } : {}),
+      ...(data.humanProtocolNumber !== undefined ? { humanProtocolNumber: data.humanProtocolNumber } : {}),
+      ...(data.humanProtocolStartedAt !== undefined ? { humanProtocolStartedAt: data.humanProtocolStartedAt } : {}),
+      ...(data.humanProtocolClosedAt !== undefined ? { humanProtocolClosedAt: data.humanProtocolClosedAt } : {}),
+      ...(data.humanIdleWarningSentAt !== undefined ? { humanIdleWarningSentAt: data.humanIdleWarningSentAt } : {}),
+      ...(data.humanLastOperatorMessageAt !== undefined ? { humanLastOperatorMessageAt: data.humanLastOperatorMessageAt } : {}),
+      ...(data.humanLastPatientMessageAt !== undefined ? { humanLastPatientMessageAt: data.humanLastPatientMessageAt } : {}),
       lastInteractionAt: new Date(),
     },
   });
 }
+
+const makeProtocolNumber = () => {
+  const date = new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const suffix = randomBytes(3).toString('hex').toUpperCase();
+  return `WA-${y}${m}${d}-${suffix}`;
+};
 
 async function recordConversationMessage(params: {
   conversationId: string;
@@ -702,6 +748,8 @@ async function recordConversationMessage(params: {
   authorUserId?: string | null;
   authorName?: string | null;
   message: string;
+  providerMessageId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }) {
   const normalizedMessage = String(params.message || '').trim();
   if (!normalizedMessage) return null;
@@ -715,6 +763,8 @@ async function recordConversationMessage(params: {
       authorType: params.authorType,
       authorUserId: params.authorUserId || null,
       authorName: params.authorName || null,
+      providerMessageId: params.providerMessageId || null,
+      metadata: params.metadata || undefined,
       message: normalizedMessage,
     },
   });
@@ -799,8 +849,68 @@ async function getProcedureById(branchId: string, procedureId: string) {
       id: true,
       name: true,
       durationMinutes: true,
+      price: true,
     },
   });
+}
+
+async function findPrivateProcedureMatch(params: {
+  branchId: string;
+  serviceType: 'CONSULTA' | 'EXAME';
+  query: string;
+}) {
+  const normalizedQuery = normalizeText(params.query);
+  if (!normalizedQuery) return null;
+
+  const procedures = await prisma.procedure.findMany({
+    where: {
+      branchId: params.branchId,
+      isActive: true,
+      appointmentType: { equals: params.serviceType, mode: 'insensitive' },
+      acceptsInsurance: false,
+    },
+    select: {
+      id: true,
+      name: true,
+      price: true,
+      durationMinutes: true,
+    },
+    orderBy: { name: 'asc' },
+  });
+
+  const scored = procedures
+    .map((procedure: any) => {
+      const normalizedName = normalizeText(procedure.name);
+      let score = 0;
+      if (normalizedName === normalizedQuery) score += 100;
+      if (normalizedName.includes(normalizedQuery)) score += 80;
+      if (normalizedQuery.includes(normalizedName)) score += 60;
+
+      const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+      const nameTokens = normalizedName.split(/\s+/).filter(Boolean);
+      score += queryTokens.filter((token) => nameTokens.some((nameToken) => nameToken.includes(token))).length * 10;
+
+      return {
+        ...procedure,
+        score,
+      };
+    })
+    .filter((item: any) => item.score > 0);
+
+  scored.sort((a: any, b: any) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
+  });
+
+  const bestMatch = scored[0];
+  if (!bestMatch) return null;
+
+  return {
+    id: String(bestMatch.id),
+    name: String(bestMatch.name),
+    price: bestMatch.price != null ? Number(bestMatch.price) : null,
+    durationMinutes: bestMatch.durationMinutes != null ? Number(bestMatch.durationMinutes) : null,
+  };
 }
 
 async function listProcedureDoctors(branchId: string, procedureId: string) {
@@ -943,6 +1053,8 @@ async function openHumanHandoffConversation(params: {
   flowLabel: string;
   description: string;
 }) {
+  const protocolNumber = makeProtocolNumber();
+  const now = new Date();
   await saveConversation(params.conversationId, {
     state: 'HANDED_OFF',
     humanStatus: 'QUEUED',
@@ -954,6 +1066,12 @@ async function openHumanHandoffConversation(params: {
     humanClosedAt: null,
     humanClosedByUserId: null,
     humanClosedByUserName: null,
+    humanProtocolNumber: protocolNumber,
+    humanProtocolStartedAt: now,
+    humanProtocolClosedAt: null,
+    humanIdleWarningSentAt: null,
+    humanLastOperatorMessageAt: null,
+    humanLastPatientMessageAt: null,
   });
 
   await recordConversationMessage({
@@ -963,7 +1081,7 @@ async function openHumanHandoffConversation(params: {
     flowKey: params.flowKey,
     authorType: 'SYSTEM',
     authorName: 'Sistema',
-    message: `[Fila humana] ${params.flowLabel}\n${params.description}`,
+    message: `[Protocolo ${protocolNumber}] Conversa encaminhada para atendimento humano.\n[Fila humana] ${params.flowLabel}\n${params.description}`,
   });
 
   return {
@@ -1122,6 +1240,7 @@ const buildFinalSummary = (conversation: any, context: ConversationContext, pati
       `Tipo: ${context.serviceType === 'EXAME' ? 'Marcação de exame' : 'Marcação de consulta'}`,
       `Convênio: ${context.selectedInsurance || 'Não informado'}`,
       `Procedimento: ${context.selectedProcedureName || 'Não informado'}`,
+      ...(context.selectedProcedurePrice != null ? [`Valor: ${formatCurrency(context.selectedProcedurePrice)}`] : []),
       `Profissional: ${context.selectedDoctorName || 'Não informado'}`,
       `Data: ${context.suggestedDate ? formatDateLabel(context.suggestedDate) : 'Não informada'}`,
       `Hora: ${context.suggestedTime || 'Não informada'}`,
@@ -1366,21 +1485,16 @@ async function processFlow(params: {
       }
 
       if (selected.value === '__HANDOFF__') {
-        const ticket = await openHumanHandoffConversation({
-          conversationId: conversation.id,
-          branchId: getTargetBranchId(),
-          branchName: getTargetBranchName(),
-          phone: input.phone,
-          patientName: patient?.name || conversation.patientName || null,
-          flowKey: 'PROCEDIMENTO_NAO_ENCONTRADO',
-          flowLabel: 'Procedimento não encontrado',
-          description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nPaciente não encontrou o procedimento na lista automática.`,
-        });
-
-        const response = { text: 'Tudo bem. Vou redirecionar você para um dos nossos atendentes.' };
+        context = pushHistoryEntry(
+          context,
+          'AWAITING_PROCEDURE',
+          context.lastPrompt || 'Qual procedimento você deseja?',
+        );
+        const response = {
+          text: 'Tudo bem. O que você deseja fazer agora?\n\n1. Falar com atendente\n2. Desejo consultar no particular',
+        };
         await saveConversation(conversation.id, {
-          state: 'HANDED_OFF',
-          handoffTicketId: ticket.id,
+          state: 'AWAITING_PROCEDURE_NOT_FOUND_ACTION',
           context: {
             ...context,
             options: [],
@@ -1448,6 +1562,7 @@ async function processFlow(params: {
 
       context.selectedProcedureId = procedure.id;
       context.selectedProcedureName = procedure.name;
+      context.selectedProcedurePrice = procedure.price != null ? Number(procedure.price) : null;
       context.selectedDoctorId = slot.doctorId;
       context.selectedDoctorName = slot.doctorName;
       context.suggestedDate = slot.date;
@@ -1456,6 +1571,341 @@ async function processFlow(params: {
       context.options = [];
       const response = buildYesNoMessage(
         `Encontrei este horário mais próximo para ${procedure.name}:\n` +
+        `Data: ${formatDateLabel(slot.date)}\n` +
+        `Hora: ${slot.time}\n` +
+        `Profissional: ${slot.doctorName}\n\n` +
+        'Deseja seguir com esse horário?',
+      );
+      context.lastPrompt = response.text;
+
+      await saveConversation(conversation.id, {
+        state: 'AWAITING_SLOT_CONFIRMATION',
+        context,
+        lastInboundMessage: text,
+        lastOutboundMessage: response.text,
+      });
+      return { handled: true, response };
+    }
+
+    case 'AWAITING_PROCEDURE_NOT_FOUND_ACTION': {
+      const action = parseProcedureNotFoundAction(text);
+      if (!action) {
+        const response = { text: context.lastPrompt || '1. Falar com atendente\n2. Desejo consultar no particular' };
+        await saveConversation(conversation.id, {
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (action === 'HANDOFF') {
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
+          phone: input.phone,
+          patientName: patient?.name || conversation.patientName || null,
+          flowKey: 'PROCEDIMENTO_NAO_ENCONTRADO',
+          flowLabel: 'Procedimento não encontrado',
+          description: `Fluxo: ${context.serviceType}\nConvênio: ${context.selectedInsurance || 'Não informado'}\nPaciente não encontrou o procedimento na lista automática.`,
+        });
+
+        const response = { text: 'Perfeito. Vou redirecionar você para um dos nossos atendentes.' };
+        await saveConversation(conversation.id, {
+          state: 'HANDED_OFF',
+          handoffTicketId: ticket.id,
+          context: {
+            ...context,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      const response = { text: 'Certo. Qual procedimento você deseja consultar no particular?' };
+      await saveConversation(conversation.id, {
+        state: 'AWAITING_PRIVATE_PROCEDURE_INPUT',
+        context: {
+          ...context,
+          privateProcedureSearchText: null,
+          privateProcedureSearchAttempts: context.privateProcedureSearchAttempts || 0,
+          privateProcedureMatchId: null,
+          privateProcedureMatchName: null,
+          privateProcedureMatchPrice: null,
+          lastPrompt: response.text,
+        },
+        lastInboundMessage: text,
+        lastOutboundMessage: response.text,
+      });
+      return { handled: true, response };
+    }
+
+    case 'AWAITING_PRIVATE_PROCEDURE_INPUT': {
+      const typedProcedure = String(text || '').trim();
+      if (typedProcedure.length < 3) {
+        const response = { text: 'Por favor, descreva o procedimento com um pouco mais de detalhe.' };
+        await saveConversation(conversation.id, {
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_PRIVATE_PROCEDURE_INPUT',
+        context.lastPrompt || 'Qual procedimento você deseja consultar no particular?',
+      );
+      context.privateProcedureSearchText = typedProcedure;
+      const response = buildYesNoMessage(`Você quis dizer o procedimento "${typedProcedure}"?`);
+      context.lastPrompt = response.text;
+
+      await saveConversation(conversation.id, {
+        state: 'AWAITING_PRIVATE_PROCEDURE_CONFIRMATION',
+        context,
+        lastInboundMessage: text,
+        lastOutboundMessage: response.text,
+      });
+      return { handled: true, response };
+    }
+
+    case 'AWAITING_PRIVATE_PROCEDURE_CONFIRMATION': {
+      const accepted = parseYesNo(text);
+      if (accepted === null) {
+        const response = { text: context.lastPrompt || 'Confirma o procedimento informado?' };
+        await saveConversation(conversation.id, {
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_PRIVATE_PROCEDURE_CONFIRMATION',
+        context.lastPrompt || 'Confirma o procedimento informado?',
+      );
+
+      if (!accepted) {
+        const response = { text: 'Sem problema. Digite novamente qual procedimento você deseja consultar no particular.' };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_PRIVATE_PROCEDURE_INPUT',
+          context: {
+            ...context,
+            privateProcedureSearchText: null,
+            privateProcedureMatchId: null,
+            privateProcedureMatchName: null,
+            privateProcedureMatchPrice: null,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      const attempts = Number(context.privateProcedureSearchAttempts || 0) + 1;
+      const match = await findPrivateProcedureMatch({
+        branchId: getTargetBranchId(),
+        serviceType: context.serviceType || 'CONSULTA',
+        query: context.privateProcedureSearchText || '',
+      });
+
+      if (!match) {
+        if (attempts >= 2) {
+          const ticket = await openHumanHandoffConversation({
+            conversationId: conversation.id,
+            branchId: getTargetBranchId(),
+            branchName: getTargetBranchName(),
+            phone: input.phone,
+            patientName: patient?.name || conversation.patientName || null,
+            flowKey: 'PROCEDIMENTO_NAO_ENCONTRADO',
+            flowLabel: 'Procedimento não encontrado',
+            description: `Fluxo: ${context.serviceType}\nPaciente tentou consultar no particular e não encontramos correspondência para "${context.privateProcedureSearchText || 'Não informado'}".`,
+          });
+          const response = { text: 'Não consegui localizar esse procedimento no particular após as tentativas. Vou encaminhar você para um atendente.' };
+          await saveConversation(conversation.id, {
+            state: 'HANDED_OFF',
+            handoffTicketId: ticket.id,
+            context: {
+              ...context,
+              privateProcedureSearchAttempts: attempts,
+              lastPrompt: response.text,
+            },
+            lastInboundMessage: text,
+            lastOutboundMessage: response.text,
+          });
+          return { handled: true, response };
+        }
+
+        const response = { text: 'Ainda não encontrei esse procedimento no particular. Tente descrever novamente para eu buscar mais uma vez.' };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_PRIVATE_PROCEDURE_INPUT',
+          context: {
+            ...context,
+            privateProcedureSearchAttempts: attempts,
+            privateProcedureSearchText: null,
+            privateProcedureMatchId: null,
+            privateProcedureMatchName: null,
+            privateProcedureMatchPrice: null,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      const response = buildYesNoMessage(
+        `Encontrei este procedimento no particular na unidade ${getTargetBranchName() || 'selecionada'}:\n` +
+        `Procedimento: ${match.name}\n` +
+        `Valor: ${formatCurrency(match.price)}\n\n` +
+        'Deseja seguir com ele?',
+      );
+
+      await saveConversation(conversation.id, {
+        state: 'AWAITING_PRIVATE_PROCEDURE_MATCH_CONFIRMATION',
+        context: {
+          ...context,
+          privateProcedureSearchAttempts: attempts,
+          privateProcedureMatchId: match.id,
+          privateProcedureMatchName: match.name,
+          privateProcedureMatchPrice: match.price,
+          lastPrompt: response.text,
+        },
+        lastInboundMessage: text,
+        lastOutboundMessage: response.text,
+      });
+      return { handled: true, response };
+    }
+
+    case 'AWAITING_PRIVATE_PROCEDURE_MATCH_CONFIRMATION': {
+      const accepted = parseYesNo(text);
+      if (accepted === null) {
+        const response = { text: context.lastPrompt || 'Deseja seguir com o procedimento particular encontrado?' };
+        await saveConversation(conversation.id, {
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_PRIVATE_PROCEDURE_MATCH_CONFIRMATION',
+        context.lastPrompt || 'Deseja seguir com o procedimento particular encontrado?',
+      );
+
+      if (!accepted) {
+        if (Number(context.privateProcedureSearchAttempts || 0) >= 2) {
+          const ticket = await openHumanHandoffConversation({
+            conversationId: conversation.id,
+            branchId: getTargetBranchId(),
+            branchName: getTargetBranchName(),
+            phone: input.phone,
+            patientName: patient?.name || conversation.patientName || null,
+            flowKey: 'PROCEDIMENTO_NAO_ENCONTRADO',
+            flowLabel: 'Procedimento não encontrado',
+            description: `Fluxo: ${context.serviceType}\nPaciente recusou o procedimento particular sugerido após as tentativas automáticas.`,
+          });
+          const response = { text: 'Tudo bem. Vou encaminhar você para um atendente para continuarmos por lá.' };
+          await saveConversation(conversation.id, {
+            state: 'HANDED_OFF',
+            handoffTicketId: ticket.id,
+            context: {
+              ...context,
+              lastPrompt: response.text,
+            },
+            lastInboundMessage: text,
+            lastOutboundMessage: response.text,
+          });
+          return { handled: true, response };
+        }
+
+        const response = { text: 'Sem problema. Digite novamente qual procedimento você deseja consultar no particular.' };
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_PRIVATE_PROCEDURE_INPUT',
+          context: {
+            ...context,
+            privateProcedureSearchText: null,
+            privateProcedureMatchId: null,
+            privateProcedureMatchName: null,
+            privateProcedureMatchPrice: null,
+            lastPrompt: response.text,
+          },
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      const procedure = context.privateProcedureMatchId
+        ? await getProcedureById(getTargetBranchId(), context.privateProcedureMatchId)
+        : null;
+
+      if (!procedure) {
+        const response = { text: 'Não consegui manter esse procedimento disponível agora. Vou encaminhar você para um atendente.' };
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
+          phone: input.phone,
+          patientName: patient?.name || conversation.patientName || null,
+          flowKey: 'PROCEDIMENTO_INVALIDO',
+          flowLabel: 'Procedimento inválido',
+          description: `Fluxo: ${context.serviceType}\nPaciente aceitou o procedimento particular, mas ele não foi encontrado no cadastro.`,
+        });
+        await saveConversation(conversation.id, {
+          state: 'HANDED_OFF',
+          handoffTicketId: ticket.id,
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      const slot = await findNextAvailableSlot({
+        branchId: getTargetBranchId(),
+        patientId: patient?.id || conversation.patientId || null,
+        procedureId: procedure.id,
+      });
+
+      if (!slot) {
+        const response = { text: 'Não encontrei um horário disponível agora para esse procedimento particular. Vou encaminhar você para um dos nossos atendentes.' };
+        const ticket = await openHumanHandoffConversation({
+          conversationId: conversation.id,
+          branchId: getTargetBranchId(),
+          branchName: getTargetBranchName(),
+          phone: input.phone,
+          patientName: patient?.name || conversation.patientName || null,
+          flowKey: 'SEM_HORARIO_AUTOMATICO',
+          flowLabel: 'Sem horário automático',
+          description: `Fluxo: ${context.serviceType}\nConvênio: Particular\nProcedimento: ${procedure.name}`,
+        });
+        await saveConversation(conversation.id, {
+          state: 'HANDED_OFF',
+          handoffTicketId: ticket.id,
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      context.selectedInsurance = 'Particular';
+      context.selectedProcedureId = procedure.id;
+      context.selectedProcedureName = procedure.name;
+      context.selectedProcedurePrice = procedure.price != null ? Number(procedure.price) : (context.privateProcedureMatchPrice ?? null);
+      context.selectedDoctorId = slot.doctorId;
+      context.selectedDoctorName = slot.doctorName;
+      context.suggestedDate = slot.date;
+      context.suggestedTime = slot.time;
+      context.suggestedDurationMinutes = slot.durationMinutes;
+      context.options = [];
+      const response = buildYesNoMessage(
+        `Encontrei este horário mais próximo para ${procedure.name} no particular:\n` +
+        `Valor: ${formatCurrency(context.selectedProcedurePrice)}\n` +
         `Data: ${formatDateLabel(slot.date)}\n` +
         `Hora: ${slot.time}\n` +
         `Profissional: ${slot.doctorName}\n\n` +
@@ -1986,6 +2436,33 @@ async function processFlow(params: {
       }
 
       if (selectedStep === 'PROCEDURE') {
+        if (normalizeText(context.selectedInsurance || '') === 'particular') {
+          const response = { text: 'Certo. Qual procedimento você deseja consultar no particular?' };
+          await saveConversation(conversation.id, {
+            state: 'AWAITING_PRIVATE_PROCEDURE_INPUT',
+            context: {
+              ...context,
+              selectedProcedureId: null,
+              selectedProcedureName: null,
+              selectedProcedurePrice: null,
+              selectedDoctorId: null,
+              selectedDoctorName: null,
+              suggestedDate: null,
+              suggestedTime: null,
+              suggestedDurationMinutes: null,
+              preferredDate: null,
+              privateProcedureSearchText: null,
+              privateProcedureMatchId: null,
+              privateProcedureMatchName: null,
+              privateProcedureMatchPrice: null,
+              lastPrompt: response.text,
+            },
+            lastInboundMessage: text,
+            lastOutboundMessage: response.text,
+          });
+          return { handled: true, response };
+        }
+
         const procedureOptions = await listProcedureOptions(
           getTargetBranchId(),
           context.serviceType || 'CONSULTA',
@@ -2132,6 +2609,8 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
       lastInboundMessage: text,
       patientId: patient?.id || conversation.patientId || null,
       patientName: patient?.name || conversation.patientName || null,
+      humanLastPatientMessageAt: new Date(),
+      humanIdleWarningSentAt: null,
     });
     return { handled: true };
   }

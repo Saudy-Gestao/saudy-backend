@@ -43,10 +43,12 @@ const startWhatsAppAutomation = () => {
     try {
       const noShowResult = await WhatsAppSchedulerJob.processNoShows();
       const confirmationResult = await WhatsAppSchedulerJob.processConfirmations();
+      const humanConversationResult = await WhatsAppSchedulerJob.processHumanConversationTimeouts();
 
       app.log.info({
         noShows: noShowResult,
         confirmations: confirmationResult,
+        humanConversations: humanConversationResult,
       }, 'WhatsApp automation cycle finished');
     } catch (error) {
       app.log.error({ err: error }, 'WhatsApp automation cycle failed');

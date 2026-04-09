@@ -1600,6 +1600,10 @@ enum WhatsAppConversationState {
     AWAITING_UNIT
     AWAITING_INSURANCE
     AWAITING_PROCEDURE
+    AWAITING_PROCEDURE_NOT_FOUND_ACTION
+    AWAITING_PRIVATE_PROCEDURE_INPUT
+    AWAITING_PRIVATE_PROCEDURE_CONFIRMATION
+    AWAITING_PRIVATE_PROCEDURE_MATCH_CONFIRMATION
     AWAITING_SLOT_CONFIRMATION
     AWAITING_PREFERRED_DATE
     AWAITING_CPF
@@ -1694,6 +1698,12 @@ model WhatsAppConversation {
     humanClosedAt         DateTime?
     humanClosedByUserId   String?
     humanClosedByUserName String?
+    humanProtocolNumber   String?
+    humanProtocolStartedAt DateTime?
+    humanProtocolClosedAt DateTime?
+    humanIdleWarningSentAt DateTime?
+    humanLastOperatorMessageAt DateTime?
+    humanLastPatientMessageAt DateTime?
     lastInteractionAt     DateTime                  @default(now())
     createdAt             DateTime                  @default(now())
     updatedAt             DateTime                  @updatedAt
@@ -1733,12 +1743,15 @@ model WhatsAppConversationMessage {
     authorType     WhatsAppConversationMessageAuthorType
     authorUserId   String?
     authorName     String?
+    providerMessageId String?
+    metadata       Json?
     message        String                             @db.Text
     createdAt      DateTime                           @default(now())
 
     @@index([conversationId, createdAt])
     @@index([branchId, createdAt])
     @@index([phone, createdAt])
+    @@index([providerMessageId])
     @@map("whatsapp_conversation_messages")
 }
 
@@ -1748,6 +1761,8 @@ model WhatsAppConversationOperatorConfig {
     isActive               Boolean  @default(true)
     flowKeys               String[] @default([])
     maxActiveConversations Int      @default(3)
+    idleTimeoutMinutes     Int      @default(25)
+    closeWarningMinutes    Int      @default(5)
     createdAt              DateTime @default(now())
     updatedAt              DateTime @updatedAt
 

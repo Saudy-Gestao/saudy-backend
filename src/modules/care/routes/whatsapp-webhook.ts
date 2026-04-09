@@ -45,6 +45,28 @@ const appendObservation = (existing: string | null | undefined, note: string) =>
   return trimmedExisting ? `${trimmedExisting}\n${note}` : note;
 };
 
+const extractMediaSummary = (payload: any): string => {
+  const mediaCandidates = [
+    payload?.payload,
+    payload?.message,
+    payload?.content,
+    payload?.payload?.content,
+  ].filter(Boolean);
+
+  for (const candidate of mediaCandidates) {
+    const type = normalizeValue(candidate?.type || candidate?.mimeType || candidate?.mediaType || '');
+    const url = String(candidate?.url || candidate?.link || '').trim();
+    const caption = String(candidate?.caption || candidate?.filename || candidate?.name || '').trim();
+
+    if (type.includes('image') || type === 'image') return `[Imagem recebida]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
+    if (type.includes('document') || type.includes('application') || type === 'file') return `[Documento recebido]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
+    if (type.includes('video') || type === 'video') return `[Vídeo recebido]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
+    if (type.includes('audio') || type === 'audio') return `[Áudio recebido]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
+  }
+
+  return '';
+};
+
 const extractInboundMessageText = (payload: any): string => {
   const candidates = [
     payload?.payload?.text,
@@ -67,7 +89,27 @@ const extractInboundMessageText = (payload: any): string => {
     if (text) return text;
   }
 
-  return '';
+  return extractMediaSummary(payload);
+};
+
+const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED' | 'READ' | 'TYPING' | null => {
+  const candidates = Array.from(collectStringCandidates([
+    body?.type,
+    payload?.type,
+    payload?.payload?.type,
+    payload?.status,
+    payload?.eventType,
+    payload?.message?.type,
+  ]));
+
+  for (const value of candidates) {
+    if (value.includes('typing')) return 'TYPING';
+    if (value.includes('read')) return 'READ';
+    if (value.includes('deliver')) return 'DELIVERED';
+    if (value.includes('sent') || value.includes('submit')) return 'SENT';
+  }
+
+  return null;
 };
 
 export default async function whatsappWebhookRoutes(app: FastifyInstance) {
@@ -94,6 +136,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
     const source = String(inboundPayload?.source || inboundPayload?.sender?.phone || '').replace(/\D/g, '');
+    const messageEvent = parseWebhookMessageEvent(body, inboundPayload);
 
     request.log.info({
       gupshupEventType: body?.type || inboundPayload?.type || null,
@@ -108,6 +151,81 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const quickReplyMessageId = inboundPayload?.payload?.id;
     const contextGsId = inboundPayload?.context?.gsId;
     const contextId = inboundPayload?.context?.id;
+    const providerMessageId = String(
+      inboundPayload?.gsId
+      || inboundPayload?.id
+      || inboundPayload?.messageId
+      || contextGsId
+      || contextId
+      || '',
+    ).trim();
+
+    if (messageEvent && providerMessageId) {
+      const statusTimestamp = new Date();
+
+      const conversationMessage = await prisma.whatsAppConversationMessage.findFirst({
+        where: { providerMessageId },
+        include: { conversation: true },
+      });
+
+      if (conversationMessage?.conversation) {
+        const eventLabel = messageEvent === 'READ'
+          ? 'Mensagem lida pelo paciente.'
+          : messageEvent === 'DELIVERED'
+            ? 'Mensagem entregue ao paciente.'
+            : messageEvent === 'SENT'
+              ? 'Mensagem enviada ao provedor.'
+              : 'Paciente está digitando.';
+
+        await prisma.whatsAppConversationMessage.create({
+          data: {
+            conversationId: conversationMessage.conversationId,
+            branchId: conversationMessage.branchId,
+            phone: conversationMessage.phone,
+            flowKey: conversationMessage.flowKey || null,
+            authorType: 'SYSTEM',
+            authorName: 'Webhook',
+            metadata: {
+              event: messageEvent,
+              providerMessageId,
+            },
+            message: `[Evento] ${eventLabel}`,
+          },
+        });
+      }
+
+      const matchingLog = await prisma.whatsAppMessageLog.findFirst({
+        where: {
+          OR: [
+            { providerMessageId },
+            ...(source ? [{ patientPhone: { contains: source.slice(-11) } }] : []),
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (matchingLog) {
+        await prisma.whatsAppMessageLog.update({
+          where: { id: matchingLog.id },
+          data: {
+            ...(messageEvent === 'SENT' ? { sentAt: matchingLog.sentAt || statusTimestamp } : {}),
+            ...(messageEvent === 'DELIVERED' ? { deliveredAt: statusTimestamp } : {}),
+            ...(messageEvent === 'READ' ? { readAt: statusTimestamp } : {}),
+            ...(messageEvent === 'READ' ? { status: 'READ' } : {}),
+            ...(messageEvent === 'DELIVERED' ? { status: 'DELIVERED' } : {}),
+            ...(messageEvent === 'SENT' ? { status: matchingLog.status === 'PENDING' ? 'SENT' : matchingLog.status } : {}),
+          },
+        });
+      }
+
+      if (!inboundText && !action) {
+        return {
+          success: true,
+          event: messageEvent,
+          providerMessageId,
+        };
+      }
+    }
 
     let originatingLog = null as Awaited<ReturnType<typeof prisma.whatsAppMessageLog.findFirst>>;
 
