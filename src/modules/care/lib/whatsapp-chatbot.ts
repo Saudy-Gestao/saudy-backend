@@ -31,6 +31,7 @@ type ConversationContext = {
   preferredDate?: string | null;
   cpfCandidate?: string | null;
   nameCandidate?: string | null;
+  birthDateCandidate?: string | null;
   options?: Array<{ value: string; label: string }>;
   lastPrompt?: string | null;
   history?: ConversationHistoryEntry[];
@@ -350,6 +351,22 @@ const parsePreferredDate = (text: string): string | null => {
 
   return null;
 };
+
+const parseBirthDate = (text: string): string | null => {
+  const trimmed = String(text || '').trim();
+  const brMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!brMatch) return null;
+  const year = Number(brMatch[3]);
+  const month = Number(brMatch[2]);
+  const day = Number(brMatch[1]);
+  const parsed = new Date(year, month - 1, day);
+  if (Number.isNaN(parsed.getTime())) return null;
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return null;
+  if (parsed > new Date()) return null;
+  return formatDateIso(parsed);
+};
+
+const formatBirthDateLabel = (dateIso?: string | null) => dateIso ? formatDateLabel(dateIso) : 'Não informada';
 
 const resolveOptionSelection = (
   text: string,
@@ -860,15 +877,86 @@ async function reserveAppointment(params: {
   });
 }
 
+async function ensurePatientForConversation(params: {
+  branchId: string;
+  patient: PatientLookup | null;
+  patientName: string | null;
+  phone: string;
+  cpf: string | null;
+  birthDate: string | null;
+  insuranceName?: string | null;
+}) {
+  if (params.patient?.id) return params.patient;
+  if (!params.cpf || !params.patientName || !params.birthDate) return params.patient;
+
+  const existing = await prisma.patient.findFirst({
+    where: {
+      branchId: params.branchId,
+      cpf: params.cpf,
+      isActive: true,
+    },
+    select: {
+      id: true,
+      name: true,
+      cpf: true,
+      healthInsuranceName: true,
+    },
+  });
+
+  if (existing) {
+    await prisma.patient.update({
+      where: { id: existing.id },
+      data: {
+        cellphone: formatPhoneForLookup(params.phone),
+        phone: formatPhoneForLookup(params.phone),
+        healthInsuranceName: params.insuranceName || existing.healthInsuranceName || null,
+        hasHealthInsurance: Boolean(params.insuranceName),
+      },
+    });
+
+    return {
+      id: String(existing.id),
+      name: existing.name || null,
+      cpf: existing.cpf || null,
+      healthInsuranceName: params.insuranceName || existing.healthInsuranceName || null,
+    } satisfies PatientLookup;
+  }
+
+  const created = await prisma.patient.create({
+    data: {
+      branchId: params.branchId,
+      name: params.patientName,
+      cpf: params.cpf,
+      cellphone: formatPhoneForLookup(params.phone),
+      phone: formatPhoneForLookup(params.phone),
+      birthDate: new Date(`${params.birthDate}T00:00:00`),
+      hasHealthInsurance: Boolean(params.insuranceName),
+      healthInsuranceName: params.insuranceName || null,
+      observations: '[WhatsApp BOT] Cadastro criado automaticamente durante o fluxo de agendamento.',
+    },
+  });
+
+  return {
+    id: String(created.id),
+    name: created.name || null,
+    cpf: created.cpf || null,
+    healthInsuranceName: created.healthInsuranceName || null,
+  } satisfies PatientLookup;
+}
+
 const buildFinalSummary = (conversation: any, context: ConversationContext, patient: PatientLookup | null) => {
   const patientName = patient?.name || conversation.patientName || context.nameCandidate || 'Não informado';
   const cpf = context.cpfCandidate || patient?.cpf || 'Não informado';
+  const isNewPatient = !patient?.id && !conversation.patientId;
 
   return buildYesNoMessage(
     [
       'Confirma os dados abaixo?',
       `Paciente: ${patientName}`,
       `CPF: ${cpf !== 'Não informado' ? formatCpf(cpf) : cpf}`,
+      ...(isNewPatient ? [
+        `Data de nascimento: ${formatBirthDateLabel(context.birthDateCandidate)}`,
+      ] : []),
       `Tipo: ${context.serviceType === 'EXAME' ? 'Marcação de exame' : 'Marcação de consulta'}`,
       `Convênio: ${context.selectedInsurance || 'Não informado'}`,
       `Procedimento: ${context.selectedProcedureName || 'Não informado'}`,
@@ -1430,15 +1518,50 @@ async function processFlow(params: {
         context.lastPrompt || 'Perfeito. Agora informe seu nome completo.',
       );
       context.nameCandidate = name;
+      const response = { text: 'Informe sua data de nascimento no formato DD/MM/AAAA.' };
+
+      await saveConversation(conversation.id, {
+        state: 'AWAITING_NEW_PATIENT_BIRTHDATE',
+        context: {
+          ...context,
+          lastPrompt: response.text,
+        },
+        patientName: name,
+        lastInboundMessage: text,
+        lastOutboundMessage: response.text,
+      });
+      return { handled: true, response };
+    }
+
+    case 'AWAITING_NEW_PATIENT_BIRTHDATE': {
+      const birthDate = parseBirthDate(text);
+      if (!birthDate) {
+        const response = { text: 'Data inválida. Informe sua data de nascimento no formato DD/MM/AAAA.' };
+        await saveConversation(conversation.id, {
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      context = pushHistoryEntry(
+        context,
+        'AWAITING_NEW_PATIENT_BIRTHDATE',
+        context.lastPrompt || 'Informe sua data de nascimento no formato DD/MM/AAAA.',
+      );
+      context.birthDateCandidate = birthDate;
       const response = buildFinalSummary({
         ...conversation,
-        patientName: name,
+        patientName: context.nameCandidate || conversation.patientName,
       }, context, patient);
 
       await saveConversation(conversation.id, {
         state: 'AWAITING_FINAL_CONFIRMATION',
-        context,
-        patientName: name,
+        context: {
+          ...context,
+          lastPrompt: response.text,
+        },
+        patientName: context.nameCandidate || conversation.patientName || null,
         lastInboundMessage: text,
         lastOutboundMessage: response.text,
       });
@@ -1470,7 +1593,7 @@ async function processFlow(params: {
         return { handled: true, response };
       }
 
-      const resolvedPatient = patient || (conversation.patientId
+      let resolvedPatient = patient || (conversation.patientId
         ? await prisma.patient.findFirst({
           where: { id: conversation.patientId, branchId: branchConfig.branchId, isActive: true },
           select: {
@@ -1486,6 +1609,16 @@ async function processFlow(params: {
           healthInsuranceName: item.healthInsuranceName || null,
         }) : null)
         : null);
+
+      resolvedPatient = await ensurePatientForConversation({
+        branchId: branchConfig.branchId,
+        patient: resolvedPatient,
+        patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
+        phone: input.phone,
+        cpf: context.cpfCandidate || resolvedPatient?.cpf || null,
+        birthDate: context.birthDateCandidate || null,
+        insuranceName: context.selectedInsurance || null,
+      });
 
       const slot: SlotSuggestion | null = context.suggestedDate && context.suggestedTime && context.selectedDoctorId && context.selectedDoctorName
         ? {

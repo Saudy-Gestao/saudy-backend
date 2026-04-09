@@ -307,7 +307,7 @@ model Patient {
     phone                        String?
     cellphone                    String
     birthDate                    DateTime
-    gender                       Gender
+    gender                       Gender?
     cpf                          String         @unique @db.VarChar(11)
     rg                           String?
     maritalStatus                MaritalStatus?
@@ -1604,6 +1604,8 @@ enum WhatsAppConversationState {
     AWAITING_CPF
     AWAITING_CPF_CONFIRMATION
     AWAITING_NEW_PATIENT_NAME
+    AWAITING_NEW_PATIENT_BIRTHDATE
+    AWAITING_NEW_PATIENT_GENDER
     AWAITING_FINAL_CONFIRMATION
     COMPLETED
     HANDED_OFF
