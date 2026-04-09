@@ -224,6 +224,17 @@ const buildEditSelectionPrompt = (params: {
   return `Sem problema. Qual etapa você deseja alterar?\n${options.join('\n')}\n\nVocê pode responder com o número da opção ou com o nome da etapa.`;
 };
 
+const hasCollectedNewPatientData = (conversation: any, context: ConversationContext, patient: PatientLookup | null) => {
+  const hasExistingPatient = Boolean(patient?.id || conversation.patientId);
+  if (hasExistingPatient) return true;
+
+  return Boolean(
+    (context.cpfCandidate || patient?.cpf)
+    && (context.nameCandidate || conversation.patientName || patient?.name)
+    && context.birthDateCandidate,
+  );
+};
+
 const stripHistoryFromContext = (context: ConversationContext): Omit<ConversationContext, 'history'> => {
   const { history: _history, ...rest } = context;
   return rest;
@@ -1417,7 +1428,7 @@ async function processFlow(params: {
         return { handled: true, response };
       }
 
-      if (patient?.cpf || conversation.patientId) {
+      if (hasCollectedNewPatientData(conversation, context, patient)) {
         const response = buildFinalSummary(conversation, context, patient);
         await saveConversation(conversation.id, {
           state: 'AWAITING_FINAL_CONFIRMATION',
