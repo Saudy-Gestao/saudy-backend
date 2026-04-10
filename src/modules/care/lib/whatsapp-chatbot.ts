@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
 import GupshupService from './gupshup';
+import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
@@ -2546,6 +2547,7 @@ async function processFlow(params: {
         slot,
         cpf: context.cpfCandidate || resolvedPatient?.cpf || null,
       });
+      publishAppointmentCreatedEvent({ branchId: getTargetBranchId(), appointmentId: appointment.id });
 
       const response = { text: 'Sua solicitação foi registrada com sucesso e já entrou na fila de pré-agendamento da clínica.' };
       await saveConversation(conversation.id, {

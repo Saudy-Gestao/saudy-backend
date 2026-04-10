@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { publishAppointmentCreatedEvent } from '../../care/lib/appointment-whatsapp-events';
 
 export default async function appointmentRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
@@ -247,6 +248,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           },
         },
       });
+
+      publishAppointmentCreatedEvent({ branchId, appointmentId: appointment.id });
 
       return reply.code(201).send(appointment);
     } catch (error: any) {

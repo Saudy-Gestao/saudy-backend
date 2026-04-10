@@ -3,7 +3,7 @@ import { FastifyInstance } from 'fastify';
 import { Storage } from '@google-cloud/storage';
 import prisma from '../lib/prisma';
 import type { Prisma } from '@prisma/client';
-import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
+import { publishAppointmentCreatedEvent, publishAppointmentNoShowEventIfNeeded } from '../lib/appointment-whatsapp-events';
 
 const COMPLETED_STATUSES = new Set(['REALIZADO', 'COMPLETED', 'FINALIZADO', 'ATENDIDO']);
 const CANCELED_STATUSES = new Set(['CANCELADO', 'CANCELED']);
@@ -230,7 +230,7 @@ const applyAutomaticNoShowForBranch = async (branchId: string) => {
   });
 
   for (const appointmentId of appointmentIds) {
-    void WhatsAppAutoSender.sendNoShowMessageIfNeeded(branchId, appointmentId);
+    publishAppointmentNoShowEventIfNeeded({ branchId, appointmentId });
   }
 };
 
@@ -733,8 +733,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         return created;
       });
 
-      // Enviar mensagem WhatsApp automaticamente (fire and forget)
-      WhatsAppAutoSender.sendAppointmentCreatedMessage(branchId, item.id);
+      // Publica evento de agendamento criado para notificação automática no WhatsApp.
+      publishAppointmentCreatedEvent({ branchId, appointmentId: item.id });
 
       return reply.code(201).send(item);
     } catch (err: any) {
@@ -842,11 +842,11 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       });
 
       if (!isNoShowAppointmentStatus(existing.status) && isNoShowAppointmentStatus(item.status)) {
-        void WhatsAppAutoSender.sendNoShowMessageIfNeeded(branchId, item.id);
+        publishAppointmentNoShowEventIfNeeded({ branchId, appointmentId: item.id });
       }
 
       if (shouldResendAppointmentNotification) {
-        WhatsAppAutoSender.sendAppointmentCreatedMessage(branchId, item.id);
+        publishAppointmentCreatedEvent({ branchId, appointmentId: item.id });
       }
       return item;
     } catch (err: any) {
