@@ -22,6 +22,7 @@ import whatsappWebhookRoutes from './routes/whatsapp-webhook';
 import publicCheckInRoutes from './routes/public-check-in';
 import mwlRoutes from './routes/mwl';
 import preSchedulingRoutes from './routes/pre-scheduling';
+import teleconsultationLinksRoutes from './routes/teleconsultation-links';
 import spellCheckRoutes from './routes/spell-check';
 import ticketRoutes from './routes/tickets';
 
@@ -29,6 +30,7 @@ export default async function careModule(app: FastifyInstance) {
   app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
   app.register(mwlRoutes, { prefix: '/mwl' });
   app.register(preSchedulingRoutes, { prefix: '/pre-scheduling' });
+  app.register(teleconsultationLinksRoutes, { prefix: '/teleconsultation-links' });
   app.register(preAttendanceRoutes, { prefix: '/pre-attendances' });
   app.register(appointmentRoutes, { prefix: '/appointments' });
   app.register(consultationRoutes, { prefix: '/consultations' });

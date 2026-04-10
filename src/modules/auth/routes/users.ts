@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
+import { sendWelcomeEmail } from '../lib/mailer';
 
 export default async function userRoutes(app: FastifyInstance) {
   const isRoomSector = (sector: { name?: string | null; description?: string | null }) => {
@@ -151,6 +152,7 @@ export default async function userRoutes(app: FastifyInstance) {
     }
 
     let validatedDoctorId: string | undefined = undefined;
+    let doctorEmailForWelcome: string | null = null;
     if (doctorId) {
       const doctor = await prisma.doctor.findFirst({
         where: {
@@ -164,6 +166,7 @@ export default async function userRoutes(app: FastifyInstance) {
       }
 
       validatedDoctorId = doctor.id;
+      doctorEmailForWelcome = String(doctor.email || '').trim() || null;
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -181,6 +184,23 @@ export default async function userRoutes(app: FastifyInstance) {
       },
       include: userInclude,
     });
+
+    // Envia credenciais de acesso para o e-mail do médico vinculado (fallback: e-mail do usuário).
+    try {
+      const plainPassword = String(password || '').trim();
+      const recipientEmail = doctorEmailForWelcome || normalizedEmail;
+      if (recipientEmail && plainPassword) {
+        await sendWelcomeEmail({
+          to: recipientEmail,
+          login: normalizedEmail,
+          password: plainPassword,
+          userName: user.name,
+        });
+      }
+    } catch (mailError) {
+      request.log.warn({ err: mailError }, 'Falha ao enviar e-mail de boas-vindas para usuário recém-criado');
+    }
+
     return user;
   });
 
