@@ -58,6 +58,7 @@ type EditableStepKey =
 type ChatbotInput = {
   phone: string;
   text: string;
+  metadata?: Record<string, unknown>;
 };
 
 type ChatbotResponse = {
@@ -2811,6 +2812,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
     authorType: 'PATIENT',
     authorName: patient?.name || conversation.patientName || 'Paciente',
     message: text,
+    metadata: input.metadata || undefined,
   });
 
   if (conversation.humanStatus === 'QUEUED' || conversation.humanStatus === 'ASSIGNED') {

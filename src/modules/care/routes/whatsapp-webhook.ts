@@ -40,31 +40,100 @@ const parseConfirmationAction = (payload: any): 'CONFIRMED' | 'RESCHEDULE' | nul
   return null;
 };
 
+const pickFirstString = (value: unknown, keys: string[]): string => {
+  if (!value || typeof value !== 'object') return '';
+  const obj = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = String(obj[key] || '').trim();
+    if (candidate) return candidate;
+  }
+  return '';
+};
+
+const findMediaCandidate = (value: unknown): Record<string, unknown> | null => {
+  if (!value) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findMediaCandidate(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+
+  const obj = value as Record<string, unknown>;
+  const type = pickFirstString(obj, ['type', 'mediaType', 'mimeType', 'mimetype']).toLowerCase();
+  const url = pickFirstString(obj, ['url', 'link', 'href', 'downloadUrl', 'mediaUrl', 'imageUrl', 'videoUrl', 'audioUrl']);
+  const mediaId = pickFirstString(obj, ['id', 'mediaId', 'messageId']);
+
+  const looksLikeMedia = Boolean(
+    url
+    || mediaId
+    || type.includes('image')
+    || type.includes('video')
+    || type.includes('audio')
+    || type.includes('document')
+    || type.includes('application')
+    || type.includes('file'),
+  );
+
+  if (looksLikeMedia) return obj;
+
+  for (const nestedValue of Object.values(obj)) {
+    const found = findMediaCandidate(nestedValue);
+    if (found) return found;
+  }
+  return null;
+};
+
+const extractInboundMedia = (payload: any): {
+  summary: string;
+  metadata?: Record<string, unknown>;
+} => {
+  const source = findMediaCandidate(payload) || findMediaCandidate(payload?.payload) || findMediaCandidate(payload?.message);
+  if (!source) return { summary: '' };
+
+  const rawType = pickFirstString(source, ['type', 'mediaType', 'mimeType', 'mimetype']).toLowerCase();
+  const mimeType = pickFirstString(source, ['mimeType', 'mimetype', 'contentType']) || rawType;
+  const mediaUrl = pickFirstString(source, ['url', 'link', 'href', 'downloadUrl', 'mediaUrl', 'imageUrl', 'videoUrl', 'audioUrl']);
+  const fileName = pickFirstString(source, ['caption', 'filename', 'fileName', 'name', 'title']);
+  const mediaId = pickFirstString(source, ['mediaId', 'id']);
+
+  const inferredType = rawType.includes('image') || mimeType.includes('image')
+    ? 'image'
+    : rawType.includes('video') || mimeType.includes('video')
+      ? 'video'
+      : rawType.includes('audio') || mimeType.includes('audio')
+        ? 'audio'
+        : 'document';
+
+  const label = inferredType === 'image'
+    ? 'Imagem'
+    : inferredType === 'video'
+      ? 'Vídeo'
+      : inferredType === 'audio'
+        ? 'Áudio'
+        : 'Documento';
+
+  const summary = `[${label} recebido]${fileName ? ` ${fileName}` : ''}${mediaUrl ? ` (${mediaUrl})` : ''}`;
+  const metadata: Record<string, unknown> = {
+    mediaType: inferredType,
+    mimeType: mimeType || null,
+    mediaUrl: mediaUrl || null,
+    fileName: fileName || null,
+    mediaId: mediaId || null,
+  };
+
+  return { summary, metadata };
+};
+
 const appendObservation = (existing: string | null | undefined, note: string) => {
   const trimmedExisting = String(existing || '').trim();
   return trimmedExisting ? `${trimmedExisting}\n${note}` : note;
 };
 
 const extractMediaSummary = (payload: any): string => {
-  const mediaCandidates = [
-    payload?.payload,
-    payload?.message,
-    payload?.content,
-    payload?.payload?.content,
-  ].filter(Boolean);
-
-  for (const candidate of mediaCandidates) {
-    const type = normalizeValue(candidate?.type || candidate?.mimeType || candidate?.mediaType || '');
-    const url = String(candidate?.url || candidate?.link || '').trim();
-    const caption = String(candidate?.caption || candidate?.filename || candidate?.name || '').trim();
-
-    if (type.includes('image') || type === 'image') return `[Imagem recebida]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
-    if (type.includes('document') || type.includes('application') || type === 'file') return `[Documento recebido]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
-    if (type.includes('video') || type === 'video') return `[Vídeo recebido]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
-    if (type.includes('audio') || type === 'audio') return `[Áudio recebido]${caption ? ` ${caption}` : ''}${url ? ` (${url})` : ''}`;
-  }
-
-  return '';
+  return extractInboundMedia(payload).summary;
 };
 
 const extractInboundMessageText = (payload: any): string => {
@@ -133,6 +202,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
   }, async (request) => {
     const body = request.body as any;
     const inboundPayload = body?.payload || {};
+    const inboundMedia = extractInboundMedia(inboundPayload);
     const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
     const source = String(inboundPayload?.source || inboundPayload?.sender?.phone || '').replace(/\D/g, '');
@@ -145,6 +215,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       contextId: inboundPayload?.context?.id || null,
       confirmationAction: action,
       inboundText,
+      inboundMedia: inboundMedia.metadata || null,
       payloadPreview: inboundPayload,
     }, 'Received WhatsApp webhook event');
 
@@ -266,6 +337,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         const chatbotResult = await handleWhatsAppChatbot({
           phone: source,
           text: inboundText,
+          metadata: inboundMedia.metadata || undefined,
         });
 
         if (chatbotResult.handled) {
