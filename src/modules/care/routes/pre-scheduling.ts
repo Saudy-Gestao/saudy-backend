@@ -456,7 +456,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
 
     const token = makePublicToken();
     const publicBase = String(process.env.PUBLIC_APP_URL);
-    const publicUrl = `${publicBase}/pre-agendamento/documentos/${token}`;
+    const publicUrl = `${publicBase}/pre-atendimento/documentos/${token}`;
     const mockMessage = [
       `Olá, ${flow.patientName || appointment.patientName || 'paciente'}!`,
       anamnesisTemplate

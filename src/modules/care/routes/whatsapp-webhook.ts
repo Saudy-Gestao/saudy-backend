@@ -209,7 +209,7 @@ async function sendDecisionLockedGuidance(params: {
       message: params.message,
     });
   } catch {
-    // No-op: this guidance message is best effort only.
+    console.log('Failed to send guidance message via Gupshup');
   }
 }
 

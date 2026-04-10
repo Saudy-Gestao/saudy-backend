@@ -65,7 +65,7 @@ export class WhatsAppAutoSender {
     });
 
     const token = existingFlow?.publicToken || this.makePublicToken();
-    const publicUrl = `${this.getPublicAppBase()}/pre-agendamento/documentos/${token}`;
+    const publicUrl = `${this.getPublicAppBase()}/pre-atendimento/documentos/${token}`;
 
     await prisma.preSchedulingFlow.upsert({
       where: { appointmentId: appointment.id },

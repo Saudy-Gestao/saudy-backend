@@ -113,7 +113,7 @@ function makePublicToken() {
 function getPublicFlowUrl(token?: string | null) {
   if (!token) return null;
   const base = String(process.env.PUBLIC_APP_URL);
-  return `${base}/pre-agendamento/documentos/${token}`;
+  return `${base}/pre-atendimento/documentos/${token}`;
 }
 
 function escapePdfText(value?: string | null) {
