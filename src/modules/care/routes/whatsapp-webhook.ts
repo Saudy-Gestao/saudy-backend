@@ -3,7 +3,6 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
-import GupshupService from '../lib/gupshup';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -91,14 +90,36 @@ const extractInboundMedia = (payload: any): {
   summary: string;
   metadata?: Record<string, unknown>;
 } => {
-  const source = findMediaCandidate(payload) || findMediaCandidate(payload?.payload) || findMediaCandidate(payload?.message);
-  if (!source) return { summary: '' };
+  // Log the full payload to debug
+  console.log('[extractInboundMedia] Full payload:', JSON.stringify(payload, null, 2));
+  
+  // Try to find media in the standard Gupshup structure first: payload.payload for inbound media
+  let source = null;
+  
+  // Gupshup inbound media comes in payload.payload structure
+  if (payload?.payload?.url) {
+    console.log('[extractInboundMedia] Found media in payload.payload');
+    source = payload.payload;
+  } else {
+    // Fallback to recursive search
+    source = findMediaCandidate(payload) || findMediaCandidate(payload?.payload) || findMediaCandidate(payload?.message);
+  }
+  
+  if (!source) {
+    console.log('[extractInboundMedia] No media source found');
+    return { summary: '' };
+  }
 
-  const rawType = pickFirstString(source, ['type', 'mediaType', 'mimeType', 'mimetype']).toLowerCase();
+  console.log('[extractInboundMedia] Media source:', JSON.stringify(source, null, 2));
+
+  const rawType = pickFirstString(source, ['type', 'mediaType', 'mimeType', 'mimetype', 'contentType']).toLowerCase();
   const mimeType = pickFirstString(source, ['mimeType', 'mimetype', 'contentType']) || rawType;
   const mediaUrl = pickFirstString(source, ['url', 'link', 'href', 'downloadUrl', 'mediaUrl', 'imageUrl', 'videoUrl', 'audioUrl']);
   const fileName = pickFirstString(source, ['caption', 'filename', 'fileName', 'name', 'title']);
   const mediaId = pickFirstString(source, ['mediaId', 'id']);
+  const urlExpiry = source.urlExpiry || null;
+
+  console.log('[extractInboundMedia] Extracted - mediaUrl:', mediaUrl, 'mediaId:', mediaId, 'urlExpiry:', urlExpiry);
 
   const inferredType = rawType.includes('image') || mimeType.includes('image')
     ? 'image'
@@ -123,6 +144,7 @@ const extractInboundMedia = (payload: any): {
     mediaUrl: mediaUrl || null,
     fileName: fileName || null,
     mediaId: mediaId || null,
+    urlExpiry: urlExpiry,
   };
 
   return { summary, metadata };
@@ -204,27 +226,6 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const body = request.body as any;
     const inboundPayload = body?.payload || {};
     const inboundMedia = extractInboundMedia(inboundPayload);
-    
-    // Buscar URL da mídia se temos mediaId mas não temos URL
-    if (inboundMedia.metadata?.mediaId && !inboundMedia.metadata?.mediaUrl) {
-      try {
-        // Tentar obter configuração do Gupshup das variáveis de ambiente
-        if (process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && process.env.GUPSHUP_SOURCE_NUMBER) {
-          const gupshup = new GupshupService({
-            apiKey: String(process.env.GUPSHUP_API_KEY),
-            appName: String(process.env.GUPSHUP_APP_NAME),
-            sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
-          });
-          const mediaData = await gupshup.getMediaUrl(String(inboundMedia.metadata.mediaId));
-          if (mediaData?.url) {
-            inboundMedia.metadata.mediaUrl = mediaData.url;
-            request.log.info({ mediaId: inboundMedia.metadata.mediaId, mediaUrl: mediaData.url }, 'Fetched media URL from Gupshup');
-          }
-        }
-      } catch (error) {
-        request.log.error({ error, mediaId: inboundMedia.metadata.mediaId }, 'Failed to fetch media URL from Gupshup');
-      }
-    }
     
     const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);

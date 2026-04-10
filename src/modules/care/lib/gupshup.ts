@@ -254,21 +254,60 @@ export class GupshupService {
 
   /**
    * Busca a URL da mídia pelo mediaId (wamid)
-   * Gupshup API: GET /app/media/{mediaId}
+   * Gupshup API: GET /wa/media/{mediaId}
+   * Note: Different from regular message endpoint, media endpoint is under /wa/media
    */
   async getMediaUrl(mediaId: string): Promise<{ url: string } | null> {
     try {
-      // Remove prefixo se existir
-      const cleanMediaId = mediaId.replace(/^wamid\./, '');
+      // Keep the full wamid format - Gupshup might need it
+      console.log('[gupshup] Fetching media URL for:', mediaId);
       
-      const response = await this.client.get(`/media/${cleanMediaId}`);
+      // Try different possible endpoints
+      const endpoints = [
+        `/media/${mediaId}`, // Original attempt with baseURL
+        `https://api.gupshup.io/wa/media/${mediaId}`, // Direct WhatsApp media endpoint
+        `https://media.gupshup.io/wa/${mediaId}`, // Alternative media subdomain
+      ];
       
-      console.log('[gupshup] getMediaUrl response', response.status, JSON.stringify(response.data));
-      
-      if (response.data?.url) {
-        return { url: response.data.url };
+      for (const endpoint of endpoints) {
+        try {
+          console.log('[gupshup] Trying endpoint:', endpoint);
+          
+          const response = endpoint.startsWith('https://')
+            ? await axios.get(endpoint, {
+                headers: {
+                  'apikey': this.client.defaults.headers['apikey'],
+                },
+              })
+            : await this.client.get(endpoint);
+          
+          console.log('[gupshup] Response status:', response.status);
+          console.log('[gupshup] Response data:', JSON.stringify(response.data));
+          
+          // Check various response formats
+          if (response.data?.url) {
+            console.log('[gupshup] Found URL in response.data.url:', response.data.url);
+            return { url: response.data.url };
+          }
+          
+          if (response.data?.media?.url) {
+            console.log('[gupshup] Found URL in response.data.media.url:', response.data.media.url);
+            return { url: response.data.media.url };
+          }
+          
+          if (typeof response.data === 'string' && response.data.startsWith('http')) {
+            console.log('[gupshup] Response is direct URL:', response.data);
+            return { url: response.data };
+          }
+          
+          console.log('[gupshup] No URL found in response from endpoint:', endpoint);
+        } catch (endpointError: any) {
+          console.log('[gupshup] Endpoint failed:', endpoint, 'Status:', endpointError.response?.status);
+          // Continue to next endpoint
+        }
       }
       
+      console.error('[gupshup] All endpoints failed for mediaId:', mediaId);
       return null;
     } catch (error: any) {
       console.error('[gupshup] getMediaUrl error', error.response?.status, JSON.stringify(error.response?.data));
