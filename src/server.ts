@@ -5,10 +5,13 @@ import WhatsAppSchedulerJob from './modules/care/lib/whatsapp-scheduler-job';
 
 const HSM_SYNC_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_HSM_SYNC_INTERVAL_MINUTES) || 15);
 const WHATSAPP_AUTOMATION_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_AUTOMATION_INTERVAL_MINUTES) || 5);
+const WHATSAPP_HUMAN_TIMEOUT_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_HUMAN_TIMEOUT_INTERVAL_MINUTES) || 1);
 let hsmSyncTimer: NodeJS.Timeout | null = null;
 let whatsAppAutomationTimer: NodeJS.Timeout | null = null;
+let whatsAppHumanTimeoutTimer: NodeJS.Timeout | null = null;
 let isHsmSyncRunning = false;
 let isWhatsAppAutomationRunning = false;
+let isHumanTimeoutRunning = false;
 
 const startWhatsAppHsmAutoSync = () => {
   const runSync = async () => {
@@ -61,6 +64,29 @@ const startWhatsAppAutomation = () => {
   }, WHATSAPP_AUTOMATION_INTERVAL_MINUTES * 60 * 1000);
 };
 
+const startWhatsAppHumanTimeoutAutomation = () => {
+  const runHumanTimeoutAutomation = async () => {
+    if (isHumanTimeoutRunning) return;
+    isHumanTimeoutRunning = true;
+
+    try {
+      const humanConversationResult = await WhatsAppSchedulerJob.processHumanConversationTimeouts();
+      app.log.info({
+        humanConversations: humanConversationResult,
+      }, 'WhatsApp human timeout cycle finished');
+    } catch (error) {
+      app.log.error({ err: error }, 'WhatsApp human timeout cycle failed');
+    } finally {
+      isHumanTimeoutRunning = false;
+    }
+  };
+
+  void runHumanTimeoutAutomation();
+  whatsAppHumanTimeoutTimer = setInterval(() => {
+    void runHumanTimeoutAutomation();
+  }, WHATSAPP_HUMAN_TIMEOUT_INTERVAL_MINUTES * 60 * 1000);
+};
+
 const start = async () => {
   const port = Number(process.env.PORT) || 3000;
 
@@ -73,6 +99,7 @@ const start = async () => {
     app.log.info(`Server listening on http://0.0.0.0:${port}`);
     startWhatsAppHsmAutoSync();
     startWhatsAppAutomation();
+    startWhatsAppHumanTimeoutAutomation();
   } catch (error) {
     app.log.error(error);
     process.exit(1);
@@ -82,6 +109,7 @@ const start = async () => {
 const shutdown = async () => {
   if (hsmSyncTimer) clearInterval(hsmSyncTimer);
   if (whatsAppAutomationTimer) clearInterval(whatsAppAutomationTimer);
+  if (whatsAppHumanTimeoutTimer) clearInterval(whatsAppHumanTimeoutTimer);
   await prisma.$disconnect();
   process.exit(0);
 };

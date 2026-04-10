@@ -33,9 +33,17 @@ export default async function sectorRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'User not associated with a company' });
     }
 
-    // Return only sectors from logged user's branch
+    const companyBranches = await prisma.branch.findMany({
+      where: { companyId: loggedContext.companyId },
+      select: { id: true },
+    });
+
     const sectors = await prisma.sector.findMany({
-      where: { branchId: loggedContext.branchId },
+      where: {
+        branchId: {
+          in: companyBranches.map((branch: { id: string }) => branch.id),
+        },
+      },
       include: { branch: true },
     });
     return sectors;
@@ -49,7 +57,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
       tags: ['Sectors'],
       security: [{ bearerAuth: [] }],
       body: { $ref: 'SectorCreate#' },
-      response: { 200: { $ref: 'Sector#' }, 403: { type: 'object' } },
+      response: { 200: { $ref: 'Sector#' }, 400: { type: 'object' }, 403: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { branchId, name, description } = request.body as {
@@ -61,16 +69,29 @@ export default async function sectorRoutes(app: FastifyInstance) {
     const userId = (request.user as any).id;
     const loggedContext = await getLoggedContext(userId);
 
-    if (!loggedContext?.branchId) {
-      return reply.code(403).send({ error: 'User not associated with a branch' });
+    if (!loggedContext?.companyId) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
     }
 
-    if (branchId && branchId !== loggedContext.branchId) {
-      return reply.code(403).send({ error: 'Você só pode cadastrar setor na sua filial' });
+    const targetBranchId = String(branchId || '').trim();
+    if (!targetBranchId) {
+      return reply.code(400).send({ error: 'Filial é obrigatória' });
+    }
+
+    const branch = await prisma.branch.findFirst({
+      where: {
+        id: targetBranchId,
+        companyId: loggedContext.companyId,
+      },
+      select: { id: true },
+    });
+
+    if (!branch) {
+      return reply.code(403).send({ error: 'Filial inválida para sua empresa' });
     }
 
     const sector = await prisma.sector.create({
-      data: { branchId: loggedContext.branchId, name, description },
+      data: { branchId: targetBranchId, name, description },
     });
     return sector;
   });
@@ -90,8 +111,8 @@ export default async function sectorRoutes(app: FastifyInstance) {
     const userId = (request.user as any).id;
     const loggedContext = await getLoggedContext(userId);
 
-    if (!loggedContext?.branchId) {
-      return reply.code(403).send({ error: 'User not associated with a branch' });
+    if (!loggedContext?.companyId) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
     }
 
     const sector = await prisma.sector.findUnique({
@@ -101,8 +122,8 @@ export default async function sectorRoutes(app: FastifyInstance) {
     if (!sector) {
       return reply.code(404).send({ error: 'Sector not found' });
     }
-    if (sector.branchId !== loggedContext.branchId) {
-      return reply.code(403).send({ error: 'Setor fora da sua filial' });
+    if (sector.branch?.companyId !== loggedContext.companyId) {
+      return reply.code(403).send({ error: 'Setor fora da sua empresa' });
     }
     return sector;
   });
@@ -129,25 +150,42 @@ export default async function sectorRoutes(app: FastifyInstance) {
     const userId = (request.user as any).id;
     const loggedContext = await getLoggedContext(userId);
 
-    if (!loggedContext?.branchId) {
-      return reply.code(403).send({ error: 'User not associated with a branch' });
+    if (!loggedContext?.companyId) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
     }
 
     try {
-      const current = await prisma.sector.findUnique({ where: { id } });
+      const current = await prisma.sector.findUnique({
+        where: { id },
+        include: { branch: true },
+      });
       if (!current) {
         return reply.code(404).send({ error: 'Sector not found' });
       }
-      if (current.branchId !== loggedContext.branchId) {
-        return reply.code(403).send({ error: 'Setor fora da sua filial' });
+      if (current.branch?.companyId !== loggedContext.companyId) {
+        return reply.code(403).send({ error: 'Setor fora da sua empresa' });
       }
-      if (branchId && branchId !== loggedContext.branchId) {
-        return reply.code(403).send({ error: 'Você só pode mover setor para sua filial' });
+
+      let resolvedBranchId = current.branchId;
+      if (branchId) {
+        const targetBranch = await prisma.branch.findFirst({
+          where: {
+            id: branchId,
+            companyId: loggedContext.companyId,
+          },
+          select: { id: true },
+        });
+
+        if (!targetBranch) {
+          return reply.code(403).send({ error: 'Você só pode mover setor para uma filial da sua empresa' });
+        }
+
+        resolvedBranchId = targetBranch.id;
       }
 
       const sector = await prisma.sector.update({
         where: { id },
-        data: { branchId: loggedContext.branchId, name, description },
+        data: { branchId: resolvedBranchId, name, description },
       });
       return sector;
     } catch (error) {
@@ -170,17 +208,20 @@ export default async function sectorRoutes(app: FastifyInstance) {
     const userId = (request.user as any).id;
     const loggedContext = await getLoggedContext(userId);
 
-    if (!loggedContext?.branchId) {
-      return reply.code(403).send({ error: 'User not associated with a branch' });
+    if (!loggedContext?.companyId) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
     }
 
     try {
-      const current = await prisma.sector.findUnique({ where: { id } });
+      const current = await prisma.sector.findUnique({
+        where: { id },
+        include: { branch: true },
+      });
       if (!current) {
         return reply.code(404).send({ error: 'Sector not found' });
       }
-      if (current.branchId !== loggedContext.branchId) {
-        return reply.code(403).send({ error: 'Setor fora da sua filial' });
+      if (current.branch?.companyId !== loggedContext.companyId) {
+        return reply.code(403).send({ error: 'Setor fora da sua empresa' });
       }
 
       await prisma.sector.delete({
