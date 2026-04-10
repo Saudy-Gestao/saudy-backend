@@ -751,7 +751,6 @@ const buildNextAppointmentMessage = (params: {
 
   return [
     header,
-    `Tipo: ${formatAppointmentTypeLabel(params.appointment.type)}`,
     `Unidade: ${params.appointment.branchName || 'Não informada'}`,
     `Profissional: ${params.appointment.doctorName || 'Não informado'}`,
     `Procedimento: ${params.appointment.specialty || 'Não informado'}`,
