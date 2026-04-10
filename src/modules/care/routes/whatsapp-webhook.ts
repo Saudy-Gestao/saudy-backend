@@ -61,9 +61,41 @@ const normalizePhoneForConfig = (value: unknown) => {
   return String(value || '').replace(/\D/g, '');
 };
 
-async function resolveBranchHintFromDestination(destination: unknown): Promise<string | null> {
-  const normalizedDestination = normalizePhoneForConfig(destination);
-  if (!normalizedDestination) return null;
+const collectPhoneCandidates = (value: unknown, candidates = new Set<string>()): Set<string> => {
+  if (value == null) return candidates;
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const digits = normalizePhoneForConfig(value);
+    if (digits.length >= 10 && digits.length <= 15) {
+      candidates.add(digits);
+      if (digits.length > 11) candidates.add(digits.slice(-11));
+    }
+    return candidates;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) collectPhoneCandidates(item, candidates);
+    return candidates;
+  }
+
+  if (typeof value === 'object') {
+    for (const nestedValue of Object.values(value as Record<string, unknown>)) {
+      collectPhoneCandidates(nestedValue, candidates);
+    }
+  }
+
+  return candidates;
+};
+
+async function resolveBranchHintFromPayload(payload: unknown, sourcePhone?: string): Promise<string | null> {
+  const sourceDigits = normalizePhoneForConfig(sourcePhone || '');
+  const candidateNumbers = Array.from(collectPhoneCandidates(payload)).filter((candidate) => {
+    if (!candidate) return false;
+    if (!sourceDigits) return true;
+    return candidate !== sourceDigits && candidate.slice(-11) !== sourceDigits.slice(-11);
+  });
+
+  if (!candidateNumbers.length) return null;
 
   const configs = await prisma.whatsAppConfig.findMany({
     where: { isActive: true },
@@ -76,9 +108,11 @@ async function resolveBranchHintFromDestination(destination: unknown): Promise<s
   const match = configs.find((config: { branchId: string; fromNumber: string }) => {
     const fromDigits = normalizePhoneForConfig(config.fromNumber);
     if (!fromDigits) return false;
-    return fromDigits === normalizedDestination
-      || fromDigits.endsWith(normalizedDestination)
-      || normalizedDestination.endsWith(fromDigits);
+    return candidateNumbers.some((candidate) => (
+      fromDigits === candidate
+      || fromDigits.endsWith(candidate)
+      || candidate.endsWith(fromDigits)
+    ));
   });
 
   return match?.branchId || null;
@@ -448,7 +482,6 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
     const source = normalizePhoneForConversation(inboundPayload?.source || inboundPayload?.sender?.phone || '');
-    const destination = inboundPayload?.destination || body?.destination || '';
     const messageEvent = parseWebhookMessageEvent(body, inboundPayload);
 
     request.log.info({
@@ -581,7 +614,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
 
     if (!action || !originatingLog?.appointmentId || !originatingLog.branchId) {
       if (source && inboundText) {
-        const chatbotBranchHint = await resolveBranchHintFromDestination(destination);
+        const chatbotBranchHint = await resolveBranchHintFromPayload(body, source);
         const chatbotResult = await handleWhatsAppChatbot({
           phone: source,
           text: inboundText,

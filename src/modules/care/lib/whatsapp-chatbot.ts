@@ -2810,7 +2810,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
   if (!branchConfig?.branchId) return { handled: false };
 
   let patient = await lookupPatient(branchConfig.branchId, phone);
-  const conversation = await upsertConversation({
+  let conversation = await upsertConversation({
     branchId: branchConfig.branchId,
     phone,
     patient,
@@ -2833,7 +2833,58 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
     metadata: input.metadata || undefined,
   });
 
-  if (conversation.humanStatus === 'QUEUED' || conversation.humanStatus === 'ASSIGNED') {
+  if (conversation.humanStatus === 'QUEUED' && shouldResetConversation(text)) {
+    await saveConversation(conversation.id, {
+      state: 'MENU',
+      selectedService: null,
+      context: {},
+      lastInboundMessage: text,
+      patientId: patient?.id || conversation.patientId || null,
+      patientName: patient?.name || conversation.patientName || null,
+      handoffTicketId: null,
+      reservedAppointmentId: null,
+      humanStatus: null,
+      humanFlowKey: null,
+      humanFlowLabel: null,
+      humanAssignedUserId: null,
+      humanAssignedUserName: null,
+      humanAssignedAt: null,
+      humanClosedAt: null,
+      humanClosedByUserId: null,
+      humanClosedByUserName: null,
+      humanProtocolNumber: null,
+      humanProtocolStartedAt: null,
+      humanProtocolClosedAt: null,
+      humanIdleWarningSentAt: null,
+      humanLastOperatorMessageAt: null,
+      humanLastPatientMessageAt: new Date(),
+    });
+
+    conversation = {
+      ...conversation,
+      state: 'MENU',
+      selectedService: null,
+      context: {},
+      handoffTicketId: null,
+      reservedAppointmentId: null,
+      humanStatus: null,
+      humanFlowKey: null,
+      humanFlowLabel: null,
+      humanAssignedUserId: null,
+      humanAssignedUserName: null,
+      humanAssignedAt: null,
+      humanClosedAt: null,
+      humanClosedByUserId: null,
+      humanClosedByUserName: null,
+      humanProtocolNumber: null,
+      humanProtocolStartedAt: null,
+      humanProtocolClosedAt: null,
+      humanIdleWarningSentAt: null,
+      humanLastOperatorMessageAt: null,
+      humanLastPatientMessageAt: new Date(),
+      lastInboundMessage: text,
+    };
+  } else if (conversation.humanStatus === 'QUEUED' || conversation.humanStatus === 'ASSIGNED') {
     await saveConversation(conversation.id, {
       lastInboundMessage: text,
       patientId: patient?.id || conversation.patientId || null,
