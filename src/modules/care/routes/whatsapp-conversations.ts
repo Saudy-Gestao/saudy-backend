@@ -36,7 +36,7 @@ const buildOperatorSignature = (message: string, operatorName: string) => {
 
 const buildOperatorGreeting = (operatorName: string) => {
   const hour = new Date().getHours();
-  const period = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  const period = (hour >= 5 && hour < 12) ? 'Bom dia' : (hour >= 12 && hour < 18) ? 'Boa tarde' : 'Boa noite';
   return `${period}. Como posso ajudar?\n\nAtendimento: ${operatorName}`;
 };
 
