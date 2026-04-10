@@ -566,6 +566,11 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Conversa encerrada não pode ser assumida novamente' });
     }
 
+    // Check if the conversation is already assigned to the current user
+    if (conversation.humanStatus === 'ASSIGNED' && conversation.humanAssignedUserId === scope.currentUser.id) {
+      return reply.code(400).send({ error: 'Você já está atendendo esta conversa' });
+    }
+
     if (operatorConfig.flowKeys.length && conversation.humanFlowKey && !operatorConfig.flowKeys.includes(conversation.humanFlowKey)) {
       return reply.code(403).send({ error: 'Flow not allowed for this operator' });
     }
