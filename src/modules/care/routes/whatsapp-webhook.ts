@@ -73,7 +73,7 @@ async function resolveBranchHintFromDestination(destination: unknown): Promise<s
     },
   });
 
-  const match = configs.find((config) => {
+  const match = configs.find((config: { branchId: string; fromNumber: string }) => {
     const fromDigits = normalizePhoneForConfig(config.fromNumber);
     if (!fromDigits) return false;
     return fromDigits === normalizedDestination
