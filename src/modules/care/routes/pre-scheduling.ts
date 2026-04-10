@@ -6,11 +6,15 @@ import { getAnexosStorage } from '../../../lib/storage';
 import GupshupService from '../lib/gupshup';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
+const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
 
 const normalizeStatus = (value?: string | null) => String(value || '').trim().toUpperCase();
 const normalizeCpf = (value?: string | null) => String(value || '').replace(/\D/g, '');
 const toDateOnly = (value?: string | null) => String(value || '').slice(0, 10);
 const toBoolean = (value: unknown): boolean => ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+const isTeleconsultationAppointment = (appointment: any) => String(appointment?.observations || '')
+  .toUpperCase()
+  .includes(TELECONSULTATION_OBSERVATION_MARKER);
 
 const sanitizeFileName = (value: string) => String(value || 'arquivo')
   .replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -280,7 +284,11 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         const itemStatus = String(flow?.status || 'PENDING').toUpperCase();
         const hasPreAuthorization = Boolean(flow?.preAuthorizedAt);
         const docsApproved = itemStatus === 'COMPLETED';
-        const isResolved = hasPreAuthorization && docsApproved;
+        const isTeleconsultation = isTeleconsultationAppointment(appointment);
+        const teleconsultationLinkSent = Boolean(flow?.completedAt);
+        const isResolved = hasPreAuthorization
+          && docsApproved
+          && (!isTeleconsultation || teleconsultationLinkSent);
         return {
           id: String(appointment.id),
           appointmentId: String(appointment.id),
@@ -306,6 +314,8 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
           anamnesisAnswered: Boolean(flow?.anamnesisResponse?.submittedAt),
           anamnesisAnswersCount: Array.isArray(flow?.anamnesisResponse?.answers) ? flow.anamnesisResponse.answers.length : 0,
           tokenAvailable: Boolean(flow?.publicToken),
+          isTeleconsultation,
+          teleconsultationLinkSent,
           isResolved,
         };
       }));
@@ -363,6 +373,9 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     }
 
     const { flow } = ensured as any;
+    if (flow?.preAuthorizedAt) {
+      return reply.code(400).send({ error: 'Este agendamento já foi pré-autorizado' });
+    }
 
     const updatedFlow = await prisma.preSchedulingFlow.update({
       where: { id: flow.id },
@@ -422,9 +435,23 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     }
 
     const { flow, appointment } = ensured as any;
+    const flowWithProgress = await prisma.preSchedulingFlow.findUnique({
+      where: { id: flow.id },
+      include: {
+        documents: { select: { id: true } },
+        anamnesisResponse: { select: { id: true } },
+      },
+    });
+
+    const currentStatus = String(flowWithProgress?.status || flow?.status || '').toUpperCase();
+    const alreadySubmitted = Boolean(flowWithProgress?.patientSubmittedAt);
+    const documentsCount = Array.isArray(flowWithProgress?.documents) ? flowWithProgress.documents.length : 0;
+    const hasDocuments = documentsCount > 0;
+    const hasAnamnesisResponse = Boolean(flowWithProgress?.anamnesisResponse?.id);
+
     const anamnesisTemplate = await resolveAnamnesisTemplateForAppointment(branchId, appointment);
-    if (String(flow?.status || '').toUpperCase() === 'COMPLETED') {
-      return reply.code(400).send({ error: 'Fluxo já concluído. Não é possível reenviar link.' });
+    if (currentStatus === 'COMPLETED' || currentStatus === 'DOCUMENTS_RECEIVED' || alreadySubmitted || hasDocuments || hasAnamnesisResponse) {
+      return reply.code(400).send({ error: 'Documentos já recebidos/respondidos. Não é possível reenviar link de docs.' });
     }
 
     const token = makePublicToken();
@@ -660,6 +687,9 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Não há documentos ou anamnese respondida para revisar' });
     }
 
+    const isTeleconsultation = flow.appointment
+      ? isTeleconsultationAppointment(flow.appointment)
+      : false;
     const nextStatus = action === 'APPROVE'
       ? (flow.preAuthorizedAt ? 'COMPLETED' : 'DOCUMENTS_RECEIVED')
       : 'WAITING_PATIENT_DOCUMENTS';
@@ -667,6 +697,13 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       where: { id: flow.id },
       data: {
         status: nextStatus,
+        completedAt: action === 'APPROVE'
+          ? (
+            flow.preAuthorizedAt
+              ? (isTeleconsultation ? null : new Date())
+              : null
+          )
+          : null,
       },
     });
 
@@ -676,6 +713,64 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         : 'Reenvio de documentos solicitado com sucesso',
       status: updated.status,
       item: updated,
+    });
+  });
+
+  app.post('/:appointmentId/manual-finalize', {
+    schema: {
+      summary: 'Finalize teleconsultation pre-scheduling flow manually',
+      tags: ['PreScheduling'],
+      params: {
+        type: 'object',
+        required: ['appointmentId'],
+        properties: { appointmentId: { type: 'string' } },
+      },
+    },
+  }, async (request, reply) => {
+    if (!(await ensureAuthenticated(request, reply))) return;
+
+    const user = await getLoggedUser(request);
+    const branchId = user?.sector?.branch?.id || null;
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { appointmentId } = request.params as { appointmentId: string };
+    const flow = await prisma.preSchedulingFlow.findFirst({
+      where: { appointmentId, branchId },
+      include: {
+        appointment: true,
+      },
+    });
+
+    if (!flow) return reply.code(404).send({ error: 'Fluxo de pré-agendamento não encontrado' });
+    if (!isTeleconsultationAppointment(flow.appointment)) {
+      return reply.code(400).send({ error: 'Finalização manual disponível apenas para teleconsulta' });
+    }
+    if (!flow.preAuthorizedAt) {
+      return reply.code(400).send({ error: 'Pré-autorização pendente para este agendamento' });
+    }
+    if (String(flow.status || '').toUpperCase() === 'CANCELED') {
+      return reply.code(400).send({ error: 'Fluxo cancelado não pode ser finalizado' });
+    }
+    if (flow.completedAt) {
+      return reply.send({
+        message: 'Fluxo já finalizado manualmente',
+        status: flow.status,
+        completedAt: flow.completedAt,
+      });
+    }
+
+    const updated = await prisma.preSchedulingFlow.update({
+      where: { id: flow.id },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+      },
+    });
+
+    return reply.send({
+      message: 'Fluxo finalizado manualmente com sucesso',
+      status: updated.status,
+      completedAt: updated.completedAt,
     });
   });
 

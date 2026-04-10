@@ -55,6 +55,7 @@ const appendQueueStatusAudit = (
 };
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED', 'AGENDADO', 'SCHEDULED']);
+const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
 const DIGITS_ONLY_REGEX = /\D/g;
 const QUESTION_TYPES = new Set([
   'TEXT',
@@ -95,6 +96,10 @@ const isExamAppointment = (value?: string | null) => {
   const normalized = normalizeAppointmentType(value);
   return normalized === 'EXAME' || normalized === 'EXAM';
 };
+
+const isTeleconsultationAppointment = (appointment: any) => String(appointment?.observations || '')
+  .toUpperCase()
+  .includes(TELECONSULTATION_OBSERVATION_MARKER);
 
 const normalizeNursingAnswers = (answers: unknown) => {
   if (!Array.isArray(answers)) return [];
@@ -184,6 +189,7 @@ const resolveNursingTemplateForAppointment = async (branchId: string, appointmen
 const toConsultationView = (item: any) => ({
   ...item,
   appointmentType: item?.appointment?.type || null,
+  isTeleconsultation: isTeleconsultationAppointment(item?.appointment),
   triageRequired: Boolean(item?.nursingTemplate),
   nursingTemplate: item?.nursingTemplate || null,
   nursingResponse: item?.nursingResponse
@@ -775,7 +781,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
         orderBy: { createdAt: 'desc' },
         include: {
           appointment: {
-            select: { id: true, specialty: true, type: true, date: true, time: true },
+            select: { id: true, specialty: true, type: true, date: true, time: true, observations: true },
           },
           nursingResponse: {
             include: { answers: true },
@@ -840,7 +846,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
       },
       include: {
         appointment: {
-          select: { id: true, specialty: true, type: true, date: true, time: true },
+          select: { id: true, specialty: true, type: true, date: true, time: true, observations: true },
         },
         nursingResponse: {
           include: { answers: true },
@@ -924,7 +930,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
       const linkedAppointment = data?.appointmentId
         ? await prisma.appointment.findFirst({
             where: { id: String(data.appointmentId), branchId, isActive: true },
-            select: { id: true, specialty: true, type: true, date: true, time: true },
+            select: { id: true, specialty: true, type: true, date: true, time: true, observations: true },
           })
         : null;
       const nursingTemplate = linkedAppointment
@@ -1030,7 +1036,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
       where: { id, branchId, isActive: true },
       include: {
         appointment: {
-          select: { id: true, specialty: true, type: true, date: true, time: true },
+          select: { id: true, specialty: true, type: true, date: true, time: true, observations: true },
         },
         nursingResponse: true,
       },
@@ -1123,7 +1129,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
         },
         include: {
           appointment: {
-            select: { id: true, specialty: true, type: true, date: true, time: true },
+            select: { id: true, specialty: true, type: true, date: true, time: true, observations: true },
           },
           nursingResponse: {
             include: { answers: true },
@@ -1186,11 +1192,23 @@ export default async function consultationRoutes(app: FastifyInstance) {
               }
             : {}),
         },
+        include: {
+          appointment: {
+            select: { observations: true },
+          },
+        },
       });
       if (!existing) return reply.code(404).send({ error: 'Consultation not found' });
 
       const hasQueueStatusChange = typeof data.queue === 'string' && data.queue.trim().length > 0;
-      if (hasQueueStatusChange && !canTransitionClinicalQueue(existing.queue, data.queue)) {
+      const fromStatus = canonicalClinicalQueueStatus(existing.queue);
+      const toStatus = canonicalClinicalQueueStatus(data.queue);
+      const isTeleconsultation = isTeleconsultationAppointment(existing.appointment);
+      const allowDirectTeleconsultationStart = isTeleconsultation
+        && fromStatus === 'AGUARDANDO_ATENDIMENTO'
+        && toStatus === 'EM_ATENDIMENTO';
+
+      if (hasQueueStatusChange && !allowDirectTeleconsultationStart && !canTransitionClinicalQueue(existing.queue, data.queue)) {
         return reply.code(400).send({
           error: 'Invalid status transition',
           message: `Não é permitido mudar de "${existing.queue || 'SEM_STATUS'}" para "${data.queue}".`,
