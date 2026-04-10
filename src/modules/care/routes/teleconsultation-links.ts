@@ -9,7 +9,16 @@ const TELE_SIGNAL_MAX_PER_ROOM = 300;
 
 type TeleRole = 'PATIENT' | 'DOCTOR';
 type TeleSignalToRole = TeleRole | 'ALL';
-type TeleSignalEventType = 'doctor-joined' | 'ready' | 'offer' | 'answer' | 'ice' | 'hangup';
+type TeleSignalEventType =
+  | 'doctor-joined'
+  | 'ready'
+  | 'offer'
+  | 'answer'
+  | 'ice'
+  | 'hangup'
+  | 'patient-left'
+  | 'chat-message'
+  | 'chat-file';
 
 type TeleSignalEvent = {
   id: number;
@@ -40,11 +49,23 @@ const normalizeTeleSignalType = (value?: string | null): TeleSignalEventType | n
     || normalized === 'answer'
     || normalized === 'ice'
     || normalized === 'hangup'
+    || normalized === 'patient-left'
+    || normalized === 'chat-message'
+    || normalized === 'chat-file'
   ) {
     return normalized;
   }
   return null;
 };
+
+const normalizeTeleMessageType = (value?: string | null): 'TEXT' | 'FILE' | null => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'chat-message') return 'TEXT';
+  if (normalized === 'chat-file') return 'FILE';
+  return null;
+};
+const MAX_TELE_CHAT_TEXT_LENGTH = 1000;
+const MAX_TELE_CHAT_FILE_DATA_URL_LENGTH = 3_000_000;
 
 const pruneTeleSignalRoom = (appointmentId: string) => {
   const roomEvents = teleSignalRooms.get(appointmentId) || [];
@@ -698,6 +719,44 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       context.role === 'DOCTOR' ? 'PATIENT' : 'DOCTOR'
     );
 
+    const messageType = normalizeTeleMessageType(signalType);
+    if (messageType) {
+      const textPayload = String(payload?.text || '').trim();
+      const fileNamePayload = String(payload?.fileName || '').trim();
+      const fileMimeTypePayload = String(payload?.fileMimeType || '').trim();
+      const fileDataUrlPayload = String(payload?.fileDataUrl || '').trim();
+      const fileSizePayload = Number(payload?.fileSizeBytes || 0);
+
+      if (messageType === 'TEXT' && textPayload.length === 0) {
+        return reply.code(400).send({ error: 'Mensagem vazia não permitida' });
+      }
+      if (messageType === 'TEXT' && textPayload.length > MAX_TELE_CHAT_TEXT_LENGTH) {
+        return reply.code(400).send({ error: 'Mensagem excede limite de tamanho' });
+      }
+      if (messageType === 'FILE' && (!fileNamePayload || !fileDataUrlPayload)) {
+        return reply.code(400).send({ error: 'Arquivo inválido para chat' });
+      }
+      if (messageType === 'FILE' && fileDataUrlPayload.length > MAX_TELE_CHAT_FILE_DATA_URL_LENGTH) {
+        return reply.code(400).send({ error: 'Arquivo excede limite de tamanho' });
+      }
+
+      await prisma.teleconsultationMessage.create({
+        data: {
+          branchId: context.appointment.branchId,
+          appointmentId: context.appointment.id,
+          fromRole: context.role,
+          messageType,
+          text: messageType === 'TEXT' ? textPayload : null,
+          fileName: messageType === 'FILE' ? fileNamePayload : null,
+          fileMimeType: messageType === 'FILE' ? fileMimeTypePayload : null,
+          fileSizeBytes: messageType === 'FILE' && Number.isFinite(fileSizePayload)
+            ? fileSizePayload
+            : null,
+          fileDataUrl: messageType === 'FILE' ? fileDataUrlPayload : null,
+        },
+      });
+    }
+
     const created = pushTeleSignal({
       appointmentId: context.appointment.id,
       type: signalType,
@@ -746,6 +805,55 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
     });
 
     return reply.send(response);
+  });
+
+  app.get('/public/messages', {
+    schema: {
+      summary: 'List persisted teleconsultation chat messages',
+      tags: ['Teleconsultation'],
+      querystring: {
+        type: 'object',
+        required: ['token'],
+        properties: {
+          token: { type: 'string' },
+          limit: { type: 'number' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { token, limit } = request.query as {
+      token: string;
+      limit?: number;
+    };
+
+    const context = await verifyPublicToken(String(token || ''));
+    if ('error' in context) {
+      return reply.code(Number(context.statusCode || 400)).send({ error: context.error });
+    }
+
+    const safeLimit = Math.max(1, Math.min(Number(limit || 100), 300));
+    const rows = await prisma.teleconsultationMessage.findMany({
+      where: {
+        branchId: context.appointment.branchId,
+        appointmentId: context.appointment.id,
+      },
+      orderBy: { createdAt: 'asc' },
+      take: safeLimit,
+    });
+
+    return reply.send({
+      items: rows.map((row: any) => ({
+        id: row.id,
+        fromRole: row.fromRole,
+        kind: row.messageType === 'FILE' ? 'file' : 'text',
+        text: row.text,
+        fileName: row.fileName,
+        fileMimeType: row.fileMimeType,
+        fileSizeBytes: row.fileSizeBytes,
+        fileDataUrl: row.fileDataUrl,
+        createdAt: row.createdAt,
+      })),
+    });
   });
 
   app.get('/public/:token', {
