@@ -564,18 +564,6 @@ async function resolveBranchConfig(): Promise<BranchConfig | null> {
     };
   }
 
-  if (process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && process.env.GUPSHUP_SOURCE_NUMBER) {
-    const branch = CHATBOT_BRANCH_ID ? await prisma.branch.findUnique({ where: { id: CHATBOT_BRANCH_ID } }) : null;
-    const branchId = CHATBOT_BRANCH_ID || activeConfigs[0]?.branchId || '';
-    return {
-      branchId,
-      branchName: branch?.tradeName || null,
-      apiKey: String(process.env.GUPSHUP_API_KEY),
-      appName: String(process.env.GUPSHUP_APP_NAME),
-      sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
-    };
-  }
-
   return null;
 }
 

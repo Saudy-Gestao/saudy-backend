@@ -633,8 +633,8 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     }
 
     const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-    const gupshupAppId = whatsappConfig?.appId || process.env.GUPSHUP_APP_ID || '';
-    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
+    const gupshupAppId = whatsappConfig?.appId;
+    const apiKey = whatsappConfig?.accountSid;
 
     if (!gupshupAppId || !apiKey) {
       return reply.code(400).send({

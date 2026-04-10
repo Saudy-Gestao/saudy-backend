@@ -303,12 +303,12 @@ export class WhatsAppAutoSender {
         message = WhatsAppMessageBuilder.buildMessage(templateRecord.message, appointmentData);
       }
 
-      const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
-      const appName = whatsappConfig?.authToken || process.env.GUPSHUP_APP_NAME || '';
-      const sourceNumber = whatsappConfig?.fromNumber || process.env.GUPSHUP_SOURCE_NUMBER || '';
+      const apiKey = whatsappConfig?.accountSid;
+      const appName = whatsappConfig?.authToken;
+      const sourceNumber = whatsappConfig?.fromNumber;
 
       if (!apiKey || !appName || !sourceNumber) {
-        const errorMessage = 'WhatsApp não está configurado. Salve as credenciais da filial ou defina GUPSHUP_API_KEY, GUPSHUP_APP_NAME e GUPSHUP_SOURCE_NUMBER.';
+        const errorMessage = 'WhatsApp não está configurado. Salve as credenciais da filial.';
         await this.createFailedLog({
           branchId: params.branchId,
           appointmentId: appointment.id,

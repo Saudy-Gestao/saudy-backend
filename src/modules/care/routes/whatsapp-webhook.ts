@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
+import GupshupService from '../lib/gupshup';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -40,6 +41,11 @@ const parseConfirmationAction = (payload: any): 'CONFIRMED' | 'RESCHEDULE' | nul
 
   return null;
 };
+
+const CONFIRMATION_TERMINAL_STATUSES = new Set([
+  'RESPONDED_CONFIRMED',
+  'RESPONDED_RESCHEDULE',
+]);
 
 const RESCHEDULE_CONFIRMATION_FLOW = {
   key: 'CONFIRMACAO_REAGENDAMENTO',
@@ -165,6 +171,47 @@ const appendObservation = (existing: string | null | undefined, note: string) =>
   const trimmedExisting = String(existing || '').trim();
   return trimmedExisting ? `${trimmedExisting}\n${note}` : note;
 };
+
+async function sendDecisionLockedGuidance(params: {
+  branchId: string;
+  phone?: string | null;
+  message: string;
+}) {
+  const normalizedPhone = normalizePhoneForConversation(params.phone || '');
+  if (!normalizedPhone) return;
+
+  const whatsappConfig = await prisma.whatsAppConfig.findUnique({
+    where: { branchId: params.branchId },
+    select: {
+      accountSid: true,
+      authToken: true,
+      fromNumber: true,
+      isActive: true,
+    },
+  });
+
+  const apiKey = whatsappConfig?.accountSid;
+  const appName = whatsappConfig?.authToken;
+  const sourceNumber = whatsappConfig?.fromNumber;
+  const canUseBranchConfig = Boolean(whatsappConfig?.isActive && apiKey && appName && sourceNumber);
+
+  if (!canUseBranchConfig) return;
+
+  const gupshup = new GupshupService({
+    apiKey,
+    appName,
+    sourceNumber,
+  });
+
+  try {
+    await gupshup.sendTextMessage({
+      to: normalizedPhone,
+      message: params.message,
+    });
+  } catch {
+    // No-op: this guidance message is best effort only.
+  }
+}
 
 async function queueRescheduleHumanConversation(tx: Prisma.TransactionClient, params: {
   branchId: string;
@@ -553,8 +600,44 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     }
 
     const nextLogStatus = action === 'CONFIRMED' ? 'RESPONDED_CONFIRMED' : 'RESPONDED_RESCHEDULE';
-    if (originatingLog.status === nextLogStatus) {
-      return { success: true, ignored: true, reason: 'already-processed' };
+    if (CONFIRMATION_TERMINAL_STATUSES.has(String(originatingLog.status || '').trim().toUpperCase())) {
+      await sendDecisionLockedGuidance({
+        branchId: originatingLog.branchId,
+        phone: source,
+        message: 'Recebi sua resposta anteriormente e ela já foi registrada. Para escolher novamente, envie VOLTAR ou SAIR.',
+      });
+      return { success: true, ignored: true, reason: 'binary-decision-locked' };
+    }
+
+    const currentConversation = source
+      ? await prisma.whatsAppConversation.findUnique({
+        where: {
+          branchId_phone: {
+            branchId: originatingLog.branchId,
+            phone: normalizePhoneForConversation(source),
+          },
+        },
+        select: {
+          id: true,
+          humanStatus: true,
+          humanFlowKey: true,
+          humanProtocolNumber: true,
+        },
+      })
+      : null;
+
+    if (currentConversation?.humanStatus === 'ASSIGNED' || currentConversation?.humanStatus === 'CLOSED') {
+      await sendDecisionLockedGuidance({
+        branchId: originatingLog.branchId,
+        phone: source,
+        message: 'Este atendimento já está em andamento ou encerrado. Para iniciar um novo fluxo, envie VOLTAR ou SAIR.',
+      });
+      return {
+        success: true,
+        ignored: true,
+        reason: 'blocked-by-human-flow',
+        humanStatus: currentConversation.humanStatus,
+      };
     }
 
     const timestamp = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -562,6 +645,19 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const rescheduleQueue = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.whatsAppMessageLog.update({
         where: { id: originatingLog!.id },
+        data: {
+          status: nextLogStatus,
+        },
+      });
+
+      await tx.whatsAppMessageLog.updateMany({
+        where: {
+          id: { not: originatingLog!.id },
+          branchId: originatingLog!.branchId,
+          appointmentId: originatingLog!.appointmentId,
+          messageType: 'APPOINTMENT_CONFIRMATION',
+          status: { in: ['PENDING', 'SENT'] },
+        },
         data: {
           status: nextLogStatus,
         },

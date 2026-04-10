@@ -380,14 +380,13 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         where: { branchId },
       });
 
-      // Fall back to env vars if no DB config saved yet
-      const apiKey     = whatsappConfig?.accountSid  || process.env.GUPSHUP_API_KEY       || '';
-      const appName    = whatsappConfig?.authToken   || process.env.GUPSHUP_APP_NAME      || '';
-      const fromNumber = whatsappConfig?.fromNumber  || process.env.GUPSHUP_SOURCE_NUMBER || '';
+      const apiKey     = whatsappConfig?.accountSid;
+      const appName    = whatsappConfig?.authToken;
+      const fromNumber = whatsappConfig?.fromNumber;
 
       if (!apiKey || !appName || !fromNumber) {
         return reply.code(400).send({
-          error: 'Gupshup não configurado. Configure em Configurações > WhatsApp ou defina as variáveis de ambiente GUPSHUP_API_KEY, GUPSHUP_APP_NAME e GUPSHUP_SOURCE_NUMBER.',
+          error: 'Gupshup não configurado. Configure em Configurações > WhatsApp.',
         });
       }
 

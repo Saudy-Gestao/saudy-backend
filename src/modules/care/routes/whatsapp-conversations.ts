@@ -168,14 +168,6 @@ async function getBranchMessagingConfig(branchId: string) {
     };
   }
 
-  if (process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && process.env.GUPSHUP_SOURCE_NUMBER) {
-    return {
-      apiKey: String(process.env.GUPSHUP_API_KEY),
-      appName: String(process.env.GUPSHUP_APP_NAME),
-      sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
-    };
-  }
-
   return null;
 }
 
@@ -834,16 +826,22 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'mediaId is required' });
     }
 
-    // Try to get Gupshup config from environment
-    if (!process.env.GUPSHUP_API_KEY || !process.env.GUPSHUP_APP_NAME || !process.env.GUPSHUP_SOURCE_NUMBER) {
+    if (!scope) {
+      return reply.code(403).send({ error: 'User not associated with a company' });
+    }
+
+    const preferredBranchId = String(scope.currentUser?.sector?.branch?.id || '').trim();
+    const branchId = preferredBranchId || String(scope.branchIds?.[0] || '').trim();
+    const branchMessaging = branchId ? await getBranchMessagingConfig(branchId) : null;
+    if (!branchMessaging) {
       return reply.code(503).send({ error: 'WhatsApp configuration not available' });
     }
 
     try {
       const gupshup = new GupshupService({
-        apiKey: String(process.env.GUPSHUP_API_KEY),
-        appName: String(process.env.GUPSHUP_APP_NAME),
-        sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
+        apiKey: branchMessaging.apiKey,
+        appName: branchMessaging.appName,
+        sourceNumber: branchMessaging.sourceNumber,
       });
 
       const mediaData = await gupshup.getMediaUrl(mediaId);

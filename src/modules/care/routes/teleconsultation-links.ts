@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import GupshupService from '../lib/gupshup';
 
 const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
 const RECEPTION_DONE_STATUS = 'RECEPCAO_CONCLUIDA';
@@ -146,6 +147,65 @@ const normalizeStatus = (value?: string | null) => String(value || '')
 
 const normalizePhone = (value?: string | null) => String(value || '').replace(/\D/g, '');
 const normalizeDateOnly = (value?: string | null) => String(value || '').slice(0, 10);
+
+const resolveBranchWhatsAppConfig = async (branchId: string) => {
+  const config = await prisma.whatsAppConfig.findUnique({
+    where: { branchId },
+    select: {
+      accountSid: true,
+      authToken: true,
+      fromNumber: true,
+      isActive: true,
+    },
+  });
+
+  const apiKey = config?.accountSid;
+  const appName = config?.authToken;
+  const sourceNumber = config?.fromNumber;
+
+  const canUseBranchConfig = Boolean(config?.isActive && apiKey && appName && sourceNumber);
+
+  if (!canUseBranchConfig) {
+    throw new Error('Credenciais do WhatsApp não configuradas para envio da teleconsulta.');
+  }
+
+  return { apiKey, appName, sourceNumber };
+};
+
+const sendTeleconsultationWhatsAppMessage = async (params: {
+  branchId: string;
+  patientPhone: string;
+  patientName: string;
+  patientUrl: string;
+  notes?: string;
+}) => {
+  const config = await resolveBranchWhatsAppConfig(params.branchId);
+  const gupshup = new GupshupService(config);
+
+  const text = [
+    `Olá ${params.patientName}!`,
+    'Seu acesso para a teleconsulta foi liberado.',
+    'Use este link para entrar na sala de espera:',
+    params.patientUrl,
+    params.notes ? `Observação: ${params.notes}` : null,
+  ].filter(Boolean).join(' ');
+
+  const result = await gupshup.sendTextMessage({
+    to: params.patientPhone,
+    message: text,
+  });
+
+  if (result.status !== 'success') {
+    throw new Error(result.error || 'Falha ao enviar mensagem de teleconsulta pelo WhatsApp.');
+  }
+
+  return {
+    provider: 'gupshup' as const,
+    to: normalizePhone(params.patientPhone),
+    message: text,
+    providerMessageId: result.messageId || null,
+  };
+};
 
 const isTeleconsultationAppointment = (appointment: any) => {
   const appointmentType = String(appointment?.type || '').trim().toUpperCase();
@@ -492,7 +552,7 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
   app.post('/pre-attendance/:preAttendanceId/send-whatsapp-link', {
     preHandler: async (request) => { await request.jwtVerify(); },
     schema: {
-      summary: 'Generate secure teleconsultation links and send patient link (mock WhatsApp)',
+      summary: 'Generate secure teleconsultation links and send patient link (WhatsApp)',
       tags: ['Teleconsultation'],
       params: {
         type: 'object',
@@ -542,14 +602,17 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
 
     const patientName = context.preAttendance.fullName || context.appointment.patientName || context.linkedPatient?.name || 'paciente';
     const patientPhone = normalizePhone(context.linkedPatient?.cellphone || context.linkedPatient?.phone || context.preAttendance.phone || '');
+    if (!patientPhone) {
+      return reply.code(400).send({ error: 'Paciente sem telefone válido para envio da teleconsulta.' });
+    }
 
-    const mockMessage = [
-      `Olá ${patientName}!`,
-      'Seu acesso para a teleconsulta foi liberado.',
-      'Use este link para entrar na sala de espera:',
-      links.patientUrl,
-      notes ? `Observação: ${notes}` : null,
-    ].filter(Boolean).join(' ');
+    const whatsapp = await sendTeleconsultationWhatsAppMessage({
+      branchId,
+      patientPhone,
+      patientName,
+      patientUrl: links.patientUrl,
+      notes,
+    });
 
     await prisma.preAttendance.update({
       where: { id: context.preAttendance.id },
@@ -562,24 +625,20 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
     });
 
     return reply.send({
-      message: 'Link de teleconsulta gerado e envio mockado com sucesso',
+      message: 'Link de teleconsulta gerado e enviado com sucesso',
       links: {
         patientUrl: links.patientUrl,
         doctorUrl: links.doctorUrl,
         expiresAt: links.expiresAt,
       },
-      whatsappMock: {
-        provider: 'mock',
-        to: patientPhone || null,
-        message: mockMessage,
-      },
+      whatsapp,
     });
   });
 
   app.post('/appointment/:appointmentId/send-whatsapp-link', {
     preHandler: async (request) => { await request.jwtVerify(); },
     schema: {
-      summary: 'Generate secure teleconsultation links (from pre-scheduling) and send patient link (mock WhatsApp)',
+      summary: 'Generate secure teleconsultation links (from pre-scheduling) and send patient link (WhatsApp)',
       tags: ['Teleconsultation'],
       params: {
         type: 'object',
@@ -636,19 +695,24 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
 
     const patientName = context.appointment.patientName || context.preAttendance?.fullName || context.linkedPatient?.name || 'paciente';
     const patientPhone = normalizePhone(context.linkedPatient?.cellphone || context.linkedPatient?.phone || context.preAttendance?.phone || '');
+    if (sendPatientMessage && !patientPhone) {
+      return reply.code(400).send({ error: 'Paciente sem telefone válido para envio da teleconsulta.' });
+    }
 
-    const mockMessage = [
-      `Olá ${patientName}!`,
-      'Seu acesso para a teleconsulta foi liberado.',
-      'Use este link para entrar na sala de espera:',
-      links.patientUrl,
-      notes ? `Observação: ${notes}` : null,
-    ].filter(Boolean).join(' ');
+    const whatsapp = sendPatientMessage
+      ? await sendTeleconsultationWhatsAppMessage({
+        branchId,
+        patientPhone,
+        patientName,
+        patientUrl: links.patientUrl,
+        notes,
+      })
+      : null;
 
     await prisma.preSchedulingFlow.updateMany({
       where: { appointmentId: context.appointment.id, branchId },
       data: {
-        ...(sendPatientMessage ? { linkMockMessage: mockMessage } : {}),
+        ...(sendPatientMessage && whatsapp?.message ? { linkMockMessage: whatsapp.message } : {}),
       },
     });
 
@@ -666,18 +730,14 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
 
     return reply.send({
       message: sendPatientMessage
-        ? 'Link de teleconsulta gerado e envio mockado com sucesso'
+        ? 'Link de teleconsulta gerado e enviado com sucesso'
         : 'Link de teleconsulta do médico gerado com sucesso',
       links: {
         patientUrl: links.patientUrl,
         doctorUrl: links.doctorUrl,
         expiresAt: links.expiresAt,
       },
-      whatsappMock: {
-        provider: 'mock',
-        to: sendPatientMessage ? (patientPhone || null) : null,
-        message: sendPatientMessage ? mockMessage : '',
-      },
+      whatsapp: sendPatientMessage ? whatsapp : null,
     });
   });
 

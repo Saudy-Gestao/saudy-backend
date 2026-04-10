@@ -492,9 +492,9 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     };
 
     const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-    const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
-    const appName = whatsappConfig?.authToken || process.env.GUPSHUP_APP_NAME || '';
-    const sourceNumber = whatsappConfig?.fromNumber || process.env.GUPSHUP_SOURCE_NUMBER || '';
+    const apiKey = whatsappConfig?.accountSid;
+    const appName = whatsappConfig?.authToken;
+    const sourceNumber = whatsappConfig?.fromNumber;
 
     if ((whatsappConfig?.isActive || (!whatsappConfig && apiKey && appName && sourceNumber)) && flow.patientPhone) {
       const gupshup = new GupshupService({

@@ -185,14 +185,6 @@ export class WhatsAppSchedulerJob {
       };
     }
 
-    if (process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && process.env.GUPSHUP_SOURCE_NUMBER) {
-      return {
-        apiKey: String(process.env.GUPSHUP_API_KEY),
-        appName: String(process.env.GUPSHUP_APP_NAME),
-        sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
-      };
-    }
-
     return null;
   }
 
