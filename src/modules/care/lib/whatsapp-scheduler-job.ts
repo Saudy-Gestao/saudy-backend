@@ -62,14 +62,12 @@ export class WhatsAppSchedulerJob {
 
       for (const conversation of conversations) {
         try {
-          const operatorConfig = conversation.humanAssignedUserId
-            ? await prisma.whatsAppConversationOperatorConfig.findUnique({
-              where: { userId: conversation.humanAssignedUserId },
-            })
-            : null;
+          const settings = await prisma.whatsAppConversationSettings.findUnique({
+            where: { branchId: conversation.branchId },
+          });
 
-          const idleMinutes = Math.max(1, Number(operatorConfig?.idleTimeoutMinutes || 25));
-          const warningMinutes = Math.max(1, Number(operatorConfig?.closeWarningMinutes || 5));
+          const idleMinutes = Math.max(1, Number(settings?.idleTimeoutMinutes || 25));
+          const warningMinutes = Math.max(1, Number(settings?.closeWarningMinutes || 5));
           const lastOperatorAt = conversation.humanLastOperatorMessageAt || null;
           const lastPatientAt = conversation.humanLastPatientMessageAt || null;
 
@@ -135,10 +133,13 @@ export class WhatsAppSchedulerJob {
                   context: {},
                   selectedService: null,
                   humanStatus: 'CLOSED',
+                  humanAssignedUserId: null,
+                  humanAssignedUserName: null,
                   humanClosedAt: closedAt,
                   humanClosedByUserId: conversation.humanAssignedUserId || null,
                   humanClosedByUserName: conversation.humanAssignedUserName || 'Sistema',
                   humanProtocolClosedAt: closedAt,
+                  humanIdleWarningSentAt: null,
                   lastOutboundMessage: closingMessage,
                   lastInteractionAt: closedAt,
                 },

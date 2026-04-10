@@ -39,6 +39,13 @@ const buildTransferMessage = (operatorName: string) => (
   `Estamos realizando uma alteração no seu atendimento. A partir de agora, ${operatorName} seguirá com você.\n\nAtendimento: ${operatorName}`
 );
 
+const buildComparableSlot = (date?: string | null, time?: string | null) => {
+  const normalizedDate = String(date || '').trim();
+  const normalizedTime = String(time || '').trim();
+  if (!normalizedDate) return '';
+  return `${normalizedDate} ${normalizedTime || '00:00'}`;
+};
+
 async function getCurrentUserScope(request: any) {
   const userId = String((request.user as any)?.id || '').trim();
   if (!userId) return null;
@@ -76,6 +83,22 @@ async function getCurrentUserScope(request: any) {
 async function getCurrentOperatorConfig(userId: string) {
   return prisma.whatsAppConversationOperatorConfig.findUnique({
     where: { userId },
+  });
+}
+
+async function getConversationSettings(branchId: string) {
+  const existing = await prisma.whatsAppConversationSettings.findUnique({
+    where: { branchId },
+  });
+
+  if (existing) return existing;
+
+  return prisma.whatsAppConversationSettings.create({
+    data: {
+      branchId,
+      idleTimeoutMinutes: 25,
+      closeWarningMinutes: 5,
+    },
   });
 }
 
@@ -149,8 +172,10 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
 
     const configByUserId = new Map(configs.map((config: any) => [config.userId, config]));
     const activeCountByUserId = new Map(activeCounts.map((item: any) => [String(item.humanAssignedUserId), item._count._all]));
+    const settings = await getConversationSettings(scope.currentUser.sector?.branch?.id || scope.branchIds[0]);
 
     return {
+      settings,
       items: users.map((user: any) => {
         const config = configByUserId.get(user.id) as any;
         return {
@@ -160,13 +185,46 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
           branchName: user.sector?.branch?.tradeName || null,
           isActive: config?.isActive ?? false,
           maxActiveConversations: config?.maxActiveConversations ?? 3,
-          idleTimeoutMinutes: config?.idleTimeoutMinutes ?? 25,
-          closeWarningMinutes: config?.closeWarningMinutes ?? 5,
           flowKeys: config?.flowKeys ?? [],
           activeConversationCount: activeCountByUserId.get(user.id) || 0,
         };
       }),
     };
+  });
+
+  app.put('/whatsapp/conversations/settings', {
+    preHandler: async (request) => { await request.jwtVerify(); },
+  }, async (request, reply) => {
+    const scope = await getCurrentUserScope(request);
+    if (!scope) return reply.code(403).send({ error: 'User not associated with a company' });
+
+    const body = request.body as {
+      idleTimeoutMinutes?: number;
+      closeWarningMinutes?: number;
+    };
+
+    const branchId = scope.currentUser.sector?.branch?.id || scope.branchIds[0];
+    if (!branchId) {
+      return reply.code(403).send({ error: 'User not associated with a branch' });
+    }
+
+    const idleTimeoutMinutes = Math.max(1, Number(body?.idleTimeoutMinutes || 25));
+    const closeWarningMinutes = Math.max(1, Number(body?.closeWarningMinutes || 5));
+
+    const settings = await prisma.whatsAppConversationSettings.upsert({
+      where: { branchId },
+      create: {
+        branchId,
+        idleTimeoutMinutes,
+        closeWarningMinutes,
+      },
+      update: {
+        idleTimeoutMinutes,
+        closeWarningMinutes,
+      },
+    });
+
+    return settings;
   });
 
   app.put('/whatsapp/conversations/operators/:userId', {
@@ -179,8 +237,6 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     const body = request.body as {
       isActive?: boolean;
       maxActiveConversations?: number;
-      idleTimeoutMinutes?: number;
-      closeWarningMinutes?: number;
       flowKeys?: string[];
     };
 
@@ -204,8 +260,6 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       : [];
 
     const maxActiveConversations = Math.max(1, Number(body?.maxActiveConversations || 3));
-    const idleTimeoutMinutes = Math.max(1, Number(body?.idleTimeoutMinutes || 25));
-    const closeWarningMinutes = Math.max(1, Number(body?.closeWarningMinutes || 5));
 
     const config = await prisma.whatsAppConversationOperatorConfig.upsert({
       where: { userId },
@@ -213,15 +267,11 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         userId,
         isActive: body?.isActive !== false,
         maxActiveConversations,
-        idleTimeoutMinutes,
-        closeWarningMinutes,
         flowKeys,
       },
       update: {
         isActive: body?.isActive !== false,
         maxActiveConversations,
-        idleTimeoutMinutes,
-        closeWarningMinutes,
         flowKeys,
       },
     });
@@ -342,9 +392,48 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       })
       : null;
 
+    const patientAppointments = conversation.patientId
+      ? await prisma.appointment.findMany({
+        where: {
+          patientId: conversation.patientId,
+          branchId: { in: scope.branchIds },
+          isActive: true,
+        },
+        select: {
+          id: true,
+          date: true,
+          time: true,
+          type: true,
+          status: true,
+          doctorName: true,
+          specialty: true,
+          convenio: true,
+        },
+      })
+      : [];
+
+    const nowComparable = buildComparableSlot(
+      new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }),
+      new Date().toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false })
+    );
+
+    const sortedAppointments = [...patientAppointments].sort((a: any, b: any) => (
+      buildComparableSlot(a.date, a.time).localeCompare(buildComparableSlot(b.date, b.time))
+    ));
+
+    const nextAppointment = sortedAppointments.find((item: any) => buildComparableSlot(item.date, item.time) >= nowComparable) || null;
+    const recentAppointments = [...sortedAppointments]
+      .filter((item: any) => buildComparableSlot(item.date, item.time) < nowComparable)
+      .reverse()
+      .slice(0, 3);
+
     return {
       conversation,
       patient: patientDetails,
+      appointments: {
+        next: nextAppointment,
+        recent: recentAppointments,
+      },
       items,
     };
   });
@@ -561,6 +650,9 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         context: {},
         selectedService: null,
         humanStatus: 'CLOSED',
+        humanAssignedUserId: null,
+        humanAssignedUserName: null,
+        humanIdleWarningSentAt: null,
         humanClosedAt: now,
         humanClosedByUserId: scope.currentUser.id,
         humanClosedByUserName: scope.currentUser.name,

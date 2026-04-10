@@ -1761,13 +1761,23 @@ model WhatsAppConversationOperatorConfig {
     isActive               Boolean  @default(true)
     flowKeys               String[] @default([])
     maxActiveConversations Int      @default(3)
-    idleTimeoutMinutes     Int      @default(25)
-    closeWarningMinutes    Int      @default(5)
     createdAt              DateTime @default(now())
     updatedAt              DateTime @updatedAt
 
     @@index([isActive])
     @@map("whatsapp_conversation_operator_configs")
+}
+
+model WhatsAppConversationSettings {
+    id                  String   @id @default(uuid())
+    branchId            String   @unique
+    idleTimeoutMinutes  Int      @default(25)
+    closeWarningMinutes Int      @default(5)
+    createdAt           DateTime @default(now())
+    updatedAt           DateTime @updatedAt
+
+    @@index([branchId])
+    @@map("whatsapp_conversation_settings")
 }
 
 enum LeadStatus {

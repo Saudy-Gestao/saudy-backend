@@ -154,7 +154,7 @@ const buildMenuMessage = (patientName?: string | null) => {
     ? `Olá, ${patientName}. Como posso te ajudar hoje?`
     : 'Olá. Como posso te ajudar hoje?';
 
-  return `${greeting}\n\n1. Marcação de consulta\n2. Marcação de exame\n3. Dúvidas\n\nSe quiser voltar, escreva VOLTAR.\nSe quiser encerrar e recomeçar, escreva SAIR.`;
+  return `${greeting}\n\n1. Marcação de consulta\n2. Marcação de exame\n3. Dúvidas\n4. Próximas consultas/exames\n\nSe quiser voltar, escreva VOLTAR.\nSe quiser encerrar e recomeçar, escreva SAIR.`;
 };
 
 const buildYesNoMessage = (body: string): ChatbotResponse => ({
@@ -177,12 +177,23 @@ const parseYesNo = (text: string): boolean | null => {
   return null;
 };
 
-const parseServiceType = (text: string): 'CONSULTA' | 'EXAME' | 'DUVIDAS' | null => {
+const parseServiceType = (text: string): 'CONSULTA' | 'EXAME' | 'DUVIDAS' | 'NEXT_APPOINTMENTS' | null => {
   const normalized = normalizeText(text);
   if (!normalized) return null;
   if (normalized === '1' || normalized.includes('consulta')) return 'CONSULTA';
   if (normalized === '2' || normalized.includes('exame')) return 'EXAME';
   if (normalized === '3' || normalized.includes('duvida') || normalized.includes('dúvida')) return 'DUVIDAS';
+  if (
+    normalized === '4'
+    || normalized.includes('proximas consultas')
+    || normalized.includes('próximas consultas')
+    || normalized.includes('proximos exames')
+    || normalized.includes('próximos exames')
+    || normalized.includes('proximas consulta')
+    || normalized.includes('próximas consulta')
+    || normalized.includes('proximos exame')
+    || normalized.includes('próximos exame')
+  ) return 'NEXT_APPOINTMENTS';
   return null;
 };
 
@@ -481,6 +492,25 @@ const parseBirthDate = (text: string): string | null => {
 
 const formatBirthDateLabel = (dateIso?: string | null) => dateIso ? formatDateLabel(dateIso) : 'Não informada';
 
+const buildComparableSlot = (date?: string | null, time?: string | null) => {
+  const safeDate = String(date || '9999-12-31');
+  const safeTime = String(time || '23:59').slice(0, 5);
+  return `${safeDate} ${safeTime}`;
+};
+
+const getCurrentClinicSlot = () => {
+  const now = new Date();
+  return buildComparableSlot(
+    now.toLocaleDateString('en-CA', { timeZone: CLINIC_TIME_ZONE }),
+    now.toLocaleTimeString('pt-BR', {
+      timeZone: CLINIC_TIME_ZONE,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }),
+  );
+};
+
 const resolveOptionSelection = (
   text: string,
   options: Array<{ value: string; label: string }>,
@@ -604,6 +634,131 @@ async function lookupPatient(branchId: string, phone: string): Promise<PatientLo
       }
     : null;
 }
+
+async function findNextAppointmentForPatient(params: {
+  referenceBranchId: string;
+  patient: PatientLookup | null;
+}) {
+  if (!params.patient?.id && !params.patient?.cpf) return null;
+
+  const referenceBranch = await prisma.branch.findUnique({
+    where: { id: params.referenceBranchId },
+    select: { companyId: true },
+  });
+
+  const companyBranchIds = referenceBranch?.companyId
+    ? (await prisma.branch.findMany({
+      where: { companyId: referenceBranch.companyId },
+      select: { id: true, tradeName: true },
+      orderBy: { tradeName: 'asc' },
+    }))
+    : [];
+
+  const branchIds = companyBranchIds.length
+    ? companyBranchIds.map((item: any) => String(item.id))
+    : [params.referenceBranchId];
+
+  const branchNameById = new Map(
+    companyBranchIds.map((item: any) => [String(item.id), String(item.tradeName || 'Unidade sem nome')]),
+  );
+
+  if (!branchNameById.size) {
+    const fallbackBranch = await prisma.branch.findUnique({
+      where: { id: params.referenceBranchId },
+      select: { id: true, tradeName: true },
+    });
+    if (fallbackBranch) {
+      branchNameById.set(
+        String(fallbackBranch.id),
+        String(fallbackBranch.tradeName || 'Unidade sem nome'),
+      );
+    }
+  }
+
+  const appointments = await prisma.appointment.findMany({
+    where: {
+      branchId: { in: branchIds },
+      isActive: true,
+      status: { in: Array.from(OPEN_APPOINTMENT_STATUSES) },
+      OR: [
+        ...(params.patient.id ? [{ patientId: params.patient.id }] : []),
+        ...(params.patient.cpf ? [{ patientCpf: params.patient.cpf }] : []),
+      ],
+    },
+    select: {
+      id: true,
+      branchId: true,
+      date: true,
+      time: true,
+      type: true,
+      status: true,
+      doctorName: true,
+      specialty: true,
+      convenio: true,
+    },
+  });
+
+  const nowComparable = getCurrentClinicSlot();
+  const nextAppointment = appointments
+    .filter((item: any) => item?.date && item?.time)
+    .sort((a: any, b: any) => (
+      buildComparableSlot(a.date, a.time).localeCompare(buildComparableSlot(b.date, b.time))
+    ))
+    .find((item: any) => buildComparableSlot(item.date, item.time) >= nowComparable);
+
+  if (!nextAppointment) return null;
+
+  return {
+    id: String(nextAppointment.id),
+    branchId: nextAppointment.branchId ? String(nextAppointment.branchId) : null,
+    branchName: nextAppointment.branchId
+      ? String(branchNameById.get(String(nextAppointment.branchId)) || 'Unidade sem nome')
+      : 'Unidade não informada',
+    date: String(nextAppointment.date),
+    time: String(nextAppointment.time).slice(0, 5),
+    type: String(nextAppointment.type || '').trim() || null,
+    status: String(nextAppointment.status || '').trim() || null,
+    doctorName: nextAppointment.doctorName ? String(nextAppointment.doctorName) : null,
+    specialty: nextAppointment.specialty ? String(nextAppointment.specialty) : null,
+    convenio: nextAppointment.convenio ? String(nextAppointment.convenio) : null,
+  };
+}
+
+const formatAppointmentTypeLabel = (value?: string | null) => {
+  const normalized = normalizeText(value);
+  if (!normalized) return 'Atendimento';
+  if (normalized.includes('exame')) return 'Exame';
+  if (normalized.includes('consulta')) return 'Consulta';
+  if (normalized.includes('whatsapp')) return 'Atendimento';
+  return String(value).trim() || 'Atendimento';
+};
+
+const buildNextAppointmentMessage = (params: {
+  patientName?: string | null;
+  appointment: {
+    branchName?: string | null;
+    date: string;
+    time: string;
+    type?: string | null;
+    doctorName?: string | null;
+    specialty?: string | null;
+    convenio?: string | null;
+  };
+}) => {
+  const header = params.patientName
+    ? `Encontrei seu próximo agendamento, ${params.patientName}:`
+    : 'Encontrei seu próximo agendamento:';
+
+  return [
+    header,
+    `Tipo: ${formatAppointmentTypeLabel(params.appointment.type)}`,
+    `Unidade: ${params.appointment.branchName || 'Não informada'}`,
+    `Profissional: ${params.appointment.doctorName || 'Não informado'}`,
+    `Procedimento: ${params.appointment.specialty || 'Não informado'}`,
+    `Dia: ${formatDateLabel(params.appointment.date)}`,
+    `Horário: ${params.appointment.time || 'Não informado'}`,
+  ].join('\n');
+};
 
 async function listUnitOptions(referenceBranchId: string) {
   const referenceBranch = await prisma.branch.findUnique({
@@ -1320,6 +1475,53 @@ async function processFlow(params: {
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
           lastOutboundMessage: response.text,
+        });
+        return { handled: true, response };
+      }
+
+      if (selected === 'NEXT_APPOINTMENTS') {
+        if (!patient?.id && !patient?.cpf) {
+          const response = {
+            text: 'Não consegui identificar seu cadastro pelo número deste WhatsApp para consultar próximas consultas ou exames. Se preferir, você pode seguir com o menu normalmente ou pedir ajuda para um atendente.',
+          };
+          await saveConversation(conversation.id, {
+            state: 'AWAITING_SERVICE',
+            selectedService: null,
+            context: {},
+            lastInboundMessage: text,
+            lastOutboundMessage: response.text,
+            patientId: patient?.id || conversation.patientId || null,
+            patientName: patient?.name || conversation.patientName || null,
+          });
+          return { handled: true, response };
+        }
+
+        const nextAppointment = await findNextAppointmentForPatient({
+          referenceBranchId: context.selectedBranchId || branchConfig.branchId,
+          patient,
+        });
+
+        const response = nextAppointment
+          ? {
+            text: buildNextAppointmentMessage({
+              patientName: patient?.name || conversation.patientName || null,
+              appointment: nextAppointment,
+            }),
+          }
+          : {
+            text: patient?.name
+              ? `Não encontrei próximas consultas ou exames agendados no momento para você, ${patient.name}.`
+              : 'Não encontrei próximas consultas ou exames agendados no momento para você.',
+          };
+
+        await saveConversation(conversation.id, {
+          state: 'AWAITING_SERVICE',
+          selectedService: null,
+          context: {},
+          lastInboundMessage: text,
+          lastOutboundMessage: response.text,
+          patientId: patient?.id || conversation.patientId || null,
+          patientName: patient?.name || conversation.patientName || null,
         });
         return { handled: true, response };
       }
