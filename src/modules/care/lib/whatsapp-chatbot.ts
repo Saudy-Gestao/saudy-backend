@@ -1264,7 +1264,7 @@ async function reserveAppointment(params: {
   cpf: string | null;
 }) {
   const observationLines = [
-    '[WhatsApp BOT] Agendamento criado automaticamente e enviado para o pré-agendamento.',
+    '[WhatsApp BOT] Agendamento criado automaticamente e enviado para o pré-atendimento.',
     `Telefone: ${formatPhoneForLookup(params.phone)}`,
     `Convênio: ${params.insurance}`,
     `Procedimento: ${params.procedureName}`,
@@ -2549,7 +2549,7 @@ async function processFlow(params: {
       });
       publishAppointmentCreatedEvent({ branchId: getTargetBranchId(), appointmentId: appointment.id });
 
-      const response = { text: 'Sua solicitação foi registrada com sucesso e já entrou na fila de pré-agendamento da clínica.' };
+      const response = { text: 'Sua solicitação foi registrada com sucesso e já entrou na fila de pré-atendimento da clínica.' };
       await saveConversation(conversation.id, {
         state: 'COMPLETED',
         reservedAppointmentId: appointment.id,
