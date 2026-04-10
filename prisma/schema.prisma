@@ -916,6 +916,24 @@ model PreSchedulingFlow {
     @@map("pre_scheduling_flows")
 }
 
+model TeleconsultationMessage {
+    id            String   @id @default(uuid())
+    branchId      String
+    appointmentId String
+    fromRole      String
+    messageType   String
+    text          String?  @db.Text
+    fileName      String?
+    fileMimeType  String?
+    fileSizeBytes Int?
+    fileDataUrl   String?  @db.Text
+    createdAt     DateTime @default(now())
+
+    @@index([appointmentId, createdAt])
+    @@index([branchId, createdAt])
+    @@map("teleconsultation_messages")
+}
+
 model PreSchedulingAnamnesisResponse {
     id            String   @id @default(uuid())
     flowId        String   @unique
