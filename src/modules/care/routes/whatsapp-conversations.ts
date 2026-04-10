@@ -797,4 +797,68 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
 
     return updated;
   });
+
+  /**
+   * GET /care/whatsapp/media/:mediaId
+   * Busca a URL de uma mídia do WhatsApp usando o mediaId
+   */
+  app.get<{
+    Params: { mediaId: string };
+  }>('/whatsapp/media/:mediaId', {
+    schema: {
+      summary: 'Get WhatsApp media URL',
+      description: 'Fetches the media URL from Gupshup using the mediaId',
+      tags: ['WhatsApp'],
+      params: {
+        type: 'object',
+        properties: {
+          mediaId: { type: 'string' },
+        },
+        required: ['mediaId'],
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            url: { type: 'string' },
+            mediaId: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { mediaId } = request.params;
+    const scope = await getCurrentUserScope(request);
+
+    if (!mediaId) {
+      return reply.code(400).send({ error: 'mediaId is required' });
+    }
+
+    // Try to get Gupshup config from environment
+    if (!process.env.GUPSHUP_API_KEY || !process.env.GUPSHUP_APP_NAME || !process.env.GUPSHUP_SOURCE_NUMBER) {
+      return reply.code(503).send({ error: 'WhatsApp configuration not available' });
+    }
+
+    try {
+      const gupshup = new GupshupService({
+        apiKey: String(process.env.GUPSHUP_API_KEY),
+        appName: String(process.env.GUPSHUP_APP_NAME),
+        sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
+      });
+
+      const mediaData = await gupshup.getMediaUrl(mediaId);
+      
+      if (!mediaData?.url) {
+        return reply.code(404).send({ error: 'Media URL not found' });
+      }
+
+      return {
+        url: mediaData.url,
+        mediaId,
+      };
+    } catch (error: any) {
+      request.log.error({ error, mediaId }, 'Failed to fetch media URL');
+      return reply.code(500).send({ error: 'Failed to fetch media URL' });
+    }
+  });
 }
