@@ -112,7 +112,7 @@ function makePublicToken() {
 
 function getPublicFlowUrl(token?: string | null) {
   if (!token) return null;
-  const base = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const base = String(process.env.PUBLIC_APP_URL);
   return `${base}/pre-agendamento/documentos/${token}`;
 }
 

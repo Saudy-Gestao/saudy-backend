@@ -38,7 +38,7 @@ export class WhatsAppAutoSender {
   }
 
   static getPublicAppBase(): string {
-    return String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    return String(process.env.PUBLIC_APP_URL);
   }
 
   static async ensureDocumentsLink(params: {
