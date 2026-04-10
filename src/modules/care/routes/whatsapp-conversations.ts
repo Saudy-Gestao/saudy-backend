@@ -11,6 +11,11 @@ const normalizeOptionalString = (value: unknown) => {
 };
 
 const normalizePhone = (value: unknown) => String(value || '').replace(/\D/g, '');
+const normalizeProtocolNumber = (value: unknown) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+};
 
 const HUMAN_STATUSES = ['QUEUED', 'ASSIGNED', 'CLOSED'] as const;
 
@@ -44,6 +49,57 @@ const buildComparableSlot = (date?: string | null, time?: string | null) => {
   const normalizedTime = String(time || '').trim();
   if (!normalizedDate) return '';
   return `${normalizedDate} ${normalizedTime || '00:00'}`;
+};
+
+const extractProtocolTagFromText = (message: string): string | null => {
+  const normalizedMessage = String(message || '').trim();
+  if (!normalizedMessage) return null;
+  const match = normalizedMessage.match(/\[Protocolo\s+([^\]]+)\]/i);
+  return match?.[1]?.trim() || null;
+};
+
+const extractProtocolFromMetadata = (metadata: unknown): string | null => {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const value = String((metadata as any)?.protocolNumber || '').trim();
+  return value || null;
+};
+
+const resolveMessageProtocolNumber = (item: any): string | null => (
+  extractProtocolFromMetadata(item?.metadata) || extractProtocolTagFromText(String(item?.message || ''))
+);
+
+const sliceMessagesByProtocol = (items: any[], protocolNumber: string): any[] => {
+  const target = normalizeProtocolNumber(protocolNumber);
+  if (!target) return items;
+
+  const firstTaggedIndex = items.findIndex((item) => resolveMessageProtocolNumber(item) === target);
+  if (firstTaggedIndex < 0) {
+    return items.filter((item) => extractProtocolFromMetadata(item?.metadata) === target);
+  }
+
+  const nextProtocolIndex = items.findIndex((item, index) => {
+    if (index <= firstTaggedIndex) return false;
+    const protocol = resolveMessageProtocolNumber(item);
+    return Boolean(protocol && protocol !== target);
+  });
+
+  const sliceEnd = nextProtocolIndex >= 0 ? nextProtocolIndex : items.length;
+  const segment = items.slice(firstTaggedIndex, sliceEnd);
+  return segment.filter((item) => {
+    const protocol = resolveMessageProtocolNumber(item);
+    return !protocol || protocol === target;
+  });
+};
+
+const resolveProtocolClosedAt = (segment: any[]): Date | null => {
+  for (let i = segment.length - 1; i >= 0; i -= 1) {
+    const item = segment[i];
+    const text = String(item?.message || '').toLowerCase();
+    if (text.includes('atendimento encerrado')) {
+      return item?.createdAt || null;
+    }
+  }
+  return null;
 };
 
 async function getCurrentUserScope(request: any) {
@@ -351,6 +407,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     if (!scope) return reply.code(403).send({ error: 'User not associated with a company' });
 
     const { id } = request.params as { id: string };
+    const query = request.query as { protocolNumber?: string; includeAll?: string };
     const conversation = await prisma.whatsAppConversation.findFirst({
       where: {
         id,
@@ -369,6 +426,10 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       where: { conversationId: id },
       orderBy: { createdAt: 'asc' },
     });
+    const shouldIncludeAll = String(query?.includeAll || '').trim().toLowerCase() === 'true';
+    const targetProtocol = normalizeProtocolNumber(query?.protocolNumber)
+      || (!shouldIncludeAll ? normalizeProtocolNumber(conversation.humanProtocolNumber) : null);
+    const scopedItems = targetProtocol ? sliceMessagesByProtocol(items, targetProtocol) : items;
 
     const patientDetails = conversation.patientId
       ? await prisma.patient.findFirst({
@@ -434,7 +495,49 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         next: nextAppointment,
         recent: recentAppointments,
       },
-      items,
+      items: scopedItems,
+    };
+  });
+
+  app.get('/whatsapp/conversations/:id/protocols/:protocolNumber', {
+    preHandler: async (request) => { await request.jwtVerify(); },
+  }, async (request, reply) => {
+    const scope = await getCurrentUserScope(request);
+    if (!scope) return reply.code(403).send({ error: 'User not associated with a company' });
+
+    const { id, protocolNumber } = request.params as { id: string; protocolNumber: string };
+    const normalizedProtocol = normalizeProtocolNumber(protocolNumber);
+    if (!normalizedProtocol) return reply.code(400).send({ error: 'Protocol number is required' });
+
+    const conversation = await prisma.whatsAppConversation.findFirst({
+      where: {
+        id,
+        branchId: { in: scope.branchIds },
+      },
+    });
+
+    if (!conversation) return reply.code(404).send({ error: 'Conversation not found' });
+
+    const operatorConfig = await getCurrentOperatorConfig(scope.currentUser.id);
+    if (operatorConfig?.flowKeys?.length && conversation.humanFlowKey && !operatorConfig.flowKeys.includes(conversation.humanFlowKey)) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    const items = await prisma.whatsAppConversationMessage.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: 'asc' },
+    });
+    const scopedItems = sliceMessagesByProtocol(items, normalizedProtocol);
+
+    return {
+      conversation,
+      protocol: {
+        number: normalizedProtocol,
+        startedAt: scopedItems[0]?.createdAt || null,
+        closedAt: resolveProtocolClosedAt(scopedItems)
+          || (conversation.humanProtocolNumber === normalizedProtocol ? conversation.humanProtocolClosedAt : null),
+      },
+      items: scopedItems,
     };
   });
 
@@ -523,6 +626,9 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         authorType: 'SYSTEM',
         authorUserId: scope.currentUser.id,
         authorName: scope.currentUser.name,
+        metadata: conversation.humanProtocolNumber
+          ? { protocolNumber: conversation.humanProtocolNumber }
+          : undefined,
         message: previousOperatorName && takeover
           ? `${queueMessage}\nOperador anterior: ${previousOperatorName}.`
           : queueMessage,
@@ -539,7 +645,10 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         authorUserId: scope.currentUser.id,
         authorName: scope.currentUser.name,
         providerMessageId: sendResult.messageId || null,
-        metadata: sendResult.messageId ? { event: 'operator-claim-greeting' } : undefined,
+        metadata: {
+          ...(sendResult.messageId ? { event: 'operator-claim-greeting' } : {}),
+          ...(conversation.humanProtocolNumber ? { protocolNumber: conversation.humanProtocolNumber } : {}),
+        },
         message: greetingMessage,
       },
     });
@@ -603,6 +712,9 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         authorUserId: scope.currentUser.id,
         authorName: scope.currentUser.name,
         providerMessageId: sendResult.messageId || null,
+        metadata: conversation.humanProtocolNumber
+          ? { protocolNumber: conversation.humanProtocolNumber }
+          : undefined,
         message: formattedMessage,
       },
     });
@@ -671,6 +783,9 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         authorType: 'SYSTEM',
         authorUserId: scope.currentUser.id,
         authorName: scope.currentUser.name,
+        metadata: conversation.humanProtocolNumber
+          ? { protocolNumber: conversation.humanProtocolNumber, event: 'protocol-closed' }
+          : { event: 'protocol-closed' },
         message: `[Protocolo ${conversation.humanProtocolNumber || '-'}] Atendimento encerrado.\n${closingMessage}`,
       },
     });

@@ -906,6 +906,7 @@ async function recordConversationMessage(params: {
   branchId: string;
   phone: string;
   flowKey?: string | null;
+  protocolNumber?: string | null;
   authorType: 'PATIENT' | 'BOT' | 'OPERATOR' | 'SYSTEM';
   authorUserId?: string | null;
   authorName?: string | null;
@@ -915,6 +916,14 @@ async function recordConversationMessage(params: {
 }) {
   const normalizedMessage = String(params.message || '').trim();
   if (!normalizedMessage) return null;
+  const normalizedProtocolNumber = String(params.protocolNumber || '').trim();
+  const baseMetadata = (params.metadata && typeof params.metadata === 'object')
+    ? { ...params.metadata }
+    : {};
+  const mergedMetadata = normalizedProtocolNumber
+    ? { ...baseMetadata, protocolNumber: normalizedProtocolNumber }
+    : baseMetadata;
+  const hasMetadata = Object.keys(mergedMetadata).length > 0;
 
   return prisma.whatsAppConversationMessage.create({
     data: {
@@ -926,7 +935,7 @@ async function recordConversationMessage(params: {
       authorUserId: params.authorUserId || null,
       authorName: params.authorName || null,
       providerMessageId: params.providerMessageId || null,
-      metadata: params.metadata || undefined,
+      metadata: hasMetadata ? mergedMetadata : undefined,
       message: normalizedMessage,
     },
   });
@@ -1241,6 +1250,7 @@ async function openHumanHandoffConversation(params: {
     branchId: params.branchId,
     phone: params.phone,
     flowKey: params.flowKey,
+    protocolNumber,
     authorType: 'SYSTEM',
     authorName: 'Sistema',
     message: `[Protocolo ${protocolNumber}] Conversa encaminhada para atendimento humano.\n[Fila humana] ${params.flowLabel}\n${params.description}`,
@@ -2809,6 +2819,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
     branchId: conversationContext.selectedBranchId || branchConfig.branchId,
     phone,
     flowKey: conversation.humanFlowKey || null,
+    protocolNumber: conversation.humanProtocolNumber || undefined,
     authorType: 'PATIENT',
     authorName: patient?.name || conversation.patientName || 'Paciente',
     message: text,

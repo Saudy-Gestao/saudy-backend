@@ -247,6 +247,9 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
             : messageEvent === 'SENT'
               ? 'Mensagem enviada ao provedor.'
               : 'Paciente está digitando.';
+        const conversationMessageProtocol = String((conversationMessage.metadata as any)?.protocolNumber || '').trim()
+          || String(conversationMessage.conversation?.humanProtocolNumber || '').trim()
+          || null;
 
         await prisma.whatsAppConversationMessage.create({
           data: {
@@ -259,6 +262,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
             metadata: {
               event: messageEvent,
               providerMessageId,
+              ...(conversationMessageProtocol ? { protocolNumber: conversationMessageProtocol } : {}),
             },
             message: `[Evento] ${eventLabel}`,
           },
