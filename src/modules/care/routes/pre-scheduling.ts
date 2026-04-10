@@ -431,7 +431,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     const publicBase = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
     const publicUrl = `${publicBase}/pre-agendamento/documentos/${token}`;
     const mockMessage = [
-      `Olá ${flow.patientName || appointment.patientName || 'paciente'}!`,
+      `Olá, ${flow.patientName || appointment.patientName || 'paciente'}!`,
       anamnesisTemplate
         ? 'Para adiantar seu atendimento, valide sua identidade e envie seus documentos, além de responder a anamnese neste link:'
         : 'Para adiantar seu atendimento, envie seus documentos neste link:',
