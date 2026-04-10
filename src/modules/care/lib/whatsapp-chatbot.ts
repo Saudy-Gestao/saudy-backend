@@ -60,6 +60,7 @@ type ChatbotInput = {
   phone: string;
   text: string;
   metadata?: Record<string, unknown>;
+  branchIdHint?: string;
 };
 
 type ChatbotResponse = {
@@ -533,7 +534,22 @@ const resolveOptionSelection = (
   }) || null;
 };
 
-async function resolveBranchConfig(): Promise<BranchConfig | null> {
+async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig | null> {
+  const preferredBranchId = String(branchIdHint || '').trim();
+  if (preferredBranchId) {
+    const branch = await prisma.branch.findUnique({ where: { id: preferredBranchId } });
+    const config = await prisma.whatsAppConfig.findUnique({ where: { branchId: preferredBranchId } });
+    if (config?.isActive) {
+      return {
+        branchId: preferredBranchId,
+        branchName: branch?.tradeName || null,
+        apiKey: config.accountSid,
+        appName: config.authToken,
+        sourceNumber: config.fromNumber,
+      };
+    }
+  }
+
   if (CHATBOT_BRANCH_ID) {
     const branch = await prisma.branch.findUnique({ where: { id: CHATBOT_BRANCH_ID } });
     const config = await prisma.whatsAppConfig.findUnique({ where: { branchId: CHATBOT_BRANCH_ID } });
@@ -2790,7 +2806,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
   const phone = formatPhoneForLookup(input.phone);
   if (!text || !phone) return { handled: false };
 
-  const branchConfig = await resolveBranchConfig();
+  const branchConfig = await resolveBranchConfig(input.branchIdHint);
   if (!branchConfig?.branchId) return { handled: false };
 
   let patient = await lookupPatient(branchConfig.branchId, phone);

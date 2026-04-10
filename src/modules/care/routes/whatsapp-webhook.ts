@@ -57,6 +57,33 @@ const normalizePhoneForConversation = (value: unknown) => {
   return digits.length > 11 ? digits.slice(-11) : digits;
 };
 
+const normalizePhoneForConfig = (value: unknown) => {
+  return String(value || '').replace(/\D/g, '');
+};
+
+async function resolveBranchHintFromDestination(destination: unknown): Promise<string | null> {
+  const normalizedDestination = normalizePhoneForConfig(destination);
+  if (!normalizedDestination) return null;
+
+  const configs = await prisma.whatsAppConfig.findMany({
+    where: { isActive: true },
+    select: {
+      branchId: true,
+      fromNumber: true,
+    },
+  });
+
+  const match = configs.find((config) => {
+    const fromDigits = normalizePhoneForConfig(config.fromNumber);
+    if (!fromDigits) return false;
+    return fromDigits === normalizedDestination
+      || fromDigits.endsWith(normalizedDestination)
+      || normalizedDestination.endsWith(fromDigits);
+  });
+
+  return match?.branchId || null;
+}
+
 const makeProtocolNumber = () => {
   const date = new Date();
   const y = date.getFullYear();
@@ -421,6 +448,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
     const source = normalizePhoneForConversation(inboundPayload?.source || inboundPayload?.sender?.phone || '');
+    const destination = inboundPayload?.destination || body?.destination || '';
     const messageEvent = parseWebhookMessageEvent(body, inboundPayload);
 
     request.log.info({
@@ -553,10 +581,12 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
 
     if (!action || !originatingLog?.appointmentId || !originatingLog.branchId) {
       if (source && inboundText) {
+        const chatbotBranchHint = await resolveBranchHintFromDestination(destination);
         const chatbotResult = await handleWhatsAppChatbot({
           phone: source,
           text: inboundText,
           metadata: inboundMedia.metadata || undefined,
+          branchIdHint: chatbotBranchHint || undefined,
         });
 
         if (chatbotResult.handled) {
