@@ -208,11 +208,18 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     // Buscar URL da mídia se temos mediaId mas não temos URL
     if (inboundMedia.metadata?.mediaId && !inboundMedia.metadata?.mediaUrl) {
       try {
-        const gupshup = new GupshupService();
-        const mediaData = await gupshup.getMediaUrl(String(inboundMedia.metadata.mediaId));
-        if (mediaData?.url) {
-          inboundMedia.metadata.mediaUrl = mediaData.url;
-          request.log.info({ mediaId: inboundMedia.metadata.mediaId, mediaUrl: mediaData.url }, 'Fetched media URL from Gupshup');
+        // Tentar obter configuração do Gupshup das variáveis de ambiente
+        if (process.env.GUPSHUP_API_KEY && process.env.GUPSHUP_APP_NAME && process.env.GUPSHUP_SOURCE_NUMBER) {
+          const gupshup = new GupshupService({
+            apiKey: String(process.env.GUPSHUP_API_KEY),
+            appName: String(process.env.GUPSHUP_APP_NAME),
+            sourceNumber: String(process.env.GUPSHUP_SOURCE_NUMBER),
+          });
+          const mediaData = await gupshup.getMediaUrl(String(inboundMedia.metadata.mediaId));
+          if (mediaData?.url) {
+            inboundMedia.metadata.mediaUrl = mediaData.url;
+            request.log.info({ mediaId: inboundMedia.metadata.mediaId, mediaUrl: mediaData.url }, 'Fetched media URL from Gupshup');
+          }
         }
       } catch (error) {
         request.log.error({ error, mediaId: inboundMedia.metadata.mediaId }, 'Failed to fetch media URL from Gupshup');
