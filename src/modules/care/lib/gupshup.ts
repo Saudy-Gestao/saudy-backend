@@ -251,6 +251,30 @@ export class GupshupService {
       throw new Error(error.response?.data?.message || error.message || 'Erro ao consultar status');
     }
   }
+
+  /**
+   * Busca a URL da mídia pelo mediaId (wamid)
+   * Gupshup API: GET /app/media/{mediaId}
+   */
+  async getMediaUrl(mediaId: string): Promise<{ url: string } | null> {
+    try {
+      // Remove prefixo se existir
+      const cleanMediaId = mediaId.replace(/^wamid\./, '');
+      
+      const response = await this.client.get(`/media/${cleanMediaId}`);
+      
+      console.log('[gupshup] getMediaUrl response', response.status, JSON.stringify(response.data));
+      
+      if (response.data?.url) {
+        return { url: response.data.url };
+      }
+      
+      return null;
+    } catch (error: any) {
+      console.error('[gupshup] getMediaUrl error', error.response?.status, JSON.stringify(error.response?.data));
+      return null;
+    }
+  }
 }
 
 export default GupshupService;

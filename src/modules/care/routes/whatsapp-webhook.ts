@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
+import GupshupService from '../lib/gupshup';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -203,6 +204,21 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const body = request.body as any;
     const inboundPayload = body?.payload || {};
     const inboundMedia = extractInboundMedia(inboundPayload);
+    
+    // Buscar URL da mídia se temos mediaId mas não temos URL
+    if (inboundMedia.metadata?.mediaId && !inboundMedia.metadata?.mediaUrl) {
+      try {
+        const gupshup = new GupshupService();
+        const mediaData = await gupshup.getMediaUrl(String(inboundMedia.metadata.mediaId));
+        if (mediaData?.url) {
+          inboundMedia.metadata.mediaUrl = mediaData.url;
+          request.log.info({ mediaId: inboundMedia.metadata.mediaId, mediaUrl: mediaData.url }, 'Fetched media URL from Gupshup');
+        }
+      } catch (error) {
+        request.log.error({ error, mediaId: inboundMedia.metadata.mediaId }, 'Failed to fetch media URL from Gupshup');
+      }
+    }
+    
     const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
     const source = String(inboundPayload?.source || inboundPayload?.sender?.phone || '').replace(/\D/g, '');
