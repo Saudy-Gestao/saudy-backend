@@ -107,6 +107,7 @@ export type HumanFlowDefinition = {
 
 export const HUMAN_FLOWS: HumanFlowDefinition[] = [
   { key: 'DUVIDAS', label: 'Dúvidas' },
+  { key: 'CONFIRMACAO_REAGENDAMENTO', label: 'Reagendamento de confirmação' },
   { key: 'CONVENIO_NAO_ENCONTRADO', label: 'Convênio não encontrado' },
   { key: 'PROCEDIMENTO_NAO_ENCONTRADO', label: 'Procedimento não encontrado' },
   { key: 'PROCEDIMENTO_INVALIDO', label: 'Procedimento inválido' },

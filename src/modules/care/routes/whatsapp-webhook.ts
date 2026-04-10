@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import type { Prisma } from '@prisma/client';
+import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
@@ -38,6 +39,25 @@ const parseConfirmationAction = (payload: any): 'CONFIRMED' | 'RESCHEDULE' | nul
   }
 
   return null;
+};
+
+const RESCHEDULE_CONFIRMATION_FLOW = {
+  key: 'CONFIRMACAO_REAGENDAMENTO',
+  label: 'Reagendamento de confirmação',
+} as const;
+
+const normalizePhoneForConversation = (value: unknown) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits.length > 11 ? digits.slice(-11) : digits;
+};
+
+const makeProtocolNumber = () => {
+  const date = new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const suffix = randomBytes(3).toString('hex').toUpperCase();
+  return `WA-${y}${m}${d}-${suffix}`;
 };
 
 const pickFirstString = (value: unknown, keys: string[]): string => {
@@ -90,27 +110,20 @@ const extractInboundMedia = (payload: any): {
   summary: string;
   metadata?: Record<string, unknown>;
 } => {
-  // Log the full payload to debug
-  console.log('[extractInboundMedia] Full payload:', JSON.stringify(payload, null, 2));
-  
   // Try to find media in the standard Gupshup structure first: payload.payload for inbound media
   let source = null;
-  
+
   // Gupshup inbound media comes in payload.payload structure
   if (payload?.payload?.url) {
-    console.log('[extractInboundMedia] Found media in payload.payload');
     source = payload.payload;
   } else {
     // Fallback to recursive search
     source = findMediaCandidate(payload) || findMediaCandidate(payload?.payload) || findMediaCandidate(payload?.message);
   }
-  
+
   if (!source) {
-    console.log('[extractInboundMedia] No media source found');
     return { summary: '' };
   }
-
-  console.log('[extractInboundMedia] Media source:', JSON.stringify(source, null, 2));
 
   const rawType = pickFirstString(source, ['type', 'mediaType', 'mimeType', 'mimetype', 'contentType']).toLowerCase();
   const mimeType = pickFirstString(source, ['mimeType', 'mimetype', 'contentType']) || rawType;
@@ -118,8 +131,6 @@ const extractInboundMedia = (payload: any): {
   const fileName = pickFirstString(source, ['caption', 'filename', 'fileName', 'name', 'title']);
   const mediaId = pickFirstString(source, ['mediaId', 'id']);
   const urlExpiry = source.urlExpiry || null;
-
-  console.log('[extractInboundMedia] Extracted - mediaUrl:', mediaUrl, 'mediaId:', mediaId, 'urlExpiry:', urlExpiry);
 
   const inferredType = rawType.includes('image') || mimeType.includes('image')
     ? 'image'
@@ -154,6 +165,139 @@ const appendObservation = (existing: string | null | undefined, note: string) =>
   const trimmedExisting = String(existing || '').trim();
   return trimmedExisting ? `${trimmedExisting}\n${note}` : note;
 };
+
+async function queueRescheduleHumanConversation(tx: Prisma.TransactionClient, params: {
+  branchId: string;
+  phone: string;
+  appointmentId: string;
+  patientId?: string | null;
+  patientName?: string | null;
+}) {
+  const phone = normalizePhoneForConversation(params.phone);
+  if (!phone) return null;
+
+  const now = new Date();
+  const existing = await tx.whatsAppConversation.findUnique({
+    where: {
+      branchId_phone: {
+        branchId: params.branchId,
+        phone,
+      },
+    },
+    select: {
+      id: true,
+      humanStatus: true,
+      humanFlowKey: true,
+      humanProtocolNumber: true,
+      patientId: true,
+      patientName: true,
+    },
+  });
+
+  const hasActiveProtocol = Boolean(
+    existing
+    && existing.humanStatus
+    && existing.humanStatus !== 'CLOSED'
+    && existing.humanProtocolNumber,
+  );
+
+  const protocolNumber = hasActiveProtocol
+    ? String(existing?.humanProtocolNumber)
+    : makeProtocolNumber();
+
+  const conversation = await tx.whatsAppConversation.upsert({
+    where: {
+      branchId_phone: {
+        branchId: params.branchId,
+        phone,
+      },
+    },
+    create: {
+      branchId: params.branchId,
+      phone,
+      patientId: params.patientId || null,
+      patientName: params.patientName || null,
+      state: 'HANDED_OFF',
+      selectedService: 'REAGENDAMENTO',
+      context: {},
+      lastInboundMessage: 'Reagendar',
+      lastOutboundMessage: 'Em breve um atendente entrará em contato para realizar seu reagendamento.',
+      humanStatus: 'QUEUED',
+      humanFlowKey: RESCHEDULE_CONFIRMATION_FLOW.key,
+      humanFlowLabel: RESCHEDULE_CONFIRMATION_FLOW.label,
+      humanAssignedUserId: null,
+      humanAssignedUserName: null,
+      humanAssignedAt: null,
+      humanClosedAt: null,
+      humanClosedByUserId: null,
+      humanClosedByUserName: null,
+      humanProtocolNumber: protocolNumber,
+      humanProtocolStartedAt: now,
+      humanProtocolClosedAt: null,
+      humanIdleWarningSentAt: null,
+      humanLastOperatorMessageAt: null,
+      humanLastPatientMessageAt: now,
+      lastInteractionAt: now,
+    },
+    update: {
+      patientId: params.patientId || existing?.patientId || null,
+      patientName: params.patientName || existing?.patientName || null,
+      lastInboundMessage: 'Reagendar',
+      lastOutboundMessage: 'Em breve um atendente entrará em contato para realizar seu reagendamento.',
+      humanLastPatientMessageAt: now,
+      lastInteractionAt: now,
+      ...(hasActiveProtocol ? {} : {
+        state: 'HANDED_OFF',
+        selectedService: 'REAGENDAMENTO',
+        humanStatus: 'QUEUED',
+        humanFlowKey: RESCHEDULE_CONFIRMATION_FLOW.key,
+        humanFlowLabel: RESCHEDULE_CONFIRMATION_FLOW.label,
+        humanAssignedUserId: null,
+        humanAssignedUserName: null,
+        humanAssignedAt: null,
+        humanClosedAt: null,
+        humanClosedByUserId: null,
+        humanClosedByUserName: null,
+        humanProtocolNumber: protocolNumber,
+        humanProtocolStartedAt: now,
+        humanProtocolClosedAt: null,
+        humanIdleWarningSentAt: null,
+        humanLastOperatorMessageAt: null,
+      }),
+    },
+  });
+
+  const flowKey = hasActiveProtocol
+    ? (conversation.humanFlowKey || RESCHEDULE_CONFIRMATION_FLOW.key)
+    : RESCHEDULE_CONFIRMATION_FLOW.key;
+
+  const systemMessage = hasActiveProtocol
+    ? `[Protocolo ${protocolNumber}] Paciente solicitou reagendamento via confirmação automática.`
+    : `[Protocolo ${protocolNumber}] Conversa encaminhada para atendimento humano.\n[Fila humana] ${RESCHEDULE_CONFIRMATION_FLOW.label}\nPaciente solicitou reagendamento pela confirmação automática de consulta.`;
+
+  await tx.whatsAppConversationMessage.create({
+    data: {
+      conversationId: conversation.id,
+      branchId: params.branchId,
+      phone,
+      flowKey,
+      authorType: 'SYSTEM',
+      authorName: 'Sistema',
+      metadata: {
+        protocolNumber,
+        appointmentId: params.appointmentId,
+        event: 'reschedule-request',
+      },
+      message: systemMessage,
+    },
+  });
+
+  return {
+    conversationId: conversation.id,
+    protocolNumber,
+    reusedProtocol: hasActiveProtocol,
+  };
+}
 
 const extractMediaSummary = (payload: any): string => {
   return extractInboundMedia(payload).summary;
@@ -229,7 +373,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     
     const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
-    const source = String(inboundPayload?.source || inboundPayload?.sender?.phone || '').replace(/\D/g, '');
+    const source = normalizePhoneForConversation(inboundPayload?.source || inboundPayload?.sender?.phone || '');
     const messageEvent = parseWebhookMessageEvent(body, inboundPayload);
 
     request.log.info({
@@ -399,6 +543,8 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         id: true,
         status: true,
         observations: true,
+        patientId: true,
+        patientName: true,
       },
     });
 
@@ -413,7 +559,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
 
     const timestamp = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const rescheduleQueue = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.whatsAppMessageLog.update({
         where: { id: originatingLog!.id },
         data: {
@@ -432,7 +578,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
             ),
           },
         });
-        return;
+        return null;
       }
 
       await tx.appointment.update({
@@ -443,6 +589,14 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
             `[WhatsApp] Paciente solicitou reagendamento em ${timestamp}.`,
           ),
         },
+      });
+
+      return queueRescheduleHumanConversation(tx, {
+        branchId: originatingLog.branchId,
+        phone: source,
+        appointmentId: appointment.id,
+        patientId: appointment.patientId || null,
+        patientName: appointment.patientName || null,
       });
     });
 
@@ -458,6 +612,9 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       action,
       appointmentId: originatingLog.appointmentId,
       originatingLogId: originatingLog.id,
+      queueConversationId: rescheduleQueue?.conversationId || null,
+      queueProtocolNumber: rescheduleQueue?.protocolNumber || null,
+      queueReusedProtocol: rescheduleQueue?.reusedProtocol || false,
     }, 'Processed WhatsApp confirmation reply');
 
     return {
