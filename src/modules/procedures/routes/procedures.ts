@@ -44,6 +44,61 @@ const normalizeProcedureMaterials = (data: any) => {
     .filter(Boolean) as { inventoryItemId: string; quantity: number }[];
 };
 
+const normalizeProcedureMaterialKits = (data: any) => {
+  if (!Array.isArray(data?.procedureMaterialKits)) return null;
+
+  return data.procedureMaterialKits
+    .map((kit: any, index: number) => {
+      const name = String(kit?.name || '').trim() || `Kit ${index + 1}`;
+      const insuranceName = String(kit?.insuranceName || '').trim() || null;
+      const isDefault = Boolean(kit?.isDefault) || !insuranceName;
+      const isActive = kit?.isActive === undefined ? true : Boolean(kit.isActive);
+      const items = Array.isArray(kit?.items)
+        ? kit.items
+          .map((item: any) => {
+            const inventoryItemId = String(item?.inventoryItemId || '').trim();
+            const quantity = Number(item?.quantity);
+            if (!inventoryItemId || !Number.isFinite(quantity) || quantity <= 0) return null;
+            return {
+              inventoryItemId,
+              quantity: Math.floor(quantity),
+            };
+          })
+          .filter(Boolean)
+        : [];
+
+      if (items.length === 0) return null;
+
+      return {
+        name,
+        insuranceName,
+        isDefault,
+        isActive,
+        items,
+      };
+    })
+    .filter(Boolean) as Array<{
+      name: string;
+      insuranceName: string | null;
+      isDefault: boolean;
+      isActive: boolean;
+      items: Array<{ inventoryItemId: string; quantity: number }>;
+    }>;
+};
+
+const normalizeProcedureKitBindings = (data: any) => {
+  if (!Array.isArray(data?.procedureKitBindings)) return null;
+  return data.procedureKitBindings
+    .map((binding: any) => {
+      const inventoryKitId = String(binding?.inventoryKitId || '').trim();
+      const insuranceName = String(binding?.insuranceName || '').trim() || null;
+      const isActive = binding?.isActive === undefined ? true : Boolean(binding.isActive);
+      if (!inventoryKitId) return null;
+      return { inventoryKitId, insuranceName, isActive };
+    })
+    .filter(Boolean) as Array<{ inventoryKitId: string; insuranceName: string | null; isActive: boolean }>;
+};
+
 const normalizeProcedureAppointmentType = (value: unknown): string => {
   const normalized = String(value || '').trim().toUpperCase();
   return normalized === 'EXAME' ? 'EXAME' : 'CONSULTA';
@@ -112,7 +167,30 @@ export default async function procedureRoutes(app: FastifyInstance) {
         take: limit,
         skip: offset,
         orderBy: { createdAt: "desc" },
-        include: { doctors: true, materials: { include: { inventoryItem: true } } },
+        include: {
+          doctors: true,
+          materials: { include: { inventoryItem: true } },
+          kitBindings: {
+            where: { isActive: true },
+            include: {
+              inventoryKit: {
+                include: {
+                  items: { include: { inventoryItem: true } },
+                },
+              },
+            },
+          },
+          materialKits: {
+            where: { isActive: true },
+            include: {
+              items: { include: { inventoryItem: true } },
+            },
+            orderBy: [
+              { insuranceName: 'asc' },
+              { name: 'asc' },
+            ],
+          },
+        },
       }),
       prisma.procedure.count({ where }),
     ]);
@@ -133,7 +211,30 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const { id } = request.params as any;
     const item = await prisma.procedure.findFirst({
       where: { id, branchId },
-      include: { doctors: true, materials: { include: { inventoryItem: true } } },
+      include: {
+        doctors: true,
+        materials: { include: { inventoryItem: true } },
+        kitBindings: {
+          where: { isActive: true },
+          include: {
+            inventoryKit: {
+              include: {
+                items: { include: { inventoryItem: true } },
+              },
+            },
+          },
+        },
+        materialKits: {
+          where: { isActive: true },
+          include: {
+            items: { include: { inventoryItem: true } },
+          },
+          orderBy: [
+            { insuranceName: 'asc' },
+            { name: 'asc' },
+          ],
+        },
+      },
     });
     if (!item) return reply.code(404).send({ error: "Procedure not found" });
     return item;
@@ -178,6 +279,39 @@ export default async function procedureRoutes(app: FastifyInstance) {
               },
             },
           },
+          procedureMaterialKits: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                insuranceName: { type: "string" },
+                isDefault: { type: "boolean" },
+                isActive: { type: "boolean" },
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      inventoryItemId: { type: "string" },
+                      quantity: { type: "number" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          procedureKitBindings: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                inventoryKitId: { type: "string" },
+                insuranceName: { type: "string" },
+                isActive: { type: "boolean" },
+              },
+            },
+          },
         },
       },
       response: {
@@ -192,6 +326,8 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const data = request.body as any;
     const doctorLinks = normalizeDoctorLinks(data) || [];
     const procedureMaterials = normalizeProcedureMaterials(data) || [];
+    const procedureMaterialKits = normalizeProcedureMaterialKits(data) || [];
+    const procedureKitBindings = normalizeProcedureKitBindings(data) || [];
     const acceptedInsurances = normalizeStringArray(data.acceptedInsurances) || [];
     const modalities = normalizeStringArray(data.modalities) || [];
     const acceptsInsurance = Boolean(data.acceptsInsurance);
@@ -232,8 +368,55 @@ export default async function procedureRoutes(app: FastifyInstance) {
                 },
               }
             : undefined,
+          materialKits: procedureMaterialKits.length
+            ? {
+                create: procedureMaterialKits.map((kit) => ({
+                  name: kit.name,
+                  insuranceName: kit.insuranceName,
+                  isDefault: kit.isDefault,
+                  isActive: kit.isActive,
+                  items: {
+                    createMany: {
+                      data: kit.items,
+                      skipDuplicates: true,
+                    },
+                  },
+                })),
+              }
+            : undefined,
+          kitBindings: procedureKitBindings.length
+            ? {
+                createMany: {
+                  data: procedureKitBindings,
+                  skipDuplicates: true,
+                },
+              }
+            : undefined,
         },
-        include: { doctors: true, materials: { include: { inventoryItem: true } } },
+        include: {
+          doctors: true,
+          materials: { include: { inventoryItem: true } },
+          kitBindings: {
+            where: { isActive: true },
+            include: {
+              inventoryKit: {
+                include: {
+                  items: { include: { inventoryItem: true } },
+                },
+              },
+            },
+          },
+          materialKits: {
+            where: { isActive: true },
+            include: {
+              items: { include: { inventoryItem: true } },
+            },
+            orderBy: [
+              { insuranceName: 'asc' },
+              { name: 'asc' },
+            ],
+          },
+        },
       });
 
       return reply.code(201).send(item);
@@ -263,6 +446,8 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const data = request.body as any;
     const doctorLinks = normalizeDoctorLinks(data);
     const procedureMaterials = normalizeProcedureMaterials(data);
+    const procedureMaterialKits = normalizeProcedureMaterialKits(data);
+    const procedureKitBindings = normalizeProcedureKitBindings(data);
 
     try {
       const existing = await prisma.procedure.findFirst({ where: { id, branchId } });
@@ -332,10 +517,92 @@ export default async function procedureRoutes(app: FastifyInstance) {
         }
       }
 
+      if (procedureMaterialKits !== null) {
+        actions.push(prisma.procedureMaterialKit.deleteMany({ where: { procedureId: id } }));
+        if (procedureMaterialKits.length) {
+          actions.push(
+            prisma.procedureMaterialKit.createMany({
+              data: procedureMaterialKits.map((kit) => ({
+                procedureId: id,
+                name: kit.name,
+                insuranceName: kit.insuranceName,
+                isDefault: kit.isDefault,
+                isActive: kit.isActive,
+              })),
+              skipDuplicates: false,
+            }),
+          );
+        }
+      }
+
+      if (procedureKitBindings !== null) {
+        actions.push(prisma.procedureKitBinding.deleteMany({ where: { procedureId: id } }));
+        if (procedureKitBindings.length) {
+          actions.push(
+            prisma.procedureKitBinding.createMany({
+              data: procedureKitBindings.map((binding) => ({
+                procedureId: id,
+                inventoryKitId: binding.inventoryKitId,
+                insuranceName: binding.insuranceName,
+                isActive: binding.isActive,
+              })),
+              skipDuplicates: true,
+            }),
+          );
+        }
+      }
+
       await prisma.$transaction(actions);
+
+      if (procedureMaterialKits !== null && procedureMaterialKits.length) {
+        const createdKits = await prisma.procedureMaterialKit.findMany({
+          where: { procedureId: id },
+          orderBy: { createdAt: 'asc' },
+        });
+
+        for (const createdKit of createdKits) {
+          const matched = procedureMaterialKits.find((kit) => (
+            kit.name === createdKit.name
+            && (kit.insuranceName || null) === (createdKit.insuranceName || null)
+          ));
+          if (!matched?.items?.length) continue;
+          await prisma.procedureMaterialKitItem.createMany({
+            data: matched.items.map((item) => ({
+              kitId: createdKit.id,
+              inventoryItemId: item.inventoryItemId,
+              quantity: item.quantity,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
       const item = await prisma.procedure.findFirst({
         where: { id, branchId },
-        include: { doctors: true, materials: { include: { inventoryItem: true } } },
+        include: {
+          doctors: true,
+          materials: { include: { inventoryItem: true } },
+          kitBindings: {
+            where: { isActive: true },
+            include: {
+              inventoryKit: {
+                include: {
+                  items: { include: { inventoryItem: true } },
+                },
+              },
+            },
+          },
+          materialKits: {
+            where: { isActive: true },
+            include: {
+              items: { include: { inventoryItem: true } },
+            },
+            orderBy: [
+              { insuranceName: 'asc' },
+              { name: 'asc' },
+            ],
+          },
+        },
       });
       return item;
     } catch (err: any) {

@@ -112,7 +112,7 @@ export const openapiSchemas = {
       expiryDate: { type: 'string', format: 'date' },
       notes: { type: 'string' },
     },
-    required: ['code', 'name', 'expiryDate'],
+    required: ['code', 'name'],
   },
   InventoryItemUpdate: {
     type: 'object',
