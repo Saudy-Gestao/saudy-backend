@@ -282,13 +282,9 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         const flow = flowByAppointmentId.get(String(appointment.id));
         const anamnesisTemplate = await resolveAnamnesisTemplateForAppointment(branchId, appointment);
         const itemStatus = String(flow?.status || 'PENDING').toUpperCase();
-        const hasPreAuthorization = Boolean(flow?.preAuthorizedAt);
-        const docsApproved = itemStatus === 'COMPLETED';
         const isTeleconsultation = isTeleconsultationAppointment(appointment);
         const teleconsultationLinkSent = Boolean(flow?.completedAt);
-        const isResolved = hasPreAuthorization
-          && docsApproved
-          && (!isTeleconsultation || teleconsultationLinkSent);
+        const isResolved = itemStatus === 'COMPLETED';
         return {
           id: String(appointment.id),
           appointmentId: String(appointment.id),
@@ -372,18 +368,20 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       return reply.code((ensured as any).statusCode).send({ error: (ensured as any).error });
     }
 
-    const { flow } = ensured as any;
+    const { flow, appointment } = ensured as any;
     if (flow?.preAuthorizedAt) {
       return reply.code(400).send({ error: 'Este agendamento já foi pré-autorizado' });
     }
+    const nextStatus = 'PRE_AUTHORIZED';
 
     const updatedFlow = await prisma.preSchedulingFlow.update({
       where: { id: flow.id },
       data: {
-        status: String(flow?.status || '').toUpperCase() === 'DOCUMENTS_RECEIVED' ? 'COMPLETED' : 'PRE_AUTHORIZED',
+        status: nextStatus,
         preAuthorizedAt: new Date(),
         guideNumber: guideNumber || flow.guideNumber || null,
         preAuthorizationNotes: notes || null,
+        completedAt: null,
       },
     });
 
@@ -687,23 +685,14 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Não há documentos ou anamnese respondida para revisar' });
     }
 
-    const isTeleconsultation = flow.appointment
-      ? isTeleconsultationAppointment(flow.appointment)
-      : false;
     const nextStatus = action === 'APPROVE'
-      ? (flow.preAuthorizedAt ? 'COMPLETED' : 'DOCUMENTS_RECEIVED')
+      ? 'DOCUMENTS_RECEIVED'
       : 'WAITING_PATIENT_DOCUMENTS';
     const updated = await prisma.preSchedulingFlow.update({
       where: { id: flow.id },
       data: {
         status: nextStatus,
-        completedAt: action === 'APPROVE'
-          ? (
-            flow.preAuthorizedAt
-              ? (isTeleconsultation ? null : new Date())
-              : null
-          )
-          : null,
+        completedAt: null,
       },
     });
 
