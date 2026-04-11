@@ -87,16 +87,89 @@ const collectPhoneCandidates = (value: unknown, candidates = new Set<string>()):
   return candidates;
 };
 
-async function resolveBranchHintFromPayload(payload: unknown, sourcePhone?: string): Promise<string | null> {
-  const sourceDigits = normalizePhoneForConfig(sourcePhone || '');
-  const candidateNumbers = Array.from(collectPhoneCandidates(payload)).filter((candidate) => {
-    if (!candidate) return false;
-    if (!sourceDigits) return true;
-    return candidate !== sourceDigits && candidate.slice(-11) !== sourceDigits.slice(-11);
+const uniqueBranchIds = (branchIds: Array<string | null | undefined>) => {
+  return Array.from(new Set(branchIds.map((value) => String(value || '').trim()).filter(Boolean)));
+};
+
+const findMatchingBranchIdsByConfigNumber = (
+  configs: Array<{ branchId: string; fromNumber: string }>,
+  candidateNumbers: string[],
+) => {
+  return uniqueBranchIds(configs.filter((config) => {
+    const fromDigits = normalizePhoneForConfig(config.fromNumber);
+    if (!fromDigits) return false;
+
+    return candidateNumbers.some((candidate) => (
+      fromDigits === candidate
+      || fromDigits.endsWith(candidate)
+      || candidate.endsWith(fromDigits)
+    ));
+  }).map((config) => config.branchId));
+};
+
+async function resolveBranchHintFromSourcePhone(
+  sourcePhone: string,
+  activeBranchIds: string[],
+): Promise<string | null> {
+  const phone = normalizePhoneForConversation(sourcePhone);
+  if (!phone || !activeBranchIds.length) return null;
+
+  const existingConversations = await prisma.whatsAppConversation.findMany({
+    where: {
+      branchId: { in: activeBranchIds },
+      phone,
+    },
+    select: {
+      branchId: true,
+      lastInteractionAt: true,
+    },
+    orderBy: { lastInteractionAt: 'desc' },
+    take: 5,
   });
 
-  if (!candidateNumbers.length) return null;
+  const conversationBranchIds = uniqueBranchIds(existingConversations.map((item: { branchId: string }) => item.branchId));
+  if (conversationBranchIds.length === 1) return conversationBranchIds[0];
 
+  const recentLogs = await prisma.whatsAppMessageLog.findMany({
+    where: {
+      branchId: { in: activeBranchIds },
+      patientPhone: { contains: phone },
+    },
+    select: {
+      branchId: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 10,
+  });
+
+  const logBranchIds = uniqueBranchIds(recentLogs.map((item: { branchId: string }) => item.branchId));
+  if (logBranchIds.length === 1) return logBranchIds[0];
+
+  const matchingPatients = await prisma.patient.findMany({
+    where: {
+      branchId: { in: activeBranchIds },
+      isActive: true,
+      OR: [
+        { cellphone: { contains: phone } },
+        { phone: { contains: phone } },
+      ],
+    },
+    select: {
+      branchId: true,
+      updatedAt: true,
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 10,
+  });
+
+  const patientBranchIds = uniqueBranchIds(matchingPatients.map((item: { branchId: string | null }) => item.branchId));
+  if (patientBranchIds.length === 1) return patientBranchIds[0];
+
+  return null;
+}
+
+async function resolveBranchHintFromPayload(payload: unknown, sourcePhone?: string): Promise<string | null> {
   const configs = await prisma.whatsAppConfig.findMany({
     where: { isActive: true },
     select: {
@@ -105,17 +178,24 @@ async function resolveBranchHintFromPayload(payload: unknown, sourcePhone?: stri
     },
   });
 
-  const match = configs.find((config: { branchId: string; fromNumber: string }) => {
-    const fromDigits = normalizePhoneForConfig(config.fromNumber);
-    if (!fromDigits) return false;
-    return candidateNumbers.some((candidate) => (
-      fromDigits === candidate
-      || fromDigits.endsWith(candidate)
-      || candidate.endsWith(fromDigits)
-    ));
+  const activeBranchIds = uniqueBranchIds(configs.map((config: { branchId: string }) => config.branchId));
+  const sourceDigits = normalizePhoneForConfig(sourcePhone || '');
+  const candidateNumbers = Array.from(collectPhoneCandidates(payload)).filter((candidate) => {
+    if (!candidate) return false;
+    if (!sourceDigits) return true;
+    return candidate !== sourceDigits && candidate.slice(-11) !== sourceDigits.slice(-11);
   });
 
-  return match?.branchId || null;
+  if (candidateNumbers.length) {
+    const matchingBranchIds = findMatchingBranchIdsByConfigNumber(configs, candidateNumbers);
+    if (matchingBranchIds.length === 1) return matchingBranchIds[0];
+  }
+
+  if (sourcePhone) {
+    return resolveBranchHintFromSourcePhone(sourcePhone, activeBranchIds);
+  }
+
+  return null;
 }
 
 const makeProtocolNumber = () => {
