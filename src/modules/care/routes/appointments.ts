@@ -8,6 +8,7 @@ import { publishAppointmentCreatedEvent, publishAppointmentNoShowEventIfNeeded }
 const COMPLETED_STATUSES = new Set(['REALIZADO', 'COMPLETED', 'FINALIZADO', 'ATENDIDO']);
 const CANCELED_STATUSES = new Set(['CANCELADO', 'CANCELED']);
 const NO_SHOW_STATUSES = new Set(['NAO_COMPARECEU', 'NÃƒO_COMPARECEU', 'NO_SHOW', 'NO-SHOW', 'AUSENTE', 'FALTOU']);
+const RESERVABLE_STATUSES = new Set(['AGENDADO', 'SCHEDULED', 'CONFIRMADO', 'CONFIRMED', 'EM ANDAMENTO', 'EM_ANDAMENTO', 'IN_PROGRESS']);
 
 const normalizeStatus = (status?: string | null) => String(status || '').trim().toUpperCase();
 
@@ -294,29 +295,258 @@ const recomputeInventoryItemStatus = async (tx: Prisma.TransactionClient, invent
   }
 };
 
-const applyProcedureMaterialStock = async (
+const normalizeKitKey = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLowerCase();
+
+const resolveProcedureMaterialRequirements = async (
   tx: Prisma.TransactionClient,
-  appointment: { branchId?: string | null; specialty?: string | null },
-  mode: 'consume' | 'revert',
+  appointment: { branchId?: string | null; specialty?: string | null; convenio?: string | null },
 ) => {
   const procedureName = String(appointment.specialty || '').trim();
-  if (!procedureName) return;
+  if (!procedureName) return { source: 'NONE', materials: [] as Array<{ inventoryItemId: string; quantity: number }> };
 
   const procedure = await tx.procedure.findFirst({
     where: {
       branchId: appointment.branchId || undefined,
       name: { equals: procedureName, mode: 'insensitive' },
     },
+    include: {
+      materials: true,
+      kitBindings: {
+        where: { isActive: true },
+        include: {
+          inventoryKit: {
+            include: { items: true },
+          },
+        },
+      },
+      materialKits: {
+        where: { isActive: true },
+        include: { items: true },
+      },
+    },
   });
-  if (!procedure) return;
+  if (!procedure) return { source: 'NONE', materials: [] as Array<{ inventoryItemId: string; quantity: number }> };
 
-  const materials = await tx.procedureMaterial.findMany({
-    where: { procedureId: procedure.id },
+  const normalizedInsurance = normalizeKitKey(appointment.convenio);
+  const kitBindings = Array.isArray((procedure as any).kitBindings) ? (procedure as any).kitBindings : [];
+  const insuranceBinding = normalizedInsurance
+    ? kitBindings.find((binding: any) => normalizeKitKey(binding.insuranceName) === normalizedInsurance)
+    : null;
+  const defaultBinding = kitBindings.find((binding: any) => !binding.insuranceName) || null;
+  const selectedBinding = insuranceBinding || defaultBinding;
+  if (selectedBinding?.inventoryKit?.items?.length) {
+    return {
+      source: `INVENTORY_KIT:${selectedBinding.inventoryKitId}`,
+      materials: selectedBinding.inventoryKit.items
+        .map((item: any) => ({
+          inventoryItemId: String(item.inventoryItemId || '').trim(),
+          quantity: Math.max(0, Number(item.quantity || 0)),
+        }))
+        .filter((item: any) => item.inventoryItemId && Number.isFinite(item.quantity) && item.quantity > 0),
+    };
+  }
+
+  const kits = Array.isArray(procedure.materialKits) ? procedure.materialKits : [];
+  const insuranceKit = normalizedInsurance
+    ? kits.find((kit: any) => normalizeKitKey(kit.insuranceName) === normalizedInsurance)
+    : null;
+  const defaultKit = kits.find((kit: any) => !kit.insuranceName && kit.isDefault)
+    || kits.find((kit: any) => !kit.insuranceName)
+    || null;
+  const selectedKit = insuranceKit || defaultKit;
+
+  if (selectedKit && Array.isArray(selectedKit.items) && selectedKit.items.length > 0) {
+    return {
+      source: `KIT:${selectedKit.id}`,
+      materials: selectedKit.items
+        .map((item: any) => ({
+          inventoryItemId: String(item.inventoryItemId || '').trim(),
+          quantity: Math.max(0, Number(item.quantity || 0)),
+        }))
+        .filter((item: any) => item.inventoryItemId && Number.isFinite(item.quantity) && item.quantity > 0),
+    };
+  }
+
+  const materials = Array.isArray(procedure.materials) ? procedure.materials : [];
+  return {
+    source: 'PROCEDURE_MATERIALS',
+    materials: materials
+      .map((item: any) => ({
+        inventoryItemId: String(item.inventoryItemId || '').trim(),
+        quantity: Math.max(0, Number(item.quantity || 0)),
+      }))
+      .filter((item: any) => item.inventoryItemId && Number.isFinite(item.quantity) && item.quantity > 0),
+  };
+};
+
+type InventoryConsumptionSnapshot = {
+  source: string;
+  materials: Array<{
+    inventoryItemId: string;
+    quantity: number;
+    consumedLots?: Array<{ lotId: string; lotCode?: string | null; quantity: number }>;
+  }>;
+};
+
+type InventoryReservationSnapshot = {
+  source: string;
+  materials: Array<{ inventoryItemId: string; quantity: number }>;
+};
+
+const reserveProcedureMaterialsSnapshot = async (
+  tx: Prisma.TransactionClient,
+  appointment: { branchId?: string | null; specialty?: string | null; convenio?: string | null },
+) => {
+  const resolved = await resolveProcedureMaterialRequirements(tx, appointment);
+  const materials = Array.isArray(resolved.materials) ? resolved.materials : [];
+  if (!materials.length) return null;
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  for (const material of materials) {
+    const item = await tx.inventoryItem.findUnique({ where: { id: material.inventoryItemId } });
+    if (!item) {
+      throw new Error(`Material não encontrado: ${material.inventoryItemId}`);
+    }
+
+    const lots = await tx.inventoryLot.findMany({
+      where: {
+        inventoryItemId: material.inventoryItemId,
+        quantity: { gt: 0 },
+        OR: [
+          { expiryDate: null },
+          { expiryDate: { gte: todayStart } },
+        ],
+      },
+      select: { quantity: true },
+    });
+
+    const availableFromLots = lots.reduce((sum: number, lot: any) => sum + Number(lot.quantity || 0), 0);
+    const available = lots.length > 0 ? availableFromLots : Number(item.quantity || 0);
+    if (available < material.quantity) {
+      const itemName = item.name || material.inventoryItemId;
+      throw new Error(`Estoque insuficiente para reservar material "${itemName}".`);
+    }
+  }
+
+  return {
+    source: resolved.source,
+    materials: materials.map((material) => ({
+      inventoryItemId: material.inventoryItemId,
+      quantity: material.quantity,
+    })),
+  } satisfies InventoryReservationSnapshot;
+};
+
+const consumeLotsByFefo = async (
+  tx: Prisma.TransactionClient,
+  inventoryItemId: string,
+  requiredQuantity: number,
+) => {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const availableLots = await tx.inventoryLot.findMany({
+    where: {
+      inventoryItemId,
+      quantity: { gt: 0 },
+      OR: [
+        { expiryDate: null },
+        { expiryDate: { gte: todayStart } },
+      ],
+    },
+    orderBy: [
+      { expiryDate: 'asc' },
+      { createdAt: 'asc' },
+    ],
   });
-  if (!materials.length) return;
+
+  if (!availableLots.length) {
+    return {
+      usedLots: false,
+      remaining: requiredQuantity,
+      consumedLots: [] as Array<{ lotId: string; lotCode?: string | null; quantity: number }>,
+    };
+  }
+
+  let remaining = requiredQuantity;
+  const consumedLots: Array<{ lotId: string; lotCode?: string | null; quantity: number }> = [];
+
+  for (const lot of availableLots) {
+    if (remaining <= 0) break;
+    const consumeQty = Math.min(Number(lot.quantity || 0), remaining);
+    if (consumeQty <= 0) continue;
+
+    const updated = await tx.inventoryLot.updateMany({
+      where: {
+        id: lot.id,
+        quantity: { gte: consumeQty },
+      },
+      data: {
+        quantity: { decrement: consumeQty },
+      },
+    });
+    if (updated.count === 0) continue;
+
+    consumedLots.push({
+      lotId: lot.id,
+      lotCode: lot.lotCode || null,
+      quantity: consumeQty,
+    });
+    remaining -= consumeQty;
+  }
+
+  return {
+    usedLots: true,
+    remaining,
+    consumedLots,
+  };
+};
+
+const applyProcedureMaterialStock = async (
+  tx: Prisma.TransactionClient,
+  appointment: { branchId?: string | null; specialty?: string | null; convenio?: string | null },
+  mode: 'consume' | 'revert',
+  snapshot?: InventoryConsumptionSnapshot | null,
+  options?: { actorUserId?: string | null; appointmentId?: string | null },
+) => {
+  const actorUserId = String(options?.actorUserId || '').trim() || null;
+  const appointmentId = String(options?.appointmentId || '').trim() || null;
+  let createdByName: string | null = null;
+  if (actorUserId) {
+    const [user, admin] = await Promise.all([
+      tx.user.findUnique({ where: { id: actorUserId }, select: { name: true } }),
+      tx.adminUser.findUnique({ where: { id: actorUserId }, select: { name: true } }),
+    ]);
+    createdByName = String(user?.name || admin?.name || '').trim() || null;
+  }
+
+  const resolved = mode === 'consume'
+    ? await resolveProcedureMaterialRequirements(tx, appointment)
+    : { source: snapshot?.source || 'UNKNOWN', materials: Array.isArray(snapshot?.materials) ? snapshot!.materials : [] };
+  const materials = Array.isArray(resolved.materials) ? resolved.materials : [];
+  if (!materials.length) return null;
 
   if (mode === 'consume') {
+    const snapshotMaterials: InventoryConsumptionSnapshot['materials'] = [];
+
     for (const material of materials) {
+      const before = await tx.inventoryItem.findUnique({ where: { id: material.inventoryItemId } });
+      if (!before) {
+        throw new Error(`Material não encontrado: ${material.inventoryItemId}`);
+      }
+
+      const fefo = await consumeLotsByFefo(tx, material.inventoryItemId, material.quantity);
+      if (fefo.usedLots && fefo.remaining > 0) {
+        const itemName = before?.name || material.inventoryItemId;
+        throw new Error(`Estoque insuficiente em lotes válidos para material "${itemName}".`);
+      }
+
       const updated = await tx.inventoryItem.updateMany({
         where: {
           id: material.inventoryItemId,
@@ -333,18 +563,83 @@ const applyProcedureMaterialStock = async (
         throw new Error(`Estoque insuficiente para material "${name}".`);
       }
 
+      const after = await tx.inventoryItem.findUnique({ where: { id: material.inventoryItemId } });
+      if (after) {
+        const lotsNote = fefo.consumedLots.length
+          ? `lots:${fefo.consumedLots.map((lot) => `${lot.lotCode || lot.lotId}(${lot.quantity})`).join(',')}`
+          : null;
+        await tx.inventoryMovement.create({
+          data: {
+            inventoryItemId: material.inventoryItemId,
+            type: 'EXIT',
+            quantity: material.quantity,
+            reason: 'Consumo automático por conclusão do atendimento',
+            notes: [appointmentId ? `appointment:${appointmentId}` : null, `source:${resolved.source}`, lotsNote].filter(Boolean).join(' | ') || null,
+            previousQty: Number(before.quantity || 0),
+            resultingQty: Number(after.quantity || 0),
+            createdByUserId: actorUserId,
+            createdByName,
+          },
+        });
+      }
+
       await recomputeInventoryItemStatus(tx, material.inventoryItemId);
+
+      snapshotMaterials.push({
+        inventoryItemId: material.inventoryItemId,
+        quantity: material.quantity,
+        consumedLots: fefo.consumedLots.length ? fefo.consumedLots : undefined,
+      });
     }
-    return;
+    return {
+      source: resolved.source,
+      materials: snapshotMaterials,
+    } satisfies InventoryConsumptionSnapshot;
   }
 
   for (const material of materials) {
+    const before = await tx.inventoryItem.findUnique({ where: { id: material.inventoryItemId } });
+    if (!before) continue;
+
     await tx.inventoryItem.update({
       where: { id: material.inventoryItemId },
       data: { quantity: { increment: material.quantity } },
     });
+
+    const consumedLots = Array.isArray(material.consumedLots) ? material.consumedLots : [];
+    for (const consumedLot of consumedLots) {
+      const lotId = String(consumedLot?.lotId || '').trim();
+      const quantity = Number(consumedLot?.quantity || 0);
+      if (!lotId || !Number.isFinite(quantity) || quantity <= 0) continue;
+      await tx.inventoryLot.updateMany({
+        where: { id: lotId },
+        data: { quantity: { increment: quantity } },
+      });
+    }
+
+    const after = await tx.inventoryItem.findUnique({ where: { id: material.inventoryItemId } });
+    if (after) {
+      const lotsNote = consumedLots.length
+        ? `lots:${consumedLots.map((lot: any) => `${lot?.lotCode || lot?.lotId || 'lot'}(${Number(lot?.quantity || 0)})`).join(',')}`
+        : null;
+      await tx.inventoryMovement.create({
+        data: {
+          inventoryItemId: material.inventoryItemId,
+          type: 'ENTRY',
+          quantity: material.quantity,
+          reason: 'Estorno automático por reabertura/cancelamento do atendimento',
+          notes: [appointmentId ? `appointment:${appointmentId}` : null, `source:${resolved.source}`, lotsNote].filter(Boolean).join(' | ') || null,
+          previousQty: Number(before.quantity || 0),
+          resultingQty: Number(after.quantity || 0),
+          createdByUserId: actorUserId,
+          createdByName,
+        },
+      });
+    }
+
     await recomputeInventoryItemStatus(tx, material.inventoryItemId);
   }
+  return null;
 };
 
 export default async function appointmentRoutes(app: FastifyInstance) {
@@ -729,6 +1024,24 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           totem: data.totem ?? null,
         } });
 
+        const createdStatus = normalizeStatus(created.status);
+        if (RESERVABLE_STATUSES.has(createdStatus)) {
+          const reservationSnapshot = await reserveProcedureMaterialsSnapshot(tx, created);
+          if (reservationSnapshot) {
+            await tx.appointment.update({
+              where: { id: created.id },
+              data: {
+                inventoryReservedAt: new Date(),
+                inventoryReservationSnapshot: reservationSnapshot as any,
+                inventoryReservationSource: reservationSnapshot.source,
+              },
+            });
+            (created as any).inventoryReservedAt = new Date();
+            (created as any).inventoryReservationSnapshot = reservationSnapshot;
+            (created as any).inventoryReservationSource = reservationSnapshot.source;
+          }
+        }
+
         await syncMwlFromAppointment(tx, created, branchId);
         return created;
       });
@@ -780,6 +1093,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       ));
 
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const actorUserId = String((request.user as any)?.id || '').trim() || null;
         const updateData = Object.fromEntries(
           Object.entries(data || {}).filter(([key]) => APPOINTMENT_MUTABLE_FIELDS.has(key))
         ) as Record<string, any>;
@@ -824,16 +1138,65 @@ export default async function appointmentRoutes(app: FastifyInstance) {
 
         const prevStatus = normalizeStatus(existing.status);
         const nextStatus = normalizeStatus(updateData.status ?? existing.status);
+        const specialtyChanged = String(updateData.specialty ?? existing.specialty ?? '') !== String(existing.specialty ?? '');
+        const convenioChanged = String(updateData.convenio ?? existing.convenio ?? '') !== String(existing.convenio ?? '');
+        const shouldRefreshReservation = specialtyChanged || convenioChanged;
+        const wasReserved = Boolean(existing.inventoryReservedAt);
+        const shouldBeReserved = RESERVABLE_STATUSES.has(nextStatus);
+        const existingReservationSnapshot = existing.inventoryReservationSnapshot && typeof existing.inventoryReservationSnapshot === 'object'
+          ? (existing.inventoryReservationSnapshot as InventoryReservationSnapshot)
+          : null;
         const wasConsumed = Boolean(existing.inventoryConsumedAt);
+        const existingSnapshot = existing.inventoryConsumptionSnapshot && typeof existing.inventoryConsumptionSnapshot === 'object'
+          ? (existing.inventoryConsumptionSnapshot as InventoryConsumptionSnapshot)
+          : null;
+
+        if (shouldBeReserved && (!wasReserved || shouldRefreshReservation)) {
+          const reservationSnapshot = await reserveProcedureMaterialsSnapshot(tx, {
+            ...existing,
+            ...updateData,
+          });
+          updateData.inventoryReservedAt = reservationSnapshot ? new Date() : null;
+          updateData.inventoryReservationSnapshot = reservationSnapshot as any;
+          updateData.inventoryReservationSource = reservationSnapshot?.source || null;
+        }
+
+        if (!shouldBeReserved && wasReserved && existingReservationSnapshot) {
+          updateData.inventoryReservedAt = null;
+          updateData.inventoryReservationSnapshot = null;
+          updateData.inventoryReservationSource = null;
+        }
 
         if (COMPLETED_STATUSES.has(nextStatus) && !wasConsumed) {
-          await applyProcedureMaterialStock(tx, existing, 'consume');
+          const consumedSnapshot = await applyProcedureMaterialStock(tx, {
+            ...existing,
+            ...updateData,
+          }, 'consume', null, {
+            actorUserId,
+            appointmentId: existing.id,
+          });
           updateData.inventoryConsumedAt = new Date();
+          updateData.inventoryConsumptionSnapshot = consumedSnapshot as any;
+          updateData.inventoryConsumptionSource = consumedSnapshot?.source || null;
+          updateData.inventoryReservedAt = null;
+          updateData.inventoryReservationSnapshot = null;
+          updateData.inventoryReservationSource = null;
         }
 
         if (CANCELED_STATUSES.has(nextStatus) && !CANCELED_STATUSES.has(prevStatus) && wasConsumed) {
-          await applyProcedureMaterialStock(tx, existing, 'revert');
+          await applyProcedureMaterialStock(tx, existing, 'revert', existingSnapshot, {
+            actorUserId,
+            appointmentId: existing.id,
+          });
           updateData.inventoryConsumedAt = null;
+          updateData.inventoryConsumptionSnapshot = null;
+          updateData.inventoryConsumptionSource = null;
+        }
+
+        if ((CANCELED_STATUSES.has(nextStatus) || NO_SHOW_STATUSES.has(nextStatus)) && wasReserved) {
+          updateData.inventoryReservedAt = null;
+          updateData.inventoryReservationSnapshot = null;
+          updateData.inventoryReservationSource = null;
         }
 
         const updated = await tx.appointment.update({ where: { id }, data: { ...updateData, branchId } });
