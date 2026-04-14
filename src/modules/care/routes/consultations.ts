@@ -55,6 +55,7 @@ const appendQueueStatusAudit = (
 };
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED', 'AGENDADO', 'SCHEDULED']);
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
 const DIGITS_ONLY_REGEX = /\D/g;
 const QUESTION_TYPES = new Set([
@@ -99,18 +100,35 @@ const isTerminalClinicalQueueStatus = (value?: string | null) => {
     || normalized === 'NAO_COMPARECEU';
 };
 
+const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const readPart = (type: string) => parts.find((item) => item.type === type)?.value || '';
+
+  return {
+    year: readPart('year'),
+    month: readPart('month'),
+    day: readPart('day'),
+    hour: readPart('hour'),
+    minute: readPart('minute'),
+  };
+};
+
 const getTodayDateString = () => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const { year, month, day } = getTimeZoneParts(new Date());
   return `${year}-${month}-${day}`;
 };
 
 const getNowTimeString = () => {
-  const now = new Date();
-  const hour = String(now.getHours()).padStart(2, '0');
-  const minute = String(now.getMinutes()).padStart(2, '0');
+  const { hour, minute } = getTimeZoneParts(new Date());
   return `${hour}:${minute}`;
 };
 
@@ -118,17 +136,9 @@ const applyAutomaticNoShowForBranchInConsultationQueue = async (branchId: string
   const settings = await prisma.branchSettings.findUnique({ where: { branchId } });
   const toleranceMinutes = Math.max(0, Number(settings?.noShowToleranceMinutes ?? 30));
   const threshold = new Date(Date.now() - (toleranceMinutes * 60 * 1000));
-  const thresholdDate = (() => {
-    const year = threshold.getFullYear();
-    const month = String(threshold.getMonth() + 1).padStart(2, '0');
-    const day = String(threshold.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  })();
-  const thresholdTime = (() => {
-    const hour = String(threshold.getHours()).padStart(2, '0');
-    const minute = String(threshold.getMinutes()).padStart(2, '0');
-    return `${hour}:${minute}`;
-  })();
+  const { year, month, day, hour, minute } = getTimeZoneParts(threshold);
+  const thresholdDate = `${year}-${month}-${day}`;
+  const thresholdTime = `${hour}:${minute}`;
 
   const candidates = await prisma.appointment.findMany({
     where: {

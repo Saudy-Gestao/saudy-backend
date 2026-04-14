@@ -2,7 +2,7 @@ import type { Appointment as AppointmentModel, PreAttendance as PreAttendanceMod
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 
-const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 
 type DoctorQueueLookup = {
   id: string;

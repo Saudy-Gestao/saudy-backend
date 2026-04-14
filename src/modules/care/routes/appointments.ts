@@ -33,7 +33,7 @@ const generateAccessionNumber = () => {
   return `ACC-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
 };
 
-const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 const APPOINTMENT_MUTABLE_FIELDS = new Set([
   'rescheduledFromAppointmentId',
   'patientName',

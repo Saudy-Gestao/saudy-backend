@@ -3,7 +3,7 @@ import prisma from './prisma';
 import WhatsAppAutoSender from './whatsapp-auto-sender';
 import GupshupService from './gupshup';
 
-const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 
 const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
   const parts = new Intl.DateTimeFormat('en-CA', {

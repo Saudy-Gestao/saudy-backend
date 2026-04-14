@@ -4,7 +4,7 @@ import GupshupService from './gupshup';
 import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
-const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 const CHATBOT_BRANCH_ID = String(process.env.WHATSAPP_CHATBOT_BRANCH_ID || '').trim();
 const DEFAULT_SEARCH_DAYS = Math.max(1, Number(process.env.WHATSAPP_CHATBOT_SEARCH_DAYS || 30));
 const CONVERSATION_TIMEOUT_MS = 2 * 60 * 1000;
