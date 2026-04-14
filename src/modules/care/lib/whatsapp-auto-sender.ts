@@ -196,14 +196,17 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      // Buscar configuração de notificações
+      // Buscar configuração de notificações.
+      // Regras finais: para enviar mensagens automáticas,
+      // o template precisa estar ativo E o toggle da aba Notificações precisa estar habilitado.
       const notificationConfig = await prisma.whatsAppNotificationConfig.findUnique({
         where: { branchId: params.branchId },
       });
 
-      // Verificar se deve enviar mensagem baseado no tipo
-      if (params.messageType === 'APPOINTMENT_CREATED' && notificationConfig && !notificationConfig.sendOnAppointmentCreated) {
-        const errorMessage = 'Envio de mensagem ao criar agendamento está desativado';
+      if (params.messageType === 'APPOINTMENT_CREATED' && notificationConfig?.sendOnAppointmentCreated !== true) {
+        const errorMessage = notificationConfig
+          ? 'Envio de mensagem ao criar agendamento está desativado'
+          : 'Configuração de notificação não encontrada para esta filial (APPOINTMENT_CREATED)';
         await this.createFailedLog({
           branchId: params.branchId,
           appointmentId: appointment.id,
@@ -215,8 +218,10 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      if (params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig && !notificationConfig.sendConfirmationEnabled) {
-        const errorMessage = 'Envio de confirmação de agendamento está desativado';
+      if (params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig?.sendConfirmationEnabled !== true) {
+        const errorMessage = notificationConfig
+          ? 'Envio de confirmação de agendamento está desativado'
+          : 'Configuração de notificação não encontrada para esta filial (APPOINTMENT_CONFIRMATION)';
         await this.createFailedLog({
           branchId: params.branchId,
           appointmentId: appointment.id,
