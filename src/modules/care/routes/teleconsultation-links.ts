@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import GupshupService from '../lib/gupshup';
+import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
 
 const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
 const RECEPTION_DONE_STATUS = 'RECEPCAO_CONCLUIDA';
@@ -184,6 +185,12 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   patientPhone: string;
   patientName: string;
   patientUrl: string;
+  doctorName?: string | null;
+  specialty?: string | null;
+  date?: string | null;
+  time?: string | null;
+  convenio?: string | null;
+  clinicName?: string | null;
   notes?: string;
 }) => {
   const config = await resolveBranchWhatsAppConfig(params.branchId);
@@ -197,10 +204,52 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
     params.notes ? `Observação: ${params.notes}` : null,
   ].filter(Boolean).join(' ');
 
-  const result = await gupshup.sendTextMessage({
-    to: params.patientPhone,
-    message: text,
+  let result: any = null;
+  const templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
+    where: {
+      branchId: params.branchId,
+      type: 'APPOINTMENT_CREATED',
+      isActive: true,
+    },
+    select: {
+      message: true,
+      hsmTemplateId: true,
+      hsmTemplateName: true,
+      hsmTemplateApproved: true,
+    },
   });
+
+  if (
+    templateRecord?.hsmTemplateApproved
+    && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName)
+  ) {
+    const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
+      patientName: params.patientName,
+      doctorName: params.doctorName,
+      professional: params.doctorName,
+      specialty: params.specialty,
+      date: params.date,
+      time: params.time,
+      convenio: params.convenio,
+      clinicName: params.clinicName,
+      location: params.clinicName,
+      observations: params.notes || null,
+      documentsLink: params.patientUrl,
+    });
+
+    result = await gupshup.sendTemplateMessage({
+      to: params.patientPhone,
+      templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
+      params: hsmParams,
+    });
+  }
+
+  if (!result || result.status !== 'success') {
+    result = await gupshup.sendTextMessage({
+      to: params.patientPhone,
+      message: text,
+    });
+  }
 
   if (result.status !== 'success') {
     throw new Error(result.error || 'Falha ao enviar mensagem de teleconsulta pelo WhatsApp.');
@@ -623,6 +672,11 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
         patientPhone,
         patientName,
         patientUrl: links.patientUrl,
+        doctorName: context.appointment.doctorName || context.preAttendance.doctorName || null,
+        specialty: context.appointment.specialty || null,
+        date: context.appointment.date || null,
+        time: context.appointment.time || null,
+        convenio: context.appointment.convenio || null,
         notes,
       })
       : null;
@@ -725,6 +779,11 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
         patientPhone,
         patientName,
         patientUrl: links.patientUrl,
+        doctorName: context.appointment.doctorName || context.preAttendance?.doctorName || null,
+        specialty: context.appointment.specialty || null,
+        date: context.appointment.date || null,
+        time: context.appointment.time || null,
+        convenio: context.appointment.convenio || null,
         notes,
       })
       : null;
