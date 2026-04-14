@@ -147,6 +147,13 @@ const normalizeStatus = (value?: string | null) => String(value || '')
 
 const normalizePhone = (value?: string | null) => String(value || '').replace(/\D/g, '');
 const normalizeDateOnly = (value?: string | null) => String(value || '').slice(0, 10);
+const resolvePreferredPhone = (...candidates: Array<string | null | undefined>) => {
+  for (const candidate of candidates) {
+    const normalized = normalizePhone(candidate);
+    if (normalized) return normalized;
+  }
+  return '';
+};
 
 const resolveBranchWhatsAppConfig = async (branchId: string) => {
   const config = await prisma.whatsAppConfig.findUnique({
@@ -601,18 +608,24 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
     });
 
     const patientName = context.preAttendance.fullName || context.appointment.patientName || context.linkedPatient?.name || 'paciente';
-    const patientPhone = normalizePhone(context.linkedPatient?.cellphone || context.linkedPatient?.phone || context.preAttendance.phone || '');
+    const patientPhone = resolvePreferredPhone(
+      context.preAttendance.phone,
+      context.linkedPatient?.cellphone,
+      context.linkedPatient?.phone,
+    );
     if (!patientPhone) {
       return reply.code(400).send({ error: 'Paciente sem telefone válido para envio da teleconsulta.' });
     }
 
-    const whatsapp = await sendTeleconsultationWhatsAppMessage({
-      branchId,
-      patientPhone,
-      patientName,
-      patientUrl: links.patientUrl,
-      notes,
-    });
+    const whatsapp = sendPatientMessage
+      ? await sendTeleconsultationWhatsAppMessage({
+        branchId,
+        patientPhone,
+        patientName,
+        patientUrl: links.patientUrl,
+        notes,
+      })
+      : null;
 
     await prisma.preAttendance.update({
       where: { id: context.preAttendance.id },
@@ -625,13 +638,15 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
     });
 
     return reply.send({
-      message: 'Link de teleconsulta gerado e enviado com sucesso',
+      message: sendPatientMessage
+        ? 'Link de teleconsulta gerado e enviado com sucesso'
+        : 'Link de teleconsulta do médico gerado com sucesso',
       links: {
         patientUrl: links.patientUrl,
         doctorUrl: links.doctorUrl,
         expiresAt: links.expiresAt,
       },
-      whatsapp,
+      whatsapp: sendPatientMessage ? whatsapp : null,
     });
   });
 
@@ -693,8 +708,13 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       linkedPatient: context.linkedPatient,
     });
 
-    const patientName = context.appointment.patientName || context.preAttendance?.fullName || context.linkedPatient?.name || 'paciente';
-    const patientPhone = normalizePhone(context.linkedPatient?.cellphone || context.linkedPatient?.phone || context.preAttendance?.phone || '');
+    const patientName = context.appointment.patientName || context.flow?.patientName || context.preAttendance?.fullName || context.linkedPatient?.name || 'paciente';
+    const patientPhone = resolvePreferredPhone(
+      context.flow?.patientPhone,
+      context.preAttendance?.phone,
+      context.linkedPatient?.cellphone,
+      context.linkedPatient?.phone,
+    );
     if (sendPatientMessage && !patientPhone) {
       return reply.code(400).send({ error: 'Paciente sem telefone válido para envio da teleconsulta.' });
     }

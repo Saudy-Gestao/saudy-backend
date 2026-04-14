@@ -15,7 +15,7 @@ import dicomWebProxyModule from './modules/dicom-web-proxy';
 import { startOrthancPoller } from './modules/dicom/orthanc';
 import { MwlScp } from './modules/dicom/mwl';
 
-const app = fastify({ logger: true });
+const app = fastify();
 
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) {
