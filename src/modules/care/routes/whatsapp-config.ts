@@ -364,6 +364,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     let created = 0;
     let updated = 0;
+    const createdTypes: string[] = [];
 
     await prisma.whatsAppMessageTemplate.deleteMany({
       where: {
@@ -392,7 +393,6 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
             name: item.name,
             message: item.message,
             hsmTemplateName: nextHsmTemplateName,
-            isActive: false,
           },
         });
         updated += 1;
@@ -408,8 +408,31 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
             isActive: false,
           },
         });
+        createdTypes.push(String(item.type));
         created += 1;
       }
+    }
+
+    let syncResult: any = null;
+    try {
+      syncResult = await syncBranchHsmTemplates(branchId);
+    } catch (error) {
+      // Não bloqueia o carregamento dos defaults quando a sincronização remota falhar.
+      console.error('[whatsapp-load-defaults] sync-hsm failed:', error);
+    }
+
+    if (createdTypes.length > 0) {
+      await prisma.whatsAppMessageTemplate.updateMany({
+        where: {
+          branchId,
+          type: { in: createdTypes as any[] },
+          hsmTemplateApproved: true,
+          isActive: false,
+        },
+        data: {
+          isActive: true,
+        },
+      });
     }
 
     return {
@@ -417,6 +440,12 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       created,
       updated,
       total: DEFAULT_TEMPLATES.length,
+      sync: syncResult
+        ? {
+            synced: Number(syncResult.synced || 0),
+            updated: Number(syncResult.updated || 0),
+          }
+        : null,
     };
   });
 
