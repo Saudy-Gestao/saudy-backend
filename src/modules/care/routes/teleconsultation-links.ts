@@ -205,10 +205,10 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   ].filter(Boolean).join(' ');
 
   let result: any = null;
-  const templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
+  let templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
     where: {
       branchId: params.branchId,
-      type: 'APPOINTMENT_CREATED',
+      type: 'TELECONSULTATION_LINK',
       isActive: true,
     },
     select: {
@@ -218,6 +218,22 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
       hsmTemplateApproved: true,
     },
   });
+
+  if (!templateRecord) {
+    templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
+      where: {
+        branchId: params.branchId,
+        type: 'APPOINTMENT_CREATED',
+        isActive: true,
+      },
+      select: {
+        message: true,
+        hsmTemplateId: true,
+        hsmTemplateName: true,
+        hsmTemplateApproved: true,
+      },
+    });
+  }
 
   if (
     templateRecord?.hsmTemplateApproved

@@ -1,5 +1,6 @@
 export const ACTIVE_TEMPLATE_TYPES = [
   'APPOINTMENT_CREATED',
+  'TELECONSULTATION_LINK',
   'APPOINTMENT_CONFIRMATION',
   'NO_SHOW',
   'CONFIRMATION_REPLY_CONFIRMED',
@@ -12,6 +13,12 @@ export const DEFAULT_TEMPLATES = [
     name: 'Resumo de Agendamento',
     hsmTemplateName: 'resumo_agendamento_uuid',
     message: 'Olá, {{paciente_nome}}! 😊\nSomos da {{clinica_nome}}.\nSeu atendimento está confirmado:\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n📍 {{local}}\n📎 Para agilizar seu atendimento, pedimos que envie seus documentos pelo link abaixo:\n👉 {{link_documentos}}\nEm caso de necessidade, fale conosco por aqui.',
+  },
+  {
+    type: 'TELECONSULTATION_LINK',
+    name: 'Link de Teleconsulta',
+    hsmTemplateName: 'link_teleconsulta_uuid',
+    message: 'Olá, {{paciente_nome}}! 😊\nSeu acesso para teleconsulta na {{clinica_nome}} foi liberado.\n📅 {{data}} às {{hora}}\n👩‍⚕️ {{profissional}}\n🔗 Acesse por aqui: {{link_documentos}}\nCaso precise de ajuda, responda esta mensagem.',
   },
   {
     type: 'APPOINTMENT_CONFIRMATION',
