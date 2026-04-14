@@ -8,6 +8,8 @@ import { sendPatientPortalAccessCodeEmail } from '../lib/mailer';
 const PATIENT_CODE_EXPIRATION_MINUTES = 10;
 const PATIENT_ACCESS_TOKEN_EXPIRATION = process.env.PATIENT_PORTAL_TOKEN_EXPIRES_IN || '12h';
 const PUBLIC_FLOW_WINDOW_MINUTES = 30;
+const REPORT_SHARE_LINK_DEFAULT_HOURS = Number(process.env.PATIENT_PORTAL_REPORT_SHARE_DEFAULT_HOURS || 72);
+const REPORT_SHARE_LINK_MAX_HOURS = Number(process.env.PATIENT_PORTAL_REPORT_SHARE_MAX_HOURS || 168);
 const REQUEST_CODE_WINDOW_MS = Number(process.env.PATIENT_PORTAL_REQUEST_CODE_WINDOW_MS || 15 * 60 * 1000);
 const REQUEST_CODE_MAX_BY_IP = Number(process.env.PATIENT_PORTAL_REQUEST_CODE_MAX_BY_IP || 8);
 const REQUEST_CODE_MAX_BY_CPF = Number(process.env.PATIENT_PORTAL_REQUEST_CODE_MAX_BY_CPF || 4);
@@ -114,6 +116,25 @@ function getPublicFlowUrl(token?: string | null) {
   if (!token) return null;
   const base = String(process.env.PUBLIC_APP_URL);
   return `${base}/pre-atendimento/documentos/${token}`;
+}
+
+function getPublicApiBaseUrl(request: any) {
+  const envBase = String(
+    process.env.PUBLIC_API_URL
+    || process.env.API_PUBLIC_URL
+    || process.env.BACKEND_PUBLIC_URL
+    || '',
+  ).trim();
+  if (envBase) return envBase.replace(/\/+$/, '');
+  const protocol = String(request?.protocol || 'http').trim();
+  const host = String(request?.headers?.host || '').trim();
+  return host ? `${protocol}://${host}` : '';
+}
+
+function getPublicReportShareUrl(request: any, token: string) {
+  const base = getPublicApiBaseUrl(request);
+  if (!base || !token) return null;
+  return `${base}/auth/patient-portal/public/reports/${encodeURIComponent(token)}/pdf`;
 }
 
 function escapePdfText(value?: string | null) {
@@ -1828,6 +1849,77 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     return { items, total: totalRaw };
   });
 
+  app.post('/patient-portal/me/reports/:reportId/share-link', {
+    schema: {
+      summary: 'Generate secure share link for patient report',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+      params: {
+        type: 'object',
+        properties: { reportId: { type: 'string' } },
+        required: ['reportId'],
+      },
+      body: {
+        type: 'object',
+        properties: {
+          expiresInHours: { type: 'number' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { reportId } = request.params as { reportId: string };
+    const body = (request.body || {}) as { expiresInHours?: number };
+    const requestedHours = Number(body.expiresInHours);
+    const expiresInHours = Number.isFinite(requestedHours)
+      ? Math.min(Math.max(Math.floor(requestedHours), 1), REPORT_SHARE_LINK_MAX_HOURS)
+      : REPORT_SHARE_LINK_DEFAULT_HOURS;
+
+    const report = await prisma.report.findFirst({
+      where: {
+        id: reportId,
+        isActive: true,
+        ...(patient.branchId ? { branchId: patient.branchId } : {}),
+        OR: [
+          { cpf: patient.cpf },
+          { appointment: { is: { patientId: patient.id } } },
+          { appointment: { is: { patientCpf: patient.cpf } } },
+        ],
+      },
+    });
+
+    if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
+    if (!isVisibleToPatientReport(report.status)) {
+      return reply.code(400).send({ error: 'Laudo ainda não liberado para compartilhamento' });
+    }
+
+    const expiresAt = new Date(Date.now() + (expiresInHours * 60 * 60 * 1000));
+    const token = app.jwt.sign({
+      scope: 'patient_report_share',
+      reportId: report.id,
+      patientId: patient.id,
+      cpf: patient.cpf,
+      branchId: patient.branchId || null,
+    }, { expiresIn: `${expiresInHours}h` });
+
+    const url = getPublicReportShareUrl(request, token);
+    if (!url) {
+      return reply.code(500).send({ error: 'Não foi possível montar o link público de compartilhamento' });
+    }
+
+    return {
+      reportId: report.id,
+      url,
+      expiresAt: expiresAt.toISOString(),
+      expiresInHours,
+    };
+  });
+
   app.get('/patient-portal/me/reports/:reportId/pdf', {
     schema: {
       summary: 'Download patient report as PDF',
@@ -1893,6 +1985,100 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     const fileName = `laudo-${report.id}.pdf`;
     reply.header('Content-Type', 'application/pdf');
     reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
+    reply.header('Content-Length', String(pdf.length));
+    return reply.send(pdf);
+  });
+
+  app.get('/patient-portal/public/reports/:token/pdf', {
+    schema: {
+      summary: 'Download shared patient report by secure token',
+      tags: ['Auth'],
+      params: {
+        type: 'object',
+        properties: { token: { type: 'string' } },
+        required: ['token'],
+      },
+    },
+  }, async (request, reply) => {
+    const { token } = request.params as { token: string };
+    let sharePayload: any = null;
+
+    try {
+      sharePayload = app.jwt.verify(String(token || ''));
+    } catch {
+      return reply.code(401).send({ error: 'Link inválido ou expirado' });
+    }
+
+    if (String(sharePayload?.scope || '') !== 'patient_report_share' || !sharePayload?.reportId || !sharePayload?.patientId) {
+      return reply.code(401).send({ error: 'Token inválido para compartilhamento de laudo' });
+    }
+
+    const patient = await prisma.patient.findFirst({
+      where: {
+        id: String(sharePayload.patientId),
+        ...(sharePayload.branchId ? { branchId: String(sharePayload.branchId) } : {}),
+        ...(sharePayload.cpf ? { cpf: String(sharePayload.cpf) } : {}),
+        isActive: true,
+      },
+      select: {
+        id: true,
+        branchId: true,
+        name: true,
+        cpf: true,
+      },
+    });
+
+    if (!patient) {
+      return reply.code(404).send({ error: 'Paciente não encontrado para este link' });
+    }
+
+    const report = await prisma.report.findFirst({
+      where: {
+        id: String(sharePayload.reportId),
+        isActive: true,
+        ...(patient.branchId ? { branchId: patient.branchId } : {}),
+        OR: [
+          { cpf: patient.cpf },
+          { appointment: { is: { patientId: patient.id } } },
+          { appointment: { is: { patientCpf: patient.cpf } } },
+        ],
+      },
+      include: {
+        appointment: {
+          select: {
+            date: true,
+            time: true,
+            specialty: true,
+            doctorName: true,
+          },
+        },
+      },
+    });
+
+    if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
+    if (!isVisibleToPatientReport(report.status)) {
+      return reply.code(400).send({ error: 'Laudo ainda não liberado para download' });
+    }
+
+    const lines = [
+      `Paciente: ${patient.name || report.patientName || '-'}`,
+      `CPF: ${patient.cpf || report.cpf || '-'}`,
+      `Exame: ${report.exam || report.appointment?.specialty || '-'}`,
+      `Data/Hora: ${String(report.appointment?.date || '-')} ${String(report.appointment?.time || '')}`.trim(),
+      `Médico solicitante: ${report.requestingDoctor || '-'}`,
+      `Médico laudo: ${report.reportingDoctor || '-'}`,
+      `Status: ${report.status || '-'}`,
+      '---',
+      `Descrição: ${report.description || '-'}`,
+      `Conclusão: ${report.conclusion || '-'}`,
+      `Observações: ${report.notes || '-'}`,
+    ];
+
+    const pdf = buildSimplePdfBuffer('Laudo Médico - Saudy', lines);
+    const fileName = `laudo-${report.id}.pdf`;
+    reply.header('Content-Type', 'application/pdf');
+    reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
+    reply.header('Cache-Control', 'no-store');
     reply.header('Content-Length', String(pdf.length));
     return reply.send(pdf);
   });
