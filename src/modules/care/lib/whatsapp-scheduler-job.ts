@@ -302,13 +302,15 @@ export class WhatsAppSchedulerJob {
           continue;
         }
 
-        // Verificar se já enviou confirmação para este agendamento
+        // Verificar se já enviou confirmação para este agendamento.
+        // Qualquer log não-falho conta como já processado (SENT, DELIVERED, READ, RESPONDED_*, etc.),
+        // evitando reenvios indevidos dentro da janela.
         const existingLog = await prisma.whatsAppMessageLog.findFirst({
           where: {
             appointmentId: appointment.id,
             messageType: 'APPOINTMENT_CONFIRMATION',
-            status: {
-              in: ['SENT', 'PENDING', 'RESPONDED_CONFIRMED', 'RESPONDED_RESCHEDULE'],
+            NOT: {
+              status: { in: ['FAILED', 'ERROR'] },
             },
           },
         });

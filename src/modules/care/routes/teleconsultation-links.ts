@@ -587,7 +587,7 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
         appointmentId: appointment.id,
       },
       window: {
-        allowJoinFromMinutesBefore: role === 'DOCTOR' ? 1 : 10,
+        allowJoinFromMinutesBefore: 10,
       },
       tokenMeta: {
         expiresAt: payload?.exp ? new Date(Number(payload.exp) * 1000).toISOString() : null,
