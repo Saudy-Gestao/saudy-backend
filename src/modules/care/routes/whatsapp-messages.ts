@@ -294,7 +294,24 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
     const limit = Number(query.limit) || 50;
     const offset = Number(query.offset) || 0;
 
-    const where: any = { branchId };
+    const currentBranch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { companyId: true },
+    });
+
+    let scopedBranchIds = [branchId];
+    if (currentBranch?.companyId) {
+      const companyBranches = await prisma.branch.findMany({
+        where: { companyId: currentBranch.companyId },
+        select: { id: true },
+      });
+      const branchIds = companyBranches.map((item: { id: string }) => String(item.id || '').trim()).filter(Boolean);
+      if (branchIds.length > 0) scopedBranchIds = branchIds;
+    }
+
+    const where: any = {
+      branchId: { in: scopedBranchIds },
+    };
     if (query.appointmentId) where.appointmentId = query.appointmentId;
     if (query.status) where.status = query.status;
     if (query.messageType) where.messageType = query.messageType;
@@ -338,8 +355,23 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
 
+    const currentBranch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { companyId: true },
+    });
+
+    let scopedBranchIds = [branchId];
+    if (currentBranch?.companyId) {
+      const companyBranches = await prisma.branch.findMany({
+        where: { companyId: currentBranch.companyId },
+        select: { id: true },
+      });
+      const branchIds = companyBranches.map((item: { id: string }) => String(item.id || '').trim()).filter(Boolean);
+      if (branchIds.length > 0) scopedBranchIds = branchIds;
+    }
+
     const log = await prisma.whatsAppMessageLog.findFirst({
-      where: { id, branchId },
+      where: { id, branchId: { in: scopedBranchIds } },
     });
 
     if (!log) {
