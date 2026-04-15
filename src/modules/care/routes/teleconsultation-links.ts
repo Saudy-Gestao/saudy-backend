@@ -204,8 +204,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
     params.notes ? `Observação: ${params.notes}` : null,
   ].filter(Boolean).join(' ');
 
-  let result: any = null;
-  let templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
+  const templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
     where: {
       branchId: params.branchId,
       type: 'TELECONSULTATION_LINK',
@@ -220,55 +219,35 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   });
 
   if (!templateRecord) {
-    templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
-      where: {
-        branchId: params.branchId,
-        type: 'APPOINTMENT_CREATED',
-        isActive: true,
-      },
-      select: {
-        message: true,
-        hsmTemplateId: true,
-        hsmTemplateName: true,
-        hsmTemplateApproved: true,
-      },
-    });
+    throw new Error('Template "Link de Teleconsulta" não está ativo para esta filial.');
   }
 
-  if (
-    templateRecord?.hsmTemplateApproved
-    && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName)
-  ) {
-    const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
-      patientName: params.patientName,
-      doctorName: params.doctorName,
-      professional: params.doctorName,
-      specialty: params.specialty,
-      date: params.date,
-      time: params.time,
-      convenio: params.convenio,
-      clinicName: params.clinicName,
-      location: params.clinicName,
-      observations: params.notes || null,
-      documentsLink: params.patientUrl,
-    });
-
-    result = await gupshup.sendTemplateMessage({
-      to: params.patientPhone,
-      templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
-      params: hsmParams,
-    });
+  if (!templateRecord.hsmTemplateApproved || !(templateRecord.hsmTemplateId || templateRecord.hsmTemplateName)) {
+    throw new Error('Template "Link de Teleconsulta" ainda não está aprovado/sincronizado na Gupshup.');
   }
 
-  if (!result || result.status !== 'success') {
-    result = await gupshup.sendTextMessage({
-      to: params.patientPhone,
-      message: text,
-    });
-  }
+  const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
+    patientName: params.patientName,
+    doctorName: params.doctorName,
+    professional: params.doctorName,
+    specialty: params.specialty,
+    date: params.date,
+    time: params.time,
+    convenio: params.convenio,
+    clinicName: params.clinicName,
+    location: params.clinicName,
+    observations: params.notes || null,
+    documentsLink: params.patientUrl,
+  });
+
+  const result = await gupshup.sendTemplateMessage({
+    to: params.patientPhone,
+    templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
+    params: hsmParams,
+  });
 
   if (result.status !== 'success') {
-    throw new Error(result.error || 'Falha ao enviar mensagem de teleconsulta pelo WhatsApp.');
+    throw new Error(result.error || 'Falha ao enviar template de teleconsulta pelo WhatsApp.');
   }
 
   return {
