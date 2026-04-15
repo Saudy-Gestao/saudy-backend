@@ -305,7 +305,16 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         },
       },
       response: {
-        200: { type: 'object' },
+        200: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            items: { type: 'array' },
+            total: { type: 'integer' },
+            limit: { type: 'integer' },
+            offset: { type: 'integer' },
+          },
+        },
         403: { type: 'object' },
       },
     },
@@ -367,7 +376,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         properties: { id: { type: 'string' } },
       },
       response: {
-        200: { type: 'object' },
+        200: { type: 'object', additionalProperties: true },
         403: { type: 'object' },
         404: { type: 'object' },
       },
