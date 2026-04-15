@@ -704,21 +704,34 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       return reply.code(400).send({ error: 'Paciente sem telefone válido para envio da teleconsulta.' });
     }
 
-    const whatsapp = sendPatientMessage
-      ? await sendTeleconsultationWhatsAppMessage({
-        branchId,
-        appointmentId: context.appointment.id,
-        patientPhone,
-        patientName,
-        patientUrl: links.patientUrl,
-        doctorName: context.appointment.doctorName || context.preAttendance.doctorName || null,
-        specialty: context.appointment.specialty || null,
-        date: context.appointment.date || null,
-        time: context.appointment.time || null,
-        convenio: context.appointment.convenio || null,
-        notes,
-      })
-      : null;
+    let whatsapp: any = null;
+    let whatsappSendError: string | null = null;
+    if (sendPatientMessage) {
+      try {
+        whatsapp = await sendTeleconsultationWhatsAppMessage({
+          branchId,
+          appointmentId: context.appointment.id,
+          patientPhone,
+          patientName,
+          patientUrl: links.patientUrl,
+          doctorName: context.appointment.doctorName || context.preAttendance.doctorName || null,
+          specialty: context.appointment.specialty || null,
+          date: context.appointment.date || null,
+          time: context.appointment.time || null,
+          convenio: context.appointment.convenio || null,
+          notes,
+        });
+      } catch (error: any) {
+        whatsappSendError = String(error?.message || 'Não foi possível enviar o link da teleconsulta via WhatsApp.');
+        whatsapp = {
+          provider: 'gupshup',
+          status: 'error',
+          error: whatsappSendError,
+          to: normalizePhoneForWhatsApp(patientPhone),
+          message: '',
+        };
+      }
+    }
 
     await prisma.preAttendance.update({
       where: { id: context.preAttendance.id },
@@ -732,7 +745,9 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
 
     return reply.send({
       message: sendPatientMessage
-        ? 'Link de teleconsulta gerado e enviado com sucesso'
+        ? (whatsappSendError
+          ? 'Link de teleconsulta gerado com sucesso, mas o envio por WhatsApp falhou'
+          : 'Link de teleconsulta gerado e enviado com sucesso')
         : 'Link de teleconsulta do médico gerado com sucesso',
       links: {
         patientUrl: links.patientUrl,
@@ -812,21 +827,34 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       return reply.code(400).send({ error: 'Paciente sem telefone válido para envio da teleconsulta.' });
     }
 
-    const whatsapp = sendPatientMessage
-      ? await sendTeleconsultationWhatsAppMessage({
-        branchId,
-        appointmentId: context.appointment.id,
-        patientPhone,
-        patientName,
-        patientUrl: links.patientUrl,
-        doctorName: context.appointment.doctorName || context.preAttendance?.doctorName || null,
-        specialty: context.appointment.specialty || null,
-        date: context.appointment.date || null,
-        time: context.appointment.time || null,
-        convenio: context.appointment.convenio || null,
-        notes,
-      })
-      : null;
+    let whatsapp: any = null;
+    let whatsappSendError: string | null = null;
+    if (sendPatientMessage) {
+      try {
+        whatsapp = await sendTeleconsultationWhatsAppMessage({
+          branchId,
+          appointmentId: context.appointment.id,
+          patientPhone,
+          patientName,
+          patientUrl: links.patientUrl,
+          doctorName: context.appointment.doctorName || context.preAttendance?.doctorName || null,
+          specialty: context.appointment.specialty || null,
+          date: context.appointment.date || null,
+          time: context.appointment.time || null,
+          convenio: context.appointment.convenio || null,
+          notes,
+        });
+      } catch (error: any) {
+        whatsappSendError = String(error?.message || 'Não foi possível enviar o link da teleconsulta via WhatsApp.');
+        whatsapp = {
+          provider: 'gupshup',
+          status: 'error',
+          error: whatsappSendError,
+          to: normalizePhoneForWhatsApp(patientPhone),
+          message: '',
+        };
+      }
+    }
 
     await prisma.preSchedulingFlow.updateMany({
       where: { appointmentId: context.appointment.id, branchId },
@@ -849,7 +877,9 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
 
     return reply.send({
       message: sendPatientMessage
-        ? 'Link de teleconsulta gerado e enviado com sucesso'
+        ? (whatsappSendError
+          ? 'Link de teleconsulta gerado com sucesso, mas o envio por WhatsApp falhou'
+          : 'Link de teleconsulta gerado e enviado com sucesso')
         : 'Link de teleconsulta do médico gerado com sucesso',
       links: {
         patientUrl: links.patientUrl,
