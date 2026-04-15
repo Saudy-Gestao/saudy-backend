@@ -147,6 +147,13 @@ const normalizeStatus = (value?: string | null) => String(value || '')
   .replace(/\s+/g, '_');
 
 const normalizePhone = (value?: string | null) => String(value || '').replace(/\D/g, '');
+const normalizePhoneForWhatsApp = (value?: string | null) => {
+  let digits = normalizePhone(value);
+  if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) {
+    digits = `55${digits}`;
+  }
+  return digits;
+};
 const normalizeDateOnly = (value?: string | null) => String(value || '').slice(0, 10);
 const resolvePreferredPhone = (...candidates: Array<string | null | undefined>) => {
   for (const candidate of candidates) {
@@ -240,8 +247,9 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
     documentsLink: params.patientUrl,
   });
 
+  const targetPhone = normalizePhoneForWhatsApp(params.patientPhone);
   const result = await gupshup.sendTemplateMessage({
-    to: params.patientPhone,
+    to: targetPhone,
     templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
     params: hsmParams,
   });
@@ -252,7 +260,10 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
 
   return {
     provider: 'gupshup' as const,
-    to: normalizePhone(params.patientPhone),
+    mode: 'HSM_TEMPLATE' as const,
+    templateName: templateRecord.hsmTemplateName || null,
+    templateId: templateRecord.hsmTemplateId || null,
+    to: targetPhone,
     message: text,
     providerMessageId: result.messageId || null,
   };
