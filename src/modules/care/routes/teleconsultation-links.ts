@@ -189,6 +189,7 @@ const resolveBranchWhatsAppConfig = async (branchId: string) => {
 
 const sendTeleconsultationWhatsAppMessage = async (params: {
   branchId: string;
+  appointmentId?: string | null;
   patientPhone: string;
   patientName: string;
   patientUrl: string;
@@ -248,6 +249,18 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   });
 
   const targetPhone = normalizePhoneForWhatsApp(params.patientPhone);
+  const messageLog = await prisma.whatsAppMessageLog.create({
+    data: {
+      branchId: params.branchId,
+      appointmentId: params.appointmentId || null,
+      patientName: params.patientName || null,
+      patientPhone: targetPhone,
+      messageType: 'TELECONSULTATION_LINK',
+      message: text,
+      status: 'PENDING',
+    },
+  });
+
   const result = await gupshup.sendTemplateMessage({
     to: targetPhone,
     templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
@@ -255,8 +268,24 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   });
 
   if (result.status !== 'success') {
+    await prisma.whatsAppMessageLog.update({
+      where: { id: messageLog.id },
+      data: {
+        status: 'FAILED',
+        errorMessage: result.error || 'Falha ao enviar template de teleconsulta pelo WhatsApp.',
+      },
+    });
     throw new Error(result.error || 'Falha ao enviar template de teleconsulta pelo WhatsApp.');
   }
+
+  await prisma.whatsAppMessageLog.update({
+    where: { id: messageLog.id },
+    data: {
+      status: 'SENT',
+      providerMessageId: result.messageId || null,
+      sentAt: new Date(),
+    },
+  });
 
   return {
     provider: 'gupshup' as const,
@@ -675,6 +704,7 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
     const whatsapp = sendPatientMessage
       ? await sendTeleconsultationWhatsAppMessage({
         branchId,
+        appointmentId: context.appointment.id,
         patientPhone,
         patientName,
         patientUrl: links.patientUrl,
@@ -782,6 +812,7 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
     const whatsapp = sendPatientMessage
       ? await sendTeleconsultationWhatsAppMessage({
         branchId,
+        appointmentId: context.appointment.id,
         patientPhone,
         patientName,
         patientUrl: links.patientUrl,
