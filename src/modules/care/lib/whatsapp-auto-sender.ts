@@ -30,6 +30,13 @@ interface FailedLogParams {
   errorMessage: string;
 }
 
+const normalizeStatusKey = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase()
+  .replace(/\s+/g, '_');
+
 /**
  * Helper para envio automático de mensagens WhatsApp
  */
@@ -154,6 +161,13 @@ export class WhatsAppAutoSender {
 
       if (!appointment) {
         return { success: false, error: 'Agendamento não encontrado' };
+      }
+
+      if (params.messageType === 'APPOINTMENT_CONFIRMATION') {
+        const normalizedStatus = normalizeStatusKey((appointment as any)?.status);
+        if (normalizedStatus.startsWith('CONFIRM')) {
+          return { success: false, error: 'Agendamento já está confirmado; confirmação não enviada novamente.' };
+        }
       }
 
       // Buscar telefone do paciente

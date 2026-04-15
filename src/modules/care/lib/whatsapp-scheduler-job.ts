@@ -47,7 +47,7 @@ const normalizeStatus = (value?: string | null) => String(value || '')
 
 const isConfirmedStatus = (value?: string | null) => {
   const normalized = normalizeStatus(value);
-  return normalized === 'CONFIRMADO' || normalized === 'CONFIRMED';
+  return normalized.startsWith('CONFIRM');
 };
 
 /**
