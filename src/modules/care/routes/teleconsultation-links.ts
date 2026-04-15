@@ -292,6 +292,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
     mode: 'HSM_TEMPLATE' as const,
     templateName: templateRecord.hsmTemplateName || null,
     templateId: templateRecord.hsmTemplateId || null,
+    logId: messageLog.id,
     to: targetPhone,
     message: text,
     providerMessageId: result.messageId || null,

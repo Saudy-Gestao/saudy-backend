@@ -516,7 +516,7 @@ const extractInboundMessageText = (payload: any): string => {
   return extractMediaSummary(payload);
 };
 
-const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED' | 'READ' | 'TYPING' | null => {
+const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED' | 'READ' | 'TYPING' | 'FAILED' | null => {
   const candidates = Array.from(collectStringCandidates([
     body?.type,
     payload?.type,
@@ -528,6 +528,7 @@ const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED'
 
   for (const value of candidates) {
     if (value.includes('typing')) return 'TYPING';
+    if (value.includes('failed') || value.includes('undeliver') || value.includes('reject')) return 'FAILED';
     if (value.includes('read')) return 'READ';
     if (value.includes('deliver')) return 'DELIVERED';
     if (value.includes('sent') || value.includes('submit')) return 'SENT';
@@ -600,6 +601,8 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
           ? 'Mensagem lida pelo paciente.'
           : messageEvent === 'DELIVERED'
             ? 'Mensagem entregue ao paciente.'
+            : messageEvent === 'FAILED'
+              ? 'Falha de entrega retornada pelo provedor.'
             : messageEvent === 'SENT'
               ? 'Mensagem enviada ao provedor.'
               : 'Paciente está digitando.';
@@ -636,6 +639,16 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       });
 
       if (matchingLog) {
+        const webhookError = String(
+          inboundPayload?.errors?.[0]?.title
+          || inboundPayload?.errors?.[0]?.code
+          || inboundPayload?.payload?.errors?.[0]?.title
+          || inboundPayload?.payload?.errors?.[0]?.code
+          || inboundPayload?.reason
+          || inboundPayload?.statusReason
+          || '',
+        ).trim() || null;
+
         await prisma.whatsAppMessageLog.update({
           where: { id: matchingLog.id },
           data: {
@@ -644,6 +657,8 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
             ...(messageEvent === 'READ' ? { readAt: statusTimestamp } : {}),
             ...(messageEvent === 'READ' ? { status: 'READ' } : {}),
             ...(messageEvent === 'DELIVERED' ? { status: 'DELIVERED' } : {}),
+            ...(messageEvent === 'FAILED' ? { status: 'FAILED' } : {}),
+            ...(messageEvent === 'FAILED' ? { errorMessage: webhookError || 'Falha de entrega retornada pelo provedor.' } : {}),
             ...(messageEvent === 'SENT' ? { status: matchingLog.status === 'PENDING' ? 'SENT' : matchingLog.status } : {}),
           },
         });

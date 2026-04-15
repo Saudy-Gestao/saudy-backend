@@ -495,6 +495,18 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     const sourceNumber = whatsappConfig?.fromNumber;
 
     if ((whatsappConfig?.isActive || (!whatsappConfig && apiKey && appName && sourceNumber)) && flow.patientPhone) {
+      const messageLog = await prisma.whatsAppMessageLog.create({
+        data: {
+          branchId,
+          appointmentId: appointment.id,
+          patientName: flow.patientName || appointment.patientName || null,
+          patientPhone: flow.patientPhone,
+          messageType: 'APPOINTMENT_CREATED',
+          message: mockMessage,
+          status: 'PENDING',
+        },
+      });
+
       const gupshup = new GupshupService({
         apiKey,
         appName,
@@ -504,6 +516,26 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         to: flow.patientPhone,
         message: mockMessage,
       });
+
+      if (sendResult.status === 'success') {
+        await prisma.whatsAppMessageLog.update({
+          where: { id: messageLog.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: sendResult.messageId || null,
+            sentAt: new Date(),
+          },
+        });
+      } else {
+        await prisma.whatsAppMessageLog.update({
+          where: { id: messageLog.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: sendResult.error || 'Falha ao enviar mensagem de link de documentos.',
+          },
+        });
+      }
+
       whatsappResult = {
         provider: 'gupshup',
         to: flow.patientPhone,
@@ -511,6 +543,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         status: sendResult.status,
         messageId: sendResult.messageId || null,
         error: sendResult.error || null,
+        logId: messageLog.id,
       };
     }
 
