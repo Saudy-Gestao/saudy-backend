@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import GupshupService from '../lib/gupshup';
 import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
+import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
 const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
 const RECEPTION_DONE_STATUS = 'RECEPCAO_CONCLUIDA';
@@ -164,27 +165,17 @@ const resolvePreferredPhone = (...candidates: Array<string | null | undefined>) 
 };
 
 const resolveBranchWhatsAppConfig = async (branchId: string) => {
-  const config = await prisma.whatsAppConfig.findUnique({
-    where: { branchId },
-    select: {
-      accountSid: true,
-      authToken: true,
-      fromNumber: true,
-      isActive: true,
-    },
-  });
-
-  const apiKey = config?.accountSid;
-  const appName = config?.authToken;
-  const sourceNumber = config?.fromNumber;
-
-  const canUseBranchConfig = Boolean(config?.isActive && apiKey && appName && sourceNumber);
-
-  if (!canUseBranchConfig) {
+  const config = await resolveWhatsAppConfigForBranch(branchId, { requireActive: true, requireCredentials: true });
+  if (!config) {
     throw new Error('Credenciais do WhatsApp não configuradas para envio da teleconsulta.');
   }
 
-  return { apiKey, appName, sourceNumber };
+  return {
+    apiKey: config.accountSid,
+    appName: config.authToken,
+    sourceNumber: config.fromNumber,
+    sourceBranchId: config.sourceBranchId,
+  };
 };
 
 const sendTeleconsultationWhatsAppMessage = async (params: {
@@ -212,19 +203,30 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
     params.notes ? `Observação: ${params.notes}` : null,
   ].filter(Boolean).join(' ');
 
-  const templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
+  const templateBranchPriority = Array.from(new Set([
+    String(config.sourceBranchId || '').trim(),
+    String(params.branchId || '').trim(),
+  ].filter(Boolean)));
+
+  const templateCandidates = await prisma.whatsAppMessageTemplate.findMany({
     where: {
-      branchId: params.branchId,
+      branchId: { in: templateBranchPriority },
       type: 'TELECONSULTATION_LINK',
       isActive: true,
     },
+    orderBy: [{ updatedAt: 'desc' }],
     select: {
+      branchId: true,
       message: true,
       hsmTemplateId: true,
       hsmTemplateName: true,
       hsmTemplateApproved: true,
     },
   });
+
+  const templateRecord = templateBranchPriority
+    .map((candidateBranchId) => templateCandidates.find((item: any) => item.branchId === candidateBranchId))
+    .find(Boolean) || null;
 
   if (!templateRecord) {
     throw new Error('Template "Link de Teleconsulta" não está ativo para esta filial.');

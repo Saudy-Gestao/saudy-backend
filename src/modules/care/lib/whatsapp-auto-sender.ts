@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import prisma from './prisma';
 import GupshupService from './gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from './whatsapp-message-builder';
+import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 
 type WhatsAppMessageType =
   | 'APPOINTMENT_CREATED'
@@ -182,6 +183,10 @@ export class WhatsAppAutoSender {
       const whatsappConfig = await prisma.whatsAppConfig.findUnique({
         where: { branchId: params.branchId },
       });
+      const resolvedMessagingConfig = await resolveWhatsAppConfigForBranch(params.branchId, {
+        requireActive: true,
+        requireCredentials: true,
+      });
 
       if (whatsappConfig && !whatsappConfig.isActive) {
         const errorMessage = 'WhatsApp está desativado para esta filial';
@@ -279,19 +284,28 @@ export class WhatsAppAutoSender {
         documentsLink,
       };
 
+      const templateBranchPriority = Array.from(new Set([
+        String(resolvedMessagingConfig?.sourceBranchId || '').trim(),
+        String(params.branchId || '').trim(),
+      ].filter(Boolean)));
+
       // Buscar template de mensagem
       let message: string;
       let templateRecord: Awaited<ReturnType<typeof prisma.whatsAppMessageTemplate.findFirst>> | null = null;
       if (params.customMessage) {
         message = params.customMessage;
       } else {
-        templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
+        const templateCandidates = await prisma.whatsAppMessageTemplate.findMany({
           where: {
-            branchId: params.branchId,
+            branchId: { in: templateBranchPriority },
             type: params.messageType,
             isActive: true,
           },
+          orderBy: [{ updatedAt: 'desc' }],
         });
+        templateRecord = templateBranchPriority
+          .map((candidateBranchId) => templateCandidates.find((item: any) => item.branchId === candidateBranchId))
+          .find(Boolean) || null;
 
         if (!templateRecord) {
           const errorMessage = 'Template de mensagem não encontrado';
@@ -308,12 +322,12 @@ export class WhatsAppAutoSender {
         message = WhatsAppMessageBuilder.buildMessage(templateRecord.message, appointmentData);
       }
 
-      const apiKey = whatsappConfig?.accountSid;
-      const appName = whatsappConfig?.authToken;
-      const sourceNumber = whatsappConfig?.fromNumber;
+      const apiKey = resolvedMessagingConfig?.accountSid;
+      const appName = resolvedMessagingConfig?.authToken;
+      const sourceNumber = resolvedMessagingConfig?.fromNumber;
 
       if (!apiKey || !appName || !sourceNumber) {
-        const errorMessage = 'WhatsApp não está configurado. Salve as credenciais da filial.';
+        const errorMessage = 'WhatsApp não está configurado. Salve as credenciais da filial/empresa.';
         await this.createFailedLog({
           branchId: params.branchId,
           appointmentId: appointment.id,

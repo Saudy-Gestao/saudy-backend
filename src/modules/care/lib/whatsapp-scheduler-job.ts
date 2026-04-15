@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from './prisma';
 import WhatsAppAutoSender from './whatsapp-auto-sender';
 import GupshupService from './gupshup';
+import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 
@@ -176,16 +177,16 @@ export class WhatsAppSchedulerJob {
   }
 
   private static async getBranchMessagingConfig(branchId: string) {
-    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-    if (whatsappConfig?.isActive) {
-      return {
-        apiKey: whatsappConfig.accountSid,
-        appName: whatsappConfig.authToken,
-        sourceNumber: whatsappConfig.fromNumber,
-      };
-    }
-
-    return null;
+    const config = await resolveWhatsAppConfigForBranch(branchId, {
+      requireActive: true,
+      requireCredentials: true,
+    });
+    if (!config) return null;
+    return {
+      apiKey: config.accountSid,
+      appName: config.authToken,
+      sourceNumber: config.fromNumber,
+    };
   }
 
   static async processNoShows(): Promise<{ processed: number; updated: number; notified: number; failed: number }> {

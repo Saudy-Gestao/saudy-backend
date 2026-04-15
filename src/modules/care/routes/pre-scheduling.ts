@@ -4,6 +4,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { getAnexosStorage } from '../../../lib/storage';
 import GupshupService from '../lib/gupshup';
+import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
 const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
@@ -490,11 +491,15 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     };
 
     const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-    const apiKey = whatsappConfig?.accountSid;
-    const appName = whatsappConfig?.authToken;
-    const sourceNumber = whatsappConfig?.fromNumber;
+    const resolvedMessagingConfig = await resolveWhatsAppConfigForBranch(branchId, {
+      requireActive: true,
+      requireCredentials: true,
+    });
+    const apiKey = resolvedMessagingConfig?.accountSid;
+    const appName = resolvedMessagingConfig?.authToken;
+    const sourceNumber = resolvedMessagingConfig?.fromNumber;
 
-    if ((whatsappConfig?.isActive || (!whatsappConfig && apiKey && appName && sourceNumber)) && flow.patientPhone) {
+    if ((whatsappConfig?.isActive || resolvedMessagingConfig?.isInherited) && flow.patientPhone && apiKey && appName && sourceNumber) {
       const messageLog = await prisma.whatsAppMessageLog.create({
         data: {
           branchId,
