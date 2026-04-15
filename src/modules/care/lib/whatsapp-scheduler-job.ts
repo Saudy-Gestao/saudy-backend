@@ -38,6 +38,18 @@ const formatTimeInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
   return `${hour}:${minute}`;
 };
 
+const normalizeStatus = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase()
+  .replace(/\s+/g, '_');
+
+const isConfirmedStatus = (value?: string | null) => {
+  const normalized = normalizeStatus(value);
+  return normalized === 'CONFIRMADO' || normalized === 'CONFIRMED';
+};
+
 /**
  * Job para processar e enviar mensagens de confirmação de agendamentos
  */
@@ -285,6 +297,10 @@ export class WhatsAppSchedulerJob {
 
       for (const appointment of appointments) {
         processed++;
+
+        if (isConfirmedStatus((appointment as any)?.status)) {
+          continue;
+        }
 
         // Verificar se já enviou confirmação para este agendamento
         const existingLog = await prisma.whatsAppMessageLog.findFirst({
