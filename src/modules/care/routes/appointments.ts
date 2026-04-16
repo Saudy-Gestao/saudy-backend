@@ -24,7 +24,59 @@ const mapAppointmentStatusToWorklistStatus = (status?: string | null) => {
 
 const isConfirmedAppointmentStatus = (status?: string | null) => {
   const normalized = normalizeStatus(status);
-  return normalized === 'CONFIRMED' || normalized === 'CONFIRMADO';
+  return normalized.startsWith('CONFIRM');
+};
+
+const markManualConfirmationAsResolved = async (tx: Prisma.TransactionClient, params: {
+  branchId: string;
+  appointmentId: string;
+  patientName?: string | null;
+}) => {
+  const { branchId, appointmentId, patientName } = params;
+
+  const updatedPendingLogs = await tx.whatsAppMessageLog.updateMany({
+    where: {
+      branchId,
+      appointmentId,
+      messageType: 'APPOINTMENT_CONFIRMATION',
+      status: { in: ['PENDING', 'SENT'] },
+    },
+    data: {
+      status: 'RESPONDED_CONFIRMED',
+    },
+  });
+
+  if (updatedPendingLogs.count > 0) return;
+
+  const existingResolvedLog = await tx.whatsAppMessageLog.findFirst({
+    where: {
+      branchId,
+      appointmentId,
+      messageType: 'APPOINTMENT_CONFIRMATION',
+      NOT: {
+        status: { in: ['FAILED', 'ERROR'] },
+      },
+    },
+    select: { id: true },
+  });
+
+  if (existingResolvedLog) return;
+
+  const now = new Date();
+  await tx.whatsAppMessageLog.create({
+    data: {
+      branchId,
+      appointmentId,
+      patientName: patientName || null,
+      patientPhone: 'N/A',
+      messageType: 'APPOINTMENT_CONFIRMATION',
+      message: 'Confirmação registrada manualmente na agenda.',
+      status: 'RESPONDED_CONFIRMED',
+      sentAt: now,
+      deliveredAt: now,
+      readAt: now,
+    },
+  });
 };
 
 const generateAccessionNumber = () => {
@@ -1136,8 +1188,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           updateData.authorizedAt = null;
         }
 
+        const prevStatusRaw = updateData.status ?? existing.status;
         const prevStatus = normalizeStatus(existing.status);
-        const nextStatus = normalizeStatus(updateData.status ?? existing.status);
+        const nextStatus = normalizeStatus(prevStatusRaw);
         const specialtyChanged = String(updateData.specialty ?? existing.specialty ?? '') !== String(existing.specialty ?? '');
         const convenioChanged = String(updateData.convenio ?? existing.convenio ?? '') !== String(existing.convenio ?? '');
         const shouldRefreshReservation = specialtyChanged || convenioChanged;
@@ -1200,6 +1253,15 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         }
 
         const updated = await tx.appointment.update({ where: { id }, data: { ...updateData, branchId } });
+
+        if (!isConfirmedAppointmentStatus(existing.status) && isConfirmedAppointmentStatus(prevStatusRaw)) {
+          await markManualConfirmationAsResolved(tx, {
+            branchId,
+            appointmentId: updated.id,
+            patientName: updated.patientName || existing.patientName || null,
+          });
+        }
+
         await syncMwlFromAppointment(tx, updated, branchId);
         return updated;
       });
