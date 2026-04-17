@@ -83,6 +83,15 @@ const APPOINTMENT_TERMINAL_STATUS_KEYS = new Set([
   'FALTOU',
 ]);
 const APPOINTMENT_NO_SHOW_UPDATABLE_STATUS_KEYS = new Set(['AGENDADO', 'CONFIRMADO']);
+const FINAL_REPORT_STATUSES = new Set([
+  'FINALIZADO',
+  'FINALIZADO_COM_REVISAO',
+  'LIBERADO',
+  'ASSINADO',
+  'CONCLUIDO',
+  'FINAL',
+  'APROVADO',
+]);
 
 const normalizeAppointmentStatusKey = (value?: string | null) => normalizeStatusKey(value).replace(/\s+/g, '_');
 
@@ -241,6 +250,15 @@ const formatDateToIso = (date: Date) => {
   return `${y}-${m}-${d}`;
 };
 
+const normalizeReportStatusKey = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase()
+  .replace(/\s+/g, '_');
+
+const isFinalizedReportStatus = (value?: string | null) => FINAL_REPORT_STATUSES.has(normalizeReportStatusKey(value));
+
 const isTeleconsultationAppointment = (appointment: any) => String(appointment?.observations || '')
   .toUpperCase()
   .includes(TELECONSULTATION_OBSERVATION_MARKER);
@@ -328,6 +346,141 @@ const resolveNursingTemplateForAppointment = async (branchId: string, appointmen
 
   const template = matchedProcedure?.nursingTemplates?.[0];
   return template ? sortTemplate(template) : null;
+};
+
+const resolveConsultationExamInsights = async (branchId: string, consultations: any[]) => {
+  const reportByPatientKey = new Map<string, any[]>();
+  const patientIds = new Set<string>();
+  const patientCpfs = new Set<string>();
+  const patientNames = new Set<string>();
+
+  for (const consultation of consultations) {
+    const appointment = consultation?.appointment || null;
+    const patientId = String(appointment?.patientId || '').trim();
+    const patientCpf = String(appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const patientName = String(appointment?.patientName || consultation?.patientName || '').trim().toLowerCase();
+    if (patientId) patientIds.add(patientId);
+    if (patientCpf) patientCpfs.add(patientCpf);
+    if (patientName) patientNames.add(patientName);
+  }
+
+  if (patientIds.size === 0 && patientCpfs.size === 0 && patientNames.size === 0) {
+    return reportByPatientKey;
+  }
+
+  const reports = await prisma.report.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      OR: [
+        ...(patientIds.size > 0 ? [{ appointment: { is: { patientId: { in: Array.from(patientIds) } } } }] : []),
+        ...(patientCpfs.size > 0 ? [
+          { cpf: { in: Array.from(patientCpfs) } },
+          { appointment: { is: { patientCpf: { in: Array.from(patientCpfs) } } } },
+        ] : []),
+        ...(patientNames.size > 0
+          ? Array.from(patientNames).map((name) => ({ patientName: { equals: name, mode: 'insensitive' as const } }))
+          : []),
+      ],
+    },
+    select: {
+      id: true,
+      status: true,
+      exam: true,
+      updatedAt: true,
+      appointmentId: true,
+      patientName: true,
+      cpf: true,
+      appointment: {
+        select: {
+          patientId: true,
+          patientCpf: true,
+          patientName: true,
+        },
+      },
+      worklistItem: {
+        select: {
+          id: true,
+          dicomUrl: true,
+          dicomStudyUid: true,
+          dicomReceivedAt: true,
+        },
+      },
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 500,
+  });
+
+  for (const report of reports) {
+    const keys = new Set<string>();
+    const appointmentPatientId = String(report?.appointment?.patientId || '').trim();
+    const appointmentPatientCpf = String(report?.appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const reportCpf = String(report?.cpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const appointmentPatientName = String(report?.appointment?.patientName || '').trim().toLowerCase();
+    const reportPatientName = String(report?.patientName || '').trim().toLowerCase();
+    if (appointmentPatientId) keys.add(`id:${appointmentPatientId}`);
+    if (appointmentPatientCpf) keys.add(`cpf:${appointmentPatientCpf}`);
+    if (reportCpf) keys.add(`cpf:${reportCpf}`);
+    if (appointmentPatientName) keys.add(`name:${appointmentPatientName}`);
+    if (reportPatientName) keys.add(`name:${reportPatientName}`);
+
+    for (const key of keys) {
+      const existing = reportByPatientKey.get(key) || [];
+      existing.push(report);
+      reportByPatientKey.set(key, existing);
+    }
+  }
+
+  return reportByPatientKey;
+};
+
+const resolveConsultationDicomInsights = async (branchId: string, consultations: any[]) => {
+  const appointmentIds = Array.from(new Set(
+    consultations
+      .map((item: any) => String(item?.appointment?.id || item?.appointmentId || '').trim())
+      .filter(Boolean),
+  ));
+  const mapByAppointmentId = new Map<string, any>();
+  if (appointmentIds.length === 0) return mapByAppointmentId;
+
+  const items = await prisma.reportWorklistItem.findMany({
+    where: {
+      appointmentId: { in: appointmentIds },
+      OR: [{ branchId }, { branchId: null }],
+      isActive: true,
+    },
+    select: {
+      id: true,
+      appointmentId: true,
+      dicomStudyUid: true,
+      dicomUrl: true,
+      dicomReceivedAt: true,
+      createdAt: true,
+      dicomFiles: { select: { id: true }, take: 1 },
+    },
+    orderBy: [
+      { dicomReceivedAt: 'desc' },
+      { createdAt: 'desc' },
+    ],
+    take: 1000,
+  });
+
+  for (const worklist of items) {
+    const appointmentId = String(worklist?.appointmentId || '').trim();
+    if (!appointmentId || mapByAppointmentId.has(appointmentId)) continue;
+    const hasImage = Boolean(
+      worklist?.dicomReceivedAt
+      || worklist?.dicomStudyUid
+      || worklist?.dicomUrl
+      || (Array.isArray(worklist?.dicomFiles) && worklist.dicomFiles.length > 0),
+    );
+    mapByAppointmentId.set(appointmentId, {
+      hasImage,
+      worklist,
+    });
+  }
+
+  return mapByAppointmentId;
 };
 
 const toConsultationView = (item: any) => ({
@@ -1405,7 +1558,18 @@ export default async function consultationRoutes(app: FastifyInstance) {
         orderBy: { createdAt: 'desc' },
         include: {
           appointment: {
-            select: { id: true, specialty: true, type: true, date: true, time: true, observations: true, status: true },
+            select: {
+              id: true,
+              specialty: true,
+              type: true,
+              date: true,
+              time: true,
+              observations: true,
+              status: true,
+              patientId: true,
+              patientCpf: true,
+              patientName: true,
+            },
           },
           nursingResponse: {
             include: { answers: true },
@@ -1417,12 +1581,59 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
     const nowDate = getTodayDateString();
     const nowTime = getNowTimeString();
+    const reportInsights = await resolveConsultationExamInsights(branchId, items as any[]);
+    const dicomInsights = await resolveConsultationDicomInsights(branchId, items as any[]);
     const enriched = await Promise.all(items.map(async (item: any) => {
       const nursingTemplate = item.appointment
         ? await resolveNursingTemplateForAppointment(branchId, item.appointment)
         : null;
+      const patientId = String(item?.appointment?.patientId || '').trim();
+      const patientCpf = String(item?.appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+      const patientName = String(item?.appointment?.patientName || item?.patientName || '').trim().toLowerCase();
+      const appointmentId = String(item?.appointment?.id || item?.appointmentId || '').trim();
+      const dicomInsight = appointmentId ? dicomInsights.get(appointmentId) : null;
+      const latestExamImage = dicomInsight?.worklist || null;
+      const hasExamImageReceived = Boolean(dicomInsight?.hasImage);
+      const relatedReports = [
+        ...(patientId ? (reportInsights.get(`id:${patientId}`) || []) : []),
+        ...(patientCpf ? (reportInsights.get(`cpf:${patientCpf}`) || []) : []),
+        ...(patientName ? (reportInsights.get(`name:${patientName}`) || []) : []),
+      ].filter(Boolean);
+      const finalReports = relatedReports.filter((report: any) => isFinalizedReportStatus(report?.status));
+      const latestFinalReport = finalReports
+        .sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0] || null;
+      const hasExamImagesAvailable = Boolean(
+        latestFinalReport?.worklistItem?.dicomStudyUid
+        || latestFinalReport?.worklistItem?.dicomUrl
+        || latestFinalReport?.worklistItem?.dicomReceivedAt,
+      );
       return toConsultationView({
         ...item,
+        hasExamImageReceived,
+        latestExamImage: latestExamImage
+          ? {
+              id: latestExamImage.id,
+              appointmentId: latestExamImage.appointmentId || null,
+              dicomStudyUid: latestExamImage.dicomStudyUid || null,
+              dicomUrl: latestExamImage.dicomUrl || null,
+              dicomReceivedAt: latestExamImage.dicomReceivedAt || null,
+            }
+          : null,
+        hasFinalizedExamReport: Boolean(latestFinalReport),
+        hasExamImagesAvailable,
+        latestFinalizedExamReport: latestFinalReport
+          ? {
+              id: latestFinalReport.id,
+              status: latestFinalReport.status,
+              exam: latestFinalReport.exam || null,
+              updatedAt: latestFinalReport.updatedAt,
+              appointmentId: latestFinalReport.appointmentId || null,
+              worklistItemId: latestFinalReport.worklistItem?.id || null,
+              dicomStudyUid: latestFinalReport.worklistItem?.dicomStudyUid || null,
+              dicomUrl: latestFinalReport.worklistItem?.dicomUrl || null,
+              dicomReceivedAt: latestFinalReport.worklistItem?.dicomReceivedAt || null,
+            }
+          : null,
         nursingTemplate: nursingTemplate
           ? {
               id: nursingTemplate.id,
@@ -1488,7 +1699,17 @@ export default async function consultationRoutes(app: FastifyInstance) {
       },
       include: {
         appointment: {
-          select: { id: true, specialty: true, type: true, date: true, time: true, observations: true },
+          select: {
+            id: true,
+            specialty: true,
+            type: true,
+            date: true,
+            time: true,
+            observations: true,
+            patientId: true,
+            patientCpf: true,
+            patientName: true,
+          },
         },
         nursingResponse: {
           include: { answers: true },
@@ -1499,8 +1720,55 @@ export default async function consultationRoutes(app: FastifyInstance) {
     const nursingTemplate = item.appointment
       ? await resolveNursingTemplateForAppointment(branchId, item.appointment)
       : null;
+    const reportInsights = await resolveConsultationExamInsights(branchId, [item] as any[]);
+    const dicomInsights = await resolveConsultationDicomInsights(branchId, [item] as any[]);
+    const patientId = String(item?.appointment?.patientId || '').trim();
+    const patientCpf = String(item?.appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const patientName = String(item?.appointment?.patientName || item?.patientName || '').trim().toLowerCase();
+    const appointmentId = String(item?.appointment?.id || item?.appointmentId || '').trim();
+    const dicomInsight = appointmentId ? dicomInsights.get(appointmentId) : null;
+    const latestExamImage = dicomInsight?.worklist || null;
+    const hasExamImageReceived = Boolean(dicomInsight?.hasImage);
+    const relatedReports = [
+      ...(patientId ? (reportInsights.get(`id:${patientId}`) || []) : []),
+      ...(patientCpf ? (reportInsights.get(`cpf:${patientCpf}`) || []) : []),
+      ...(patientName ? (reportInsights.get(`name:${patientName}`) || []) : []),
+    ].filter(Boolean);
+    const finalReports = relatedReports.filter((report: any) => isFinalizedReportStatus(report?.status));
+    const latestFinalReport = finalReports
+      .sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0] || null;
+    const hasExamImagesAvailable = Boolean(
+      latestFinalReport?.worklistItem?.dicomStudyUid
+      || latestFinalReport?.worklistItem?.dicomUrl
+      || latestFinalReport?.worklistItem?.dicomReceivedAt,
+    );
     return toConsultationView({
       ...item,
+      hasExamImageReceived,
+      latestExamImage: latestExamImage
+        ? {
+            id: latestExamImage.id,
+            appointmentId: latestExamImage.appointmentId || null,
+            dicomStudyUid: latestExamImage.dicomStudyUid || null,
+            dicomUrl: latestExamImage.dicomUrl || null,
+            dicomReceivedAt: latestExamImage.dicomReceivedAt || null,
+          }
+        : null,
+      hasFinalizedExamReport: Boolean(latestFinalReport),
+      hasExamImagesAvailable,
+      latestFinalizedExamReport: latestFinalReport
+        ? {
+            id: latestFinalReport.id,
+            status: latestFinalReport.status,
+            exam: latestFinalReport.exam || null,
+            updatedAt: latestFinalReport.updatedAt,
+            appointmentId: latestFinalReport.appointmentId || null,
+            worklistItemId: latestFinalReport.worklistItem?.id || null,
+            dicomStudyUid: latestFinalReport.worklistItem?.dicomStudyUid || null,
+            dicomUrl: latestFinalReport.worklistItem?.dicomUrl || null,
+            dicomReceivedAt: latestFinalReport.worklistItem?.dicomReceivedAt || null,
+          }
+        : null,
       nursingTemplate: nursingTemplate
         ? {
             id: nursingTemplate.id,
@@ -2228,6 +2496,60 @@ export default async function consultationRoutes(app: FastifyInstance) {
           error: 'Invalid status transition',
           message: `Não é permitido mudar de "${existing.queue || 'SEM_STATUS'}" para "${data.queue}".`,
         });
+      }
+
+      if (hasQueueStatusChange && toStatus === 'EXAME_CONCLUIDO') {
+        let appointmentForExamCompletion = null as any;
+        const deterministicAppointmentId = String(data?.appointmentId || existing.appointmentId || '').trim();
+        if (deterministicAppointmentId) {
+          appointmentForExamCompletion = await prisma.appointment.findFirst({
+            where: {
+              id: deterministicAppointmentId,
+              branchId,
+              isActive: true,
+            },
+          });
+        }
+
+        if (!appointmentForExamCompletion) {
+          appointmentForExamCompletion = await findTodayAppointmentCandidate({
+            branchId,
+            patientName: existing.patientName,
+            doctorName: existing.doctorName,
+            agenda: existing.agenda || existing.scheduledFor,
+          });
+        }
+
+        if (!appointmentForExamCompletion?.id) {
+          return reply.code(400).send({
+            error: 'Exam completion blocked',
+            message: 'Não foi possível identificar o agendamento do exame para validar as imagens recebidas.',
+          });
+        }
+
+        const hasImage = await prisma.reportWorklistItem.findFirst({
+          where: {
+            appointmentId: appointmentForExamCompletion.id,
+            isActive: true,
+            AND: [
+              { OR: [{ branchId }, { branchId: null }] },
+              { OR: [
+              { dicomReceivedAt: { not: null } },
+              { dicomStudyUid: { not: null } },
+              { dicomUrl: { not: null } },
+              { dicomFiles: { some: {} } },
+              ] },
+            ],
+          },
+          select: { id: true },
+        });
+
+        if (!hasImage) {
+          return reply.code(400).send({
+            error: 'Exam completion blocked',
+            message: 'Não é permitido finalizar exame sem imagem recebida no sistema.',
+          });
+        }
       }
 
       const nextData = {

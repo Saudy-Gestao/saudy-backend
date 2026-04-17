@@ -16,6 +16,9 @@ export interface AppointmentData {
   location?: string | null;
   professional?: string | null;
   documentsLink?: string | null;
+  examName?: string | null;
+  returnDate?: string | null;
+  returnTime?: string | null;
 }
 
 /**
@@ -34,6 +37,9 @@ export interface AppointmentData {
  * - {{local}} - Local do atendimento
  * - {{profissional}} - Nome do profissional
  * - {{link_documentos}} - Link para envio de documentos
+ * - {{exame_nome}} - Nome do exame/laudo
+ * - {{retorno_data}} - Data sugerida para retorno
+ * - {{retorno_hora}} - Horário sugerido para retorno
  */
 export class WhatsAppMessageBuilder {
   /**
@@ -55,6 +61,9 @@ export class WhatsAppMessageBuilder {
     message = message.replace(/\{\{local\}\}/gi, data.location || data.clinicName || '');
     message = message.replace(/\{\{profissional\}\}/gi, data.professional || data.doctorName || '');
     message = message.replace(/\{\{link_documentos\}\}/gi, data.documentsLink || '');
+    message = message.replace(/\{\{exame_nome\}\}/gi, data.examName || data.specialty || '');
+    message = message.replace(/\{\{retorno_data\}\}/gi, data.returnDate || '');
+    message = message.replace(/\{\{retorno_hora\}\}/gi, data.returnTime || '');
 
     return message.trim();
   }
@@ -101,6 +110,9 @@ export class WhatsAppMessageBuilder {
       { key: '{{local}}', description: 'Local do atendimento' },
       { key: '{{profissional}}', description: 'Profissional responsável' },
       { key: '{{link_documentos}}', description: 'Link para envio de documentos' },
+      { key: '{{exame_nome}}', description: 'Nome do exame/laudo' },
+      { key: '{{retorno_data}}', description: 'Data sugerida para retorno' },
+      { key: '{{retorno_hora}}', description: 'Horário sugerido para retorno' },
     ];
   }
 
@@ -128,6 +140,9 @@ export class WhatsAppMessageBuilder {
         case 'local': value = data.location || data.clinicName || ''; break;
         case 'profissional': value = data.professional || data.doctorName || ''; break;
         case 'link_documentos': value = data.documentsLink || ''; break;
+        case 'exame_nome': value = data.examName || data.specialty || ''; break;
+        case 'retorno_data': value = data.returnDate || ''; break;
+        case 'retorno_hora': value = data.returnTime || ''; break;
       }
       params.push(value);
     }

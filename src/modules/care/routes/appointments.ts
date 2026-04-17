@@ -12,6 +12,55 @@ const RESERVABLE_STATUSES = new Set(['AGENDADO', 'SCHEDULED', 'CONFIRMADO', 'CON
 
 const normalizeStatus = (status?: string | null) => String(status || '').trim().toUpperCase();
 
+const normalizeAppointmentType = (value?: string | null): 'CONSULTA' | 'EXAME' | null => {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (!normalized) return null;
+  if (normalized === 'EXAME' || normalized === 'EXAM') return 'EXAME';
+  if (normalized === 'CONSULTA' || normalized === 'CONSULTATION') return 'CONSULTA';
+  return null;
+};
+
+const parseProcedureNamesFromSpecialty = (value?: string | null): string[] => (
+  String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+);
+
+const hasMixedAppointmentTypeInSpecialty = async (params: {
+  branchId: string;
+  specialty?: string | null;
+}) => {
+  const names = parseProcedureNamesFromSpecialty(params.specialty);
+  if (names.length <= 1) return false;
+
+  const procedures = await prisma.procedure.findMany({
+    where: {
+      branchId: params.branchId,
+      isActive: true,
+      OR: names.map((name) => ({ name: { equals: name, mode: 'insensitive' as const } })),
+    },
+    select: {
+      name: true,
+      appointmentType: true,
+    },
+    take: Math.max(20, names.length * 2),
+  });
+
+  if (!procedures.length) return false;
+
+  const normalizedProcedureNames = new Set(names.map((name) => name.toLowerCase()));
+  const typeSet = new Set<'CONSULTA' | 'EXAME'>();
+  for (const procedure of procedures) {
+    const procedureName = String(procedure?.name || '').trim().toLowerCase();
+    if (!procedureName || !normalizedProcedureNames.has(procedureName)) continue;
+    const procedureType = normalizeAppointmentType(procedure?.appointmentType);
+    if (procedureType) typeSet.add(procedureType);
+  }
+
+  return typeSet.size > 1;
+};
+
 const mapAppointmentStatusToWorklistStatus = (status?: string | null) => {
   const normalized = normalizeStatus(status);
   if (CANCELED_STATUSES.has(normalized)) return 'cancelado';
@@ -85,6 +134,8 @@ const generateAccessionNumber = () => {
   return `ACC-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
 };
 
+const hasAccessionNumber = (value?: string | null) => String(value || '').trim().length > 0;
+
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 const APPOINTMENT_MUTABLE_FIELDS = new Set([
   'rescheduledFromAppointmentId',
@@ -149,6 +200,8 @@ const formatTimeInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
   const { hour, minute } = getTimeZoneParts(date, timeZone);
   return `${hour}:${minute}`;
 };
+
+const normalizeCpf = (value?: string | null) => String(value || '').replace(/\D/g, '').trim();
 
 const parseTimeToMinutes = (value?: string | null): number | null => {
   if (!value) return null;
@@ -281,6 +334,95 @@ async function findResourceScheduleConflict(params: {
   return candidates.find((candidate: any) => (
     timeRangesOverlap(time, durationMinutes, candidate?.time, candidate?.durationMinutes)
   )) || null;
+}
+
+const minutesToTimeString = (value: number): string | null => {
+  if (!Number.isFinite(value)) return null;
+  const safe = Math.max(0, Math.min(1439, Math.floor(value)));
+  const hour = String(Math.floor(safe / 60)).padStart(2, '0');
+  const minute = String(safe % 60).padStart(2, '0');
+  return `${hour}:${minute}`;
+};
+
+async function findPatientScheduleConflict(params: {
+  tx: Prisma.TransactionClient;
+  branchId: string;
+  patientId?: string | null;
+  patientCpf?: string | null;
+  date?: string | null;
+  time?: string | null;
+  durationMinutes?: number | null;
+  excludeAppointmentId?: string | null;
+}) {
+  const {
+    tx,
+    branchId,
+    patientId,
+    patientCpf,
+    date,
+    time,
+    durationMinutes,
+    excludeAppointmentId,
+  } = params;
+
+  if (!date || !time) return null;
+
+  const normalizedPatientId = String(patientId || '').trim();
+  const normalizedPatientCpf = normalizeCpf(patientCpf);
+  if (!normalizedPatientId && !normalizedPatientCpf) return null;
+
+  const candidates = await tx.appointment.findMany({
+    where: {
+      branchId,
+      date,
+      isActive: true,
+      ...(excludeAppointmentId ? { id: { not: excludeAppointmentId } } : {}),
+      OR: [
+        ...(normalizedPatientId ? [{ patientId: normalizedPatientId }] : []),
+        ...(normalizedPatientCpf ? [{ patientCpf: { contains: normalizedPatientCpf } }] : []),
+      ],
+      NOT: [
+        { status: 'CANCELED' },
+        { status: 'CANCELADO' },
+        { status: 'COMPLETED' },
+        { status: 'CONCLUIDO' },
+        { status: 'NAO_COMPARECEU' },
+        { status: 'NÃO_COMPARECEU' },
+        { status: 'NO_SHOW' },
+        { status: 'NO-SHOW' },
+        { status: 'AUSENTE' },
+        { status: 'FALTOU' },
+      ],
+    },
+    select: {
+      id: true,
+      patientName: true,
+      time: true,
+      durationMinutes: true,
+      type: true,
+      specialty: true,
+      status: true,
+    },
+  });
+
+  const conflict = candidates.find((candidate: any) => (
+    timeRangesOverlap(time, durationMinutes, candidate?.time, candidate?.durationMinutes)
+  )) || null;
+
+  if (!conflict) return null;
+
+  const conflictStartMinutes = parseTimeToMinutes(conflict?.time);
+  const conflictDuration = Number.isFinite(Number(conflict?.durationMinutes)) && Number(conflict?.durationMinutes) > 0
+    ? Number(conflict.durationMinutes)
+    : 30;
+  const suggestedTime = conflictStartMinutes === null
+    ? null
+    : minutesToTimeString(conflictStartMinutes + conflictDuration);
+
+  return {
+    ...conflict,
+    suggestedTime,
+  };
 }
 
 const GCS_BUCKET = process.env.GOOGLE_STORAGE_BUCKET_ANEXOS
@@ -1085,6 +1227,28 @@ export default async function appointmentRoutes(app: FastifyInstance) {
 
     const data = request.body as any;
     try {
+      const mixedProcedureTypes = await hasMixedAppointmentTypeInSpecialty({
+        branchId,
+        specialty: data?.specialty || null,
+      });
+      if (mixedProcedureTypes) {
+        return reply.code(400).send({
+          error: 'Invalid appointment mix',
+          message: 'Não é permitido misturar procedimentos de consulta e exame na mesma marcação.',
+        });
+      }
+      const normalizedType = normalizeAppointmentType(data?.type || null);
+      if (
+        normalizedType === 'CONSULTA'
+        && String(data?.roomId || '').trim()
+        && String(data?.medicalEquipmentId || '').trim()
+      ) {
+        return reply.code(400).send({
+          error: 'Invalid appointment payload',
+          message: 'Consulta não pode ser salva com sala e equipamento de exame ao mesmo tempo.',
+        });
+      }
+
       if (data.rescheduledFromAppointmentId) {
         const source = await prisma.appointment.findFirst({
           where: { id: String(data.rescheduledFromAppointmentId), branchId },
@@ -1096,6 +1260,28 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       }
 
       const requestedDurationMinutes = Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : 30;
+      const patientConflict = await prisma.$transaction(async (tx: Prisma.TransactionClient) => (
+        findPatientScheduleConflict({
+          tx,
+          branchId,
+          patientId: data.patientId || null,
+          patientCpf: data.patientCpf || null,
+          date: data.date || null,
+          time: data.time || null,
+          durationMinutes: requestedDurationMinutes,
+        })
+      ));
+
+      if (patientConflict) {
+        return reply.code(409).send({
+          error: 'Scheduling conflict',
+          conflictType: 'PATIENT',
+          message: 'O paciente já possui outro agendamento nesse horário.',
+          details: 'Conflito às ' + String(patientConflict.time || '') + '.'
+            + (patientConflict.suggestedTime ? ` Sugestão: ${patientConflict.suggestedTime}.` : ''),
+        });
+      }
+
       const doctorConflict = await prisma.$transaction(async (tx: Prisma.TransactionClient) => (
         findDoctorScheduleConflict({
           tx,
@@ -1110,6 +1296,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       if (doctorConflict) {
         return reply.code(409).send({
           error: 'Scheduling conflict',
+          conflictType: 'DOCTOR',
           message: 'O médico já possui outra consulta nesse horário.',
           details: 'Conflito com ' + String(doctorConflict.patientName || 'outro paciente') + ' às ' + String(doctorConflict.time || '') + '.',
         });
@@ -1130,6 +1317,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       if (resourceConflict) {
         return reply.code(409).send({
           error: 'Scheduling conflict',
+          conflictType: 'RESOURCE',
           message: 'A sala ou o equipamento já está reservado nesse horário.',
           details: 'Conflito identificado no recurso selecionado.',
         });
@@ -1235,7 +1423,11 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         const updateData = Object.fromEntries(
           Object.entries(data || {}).filter(([key]) => APPOINTMENT_MUTABLE_FIELDS.has(key))
         ) as Record<string, any>;
+        const resolvedSpecialty = updateData.specialty ?? existing.specialty;
+        const resolvedAppointmentType = updateData.type ?? existing.type;
         const resolvedDoctorName = updateData.doctorName ?? existing.doctorName;
+        const resolvedPatientId = updateData.patientId ?? existing.patientId;
+        const resolvedPatientCpf = updateData.patientCpf ?? existing.patientCpf;
         const resolvedRoomId = updateData.roomId ?? existing.roomId;
         const resolvedMedicalEquipmentId = updateData.medicalEquipmentId ?? existing.medicalEquipmentId;
         const resolvedDate = updateData.date ?? existing.date;
@@ -1253,7 +1445,45 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           || resolvedDurationMinutes !== (Number.isFinite(existing.durationMinutes) ? Number(existing.durationMinutes) : 30)
           || nextStatusForConflict !== existing.status
         );
+
+        if ('specialty' in updateData || 'type' in updateData) {
+          const mixedProcedureTypes = await hasMixedAppointmentTypeInSpecialty({
+            branchId,
+            specialty: resolvedSpecialty,
+          });
+          if (mixedProcedureTypes) {
+            throw new Error('MIXED_APPOINTMENT_TYPES');
+          }
+          const normalizedType = normalizeAppointmentType(resolvedAppointmentType);
+          if (
+            normalizedType
+            && parseProcedureNamesFromSpecialty(resolvedSpecialty).length > 0
+            && normalizedType === 'CONSULTA'
+            && String(resolvedRoomId || '').trim()
+            && String(resolvedMedicalEquipmentId || '').trim()
+          ) {
+            throw new Error('CONSULTA_WITH_EXAM_RESOURCE');
+          }
+        }
+
         if (schedulingChanged && hasBlockingStatus(nextStatusForConflict)) {
+          const patientConflict = await findPatientScheduleConflict({
+            tx,
+            branchId,
+            patientId: resolvedPatientId,
+            patientCpf: resolvedPatientCpf,
+            date: resolvedDate,
+            time: resolvedTime,
+            durationMinutes: resolvedDurationMinutes,
+            excludeAppointmentId: id,
+          });
+          if (patientConflict) {
+            throw new Error('PATIENT_SCHEDULE_CONFLICT::'
+              + String(patientConflict.time || '')
+              + '::'
+              + String(patientConflict.suggestedTime || ''));
+          }
+
           const doctorConflict = await findDoctorScheduleConflict({
             tx,
             branchId,
@@ -1293,6 +1523,14 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         }
 
         const prevStatusRaw = updateData.status ?? existing.status;
+        const resolvedAccessionNumber = (
+          'accessionNumber' in updateData
+            ? updateData.accessionNumber
+            : existing.accessionNumber
+        );
+        if (isConfirmedAppointmentStatus(prevStatusRaw) && !hasAccessionNumber(resolvedAccessionNumber)) {
+          updateData.accessionNumber = generateAccessionNumber();
+        }
         const prevStatus = normalizeStatus(existing.status);
         const nextStatus = normalizeStatus(prevStatusRaw);
         const specialtyChanged = String(updateData.specialty ?? existing.specialty ?? '') !== String(existing.specialty ?? '');
@@ -1384,13 +1622,37 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         const [, patientName, conflictTime] = String(err.message).split('::');
         return reply.code(409).send({
           error: 'Scheduling conflict',
+          conflictType: 'DOCTOR',
           message: 'O médico já possui outra consulta nesse horário.',
           details: 'Conflito com ' + String(patientName || 'outro paciente') + ' às ' + String(conflictTime || '') + '.',
+        });
+      }
+      if (String(err?.message || '').startsWith('PATIENT_SCHEDULE_CONFLICT::')) {
+        const [, conflictTime, suggestedTime] = String(err.message).split('::');
+        return reply.code(409).send({
+          error: 'Scheduling conflict',
+          conflictType: 'PATIENT',
+          message: 'O paciente já possui outro agendamento nesse horário.',
+          details: 'Conflito às ' + String(conflictTime || '') + '.'
+            + (suggestedTime ? ` Sugestão: ${suggestedTime}.` : ''),
+        });
+      }
+      if (String(err?.message || '') === 'MIXED_APPOINTMENT_TYPES') {
+        return reply.code(400).send({
+          error: 'Invalid appointment mix',
+          message: 'Não é permitido misturar procedimentos de consulta e exame na mesma marcação.',
+        });
+      }
+      if (String(err?.message || '') === 'CONSULTA_WITH_EXAM_RESOURCE') {
+        return reply.code(400).send({
+          error: 'Invalid appointment payload',
+          message: 'Consulta não pode ser salva com sala e equipamento de exame ao mesmo tempo.',
         });
       }
       if (String(err?.message || '').startsWith('RESOURCE_SCHEDULE_CONFLICT')) {
         return reply.code(409).send({
           error: 'Scheduling conflict',
+          conflictType: 'RESOURCE',
           message: 'A sala ou o equipamento já está reservado nesse horário.',
           details: 'Conflito identificado no recurso selecionado.',
         });
@@ -1439,7 +1701,14 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     if (!appointment) return reply.code(404).send({ error: 'Appointment not found' });
 
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      await syncMwlFromAppointment(tx, appointment, branchId);
+      let appointmentForMwl = appointment;
+      if (isConfirmedAppointmentStatus(appointmentForMwl.status) && !hasAccessionNumber(appointmentForMwl.accessionNumber)) {
+        appointmentForMwl = await tx.appointment.update({
+          where: { id: appointmentForMwl.id },
+          data: { accessionNumber: generateAccessionNumber() },
+        });
+      }
+      await syncMwlFromAppointment(tx, appointmentForMwl, branchId);
     });
 
     const mwlEntry = await prisma.mwlEntry.findFirst({

@@ -7,6 +7,7 @@ import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver'
 type WhatsAppMessageType =
   | 'APPOINTMENT_CREATED'
   | 'APPOINTMENT_CONFIRMATION'
+  | 'EXAM_REPORT_READY'
   | 'NO_SHOW'
   | 'CONFIRMATION_REPLY_CONFIRMED'
   | 'CONFIRMATION_REPLY_RESCHEDULE';
@@ -46,6 +47,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
             enum: [
               'APPOINTMENT_CREATED',
               'APPOINTMENT_CONFIRMATION',
+              'EXAM_REPORT_READY',
               'NO_SHOW',
               'CONFIRMATION_REPLY_CONFIRMED',
               'CONFIRMATION_REPLY_RESCHEDULE',

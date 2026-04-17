@@ -42,9 +42,48 @@ const parseConfirmationAction = (payload: any): 'CONFIRMED' | 'RESCHEDULE' | nul
   return null;
 };
 
+const parseExamResultAction = (payload: any): 'SCHEDULE_FOLLOWUP' | 'LATER_FOLLOWUP' | null => {
+  const candidates = Array.from(collectStringCandidates(payload));
+
+  for (const value of candidates) {
+    if (
+      value.includes('schedule_followup')
+      || value.includes('followup_yes')
+      || value.includes('agendar_retorno')
+      || value.includes('agendar retorno')
+      || value.includes('retorno')
+    ) return 'SCHEDULE_FOLLOWUP';
+    if (
+      value.includes('later_followup')
+      || value.includes('followup_later')
+      || value.includes('depois')
+      || value.includes('mais tarde')
+    ) return 'LATER_FOLLOWUP';
+  }
+
+  return null;
+};
+
 const CONFIRMATION_TERMINAL_STATUSES = new Set([
   'RESPONDED_CONFIRMED',
   'RESPONDED_RESCHEDULE',
+]);
+
+const EXAM_RESULT_TERMINAL_STATUSES = new Set([
+  'RESPONDED_FOLLOWUP_SCHEDULE',
+  'RESPONDED_FOLLOWUP_LATER',
+]);
+
+const NON_BLOCKING_APPOINTMENT_STATUSES = new Set([
+  'CANCELADO',
+  'CANCELED',
+  'REALIZADO',
+  'COMPLETED',
+  'FINALIZADO',
+  'NO_SHOW',
+  'NAO_COMPARECEU',
+  'AUSENTE',
+  'FALTOU',
 ]);
 
 const RESCHEDULE_CONFIRMATION_FLOW = {
@@ -516,6 +555,142 @@ const extractInboundMessageText = (payload: any): string => {
   return extractMediaSummary(payload);
 };
 
+const normalizeAppointmentStatusKey = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase()
+  .replace(/\s+/g, '_');
+
+const parseTimeToMinutes = (value?: string | null) => {
+  const match = String(value || '').trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return (hours * 60) + minutes;
+};
+
+const rangesOverlap = (
+  startA?: string | null,
+  durationA?: number | null,
+  startB?: string | null,
+  durationB?: number | null,
+) => {
+  const startMinutesA = parseTimeToMinutes(startA);
+  const startMinutesB = parseTimeToMinutes(startB);
+  if (startMinutesA === null || startMinutesB === null) return false;
+  const safeDurationA = Number.isFinite(Number(durationA)) && Number(durationA) > 0 ? Number(durationA) : 30;
+  const safeDurationB = Number.isFinite(Number(durationB)) && Number(durationB) > 0 ? Number(durationB) : 30;
+  const endA = startMinutesA + safeDurationA;
+  const endB = startMinutesB + safeDurationB;
+  return startMinutesA < endB && startMinutesB < endA;
+};
+
+const formatDateIso = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const isBusinessDay = (date: Date) => {
+  const weekDay = date.getDay();
+  return weekDay !== 0 && weekDay !== 6;
+};
+
+const addBusinessDays = (baseDate: Date, businessDays: number) => {
+  let added = 0;
+  const cursor = new Date(baseDate);
+  cursor.setHours(0, 0, 0, 0);
+
+  while (added < Math.max(0, businessDays)) {
+    cursor.setDate(cursor.getDate() + 1);
+    if (isBusinessDay(cursor)) added += 1;
+  }
+
+  return cursor;
+};
+
+const formatDatePtBr = (value?: string | null) => {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(String(value))) return null;
+  const date = new Date(`${value}T00:00:00`);
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date);
+};
+
+const resolveFollowUpSpecialty = (sourceSpecialty?: string | null) => {
+  const normalized = String(sourceSpecialty || '').trim();
+  if (!normalized) return 'CONSULTA DE RETORNO';
+  return `RETORNO ${normalized}`;
+};
+
+const findSuggestedFollowUpSlot = async (tx: Prisma.TransactionClient, params: {
+  branchId: string;
+  doctorName?: string | null;
+  baseDate?: string | null;
+  preferredTime?: string | null;
+}) => {
+  const normalizedDoctor = String(params.doctorName || '').trim();
+  const preferredTime = /^\d{2}:\d{2}$/.test(String(params.preferredTime || '').trim())
+    ? String(params.preferredTime || '')
+    : '09:00';
+  const base = params.baseDate && /^\d{4}-\d{2}-\d{2}$/.test(String(params.baseDate))
+    ? new Date(`${params.baseDate}T00:00:00`)
+    : new Date();
+  const searchStart = addBusinessDays(base, 7);
+  const timeCandidates = Array.from(new Set([preferredTime, '09:00', '10:00', '11:00', '14:00', '15:00', '16:00']));
+
+  for (let dayOffset = 0; dayOffset < 45; dayOffset += 1) {
+    const candidate = new Date(searchStart);
+    candidate.setDate(searchStart.getDate() + dayOffset);
+    if (!isBusinessDay(candidate)) continue;
+    const dateIso = formatDateIso(candidate);
+
+    const appointments = normalizedDoctor
+      ? await tx.appointment.findMany({
+          where: {
+            branchId: params.branchId,
+            date: dateIso,
+            doctorName: { equals: normalizedDoctor, mode: 'insensitive' },
+            isActive: true,
+          },
+          select: {
+            time: true,
+            durationMinutes: true,
+            status: true,
+          },
+        })
+      : [];
+
+    const blocking = appointments.filter((item: any) => (
+      !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeAppointmentStatusKey(item?.status || ''))
+    ));
+
+    const availableTime = timeCandidates.find((time) => (
+      !blocking.some((item: any) => rangesOverlap(time, 30, item?.time, item?.durationMinutes))
+    ));
+    if (!availableTime) continue;
+
+    return {
+      date: dateIso,
+      time: availableTime,
+      suggestionLabel: `${formatDatePtBr(dateIso) || dateIso} às ${availableTime}`,
+    };
+  }
+
+  const fallbackDate = formatDateIso(searchStart);
+  return {
+    date: fallbackDate,
+    time: preferredTime,
+    suggestionLabel: `${formatDatePtBr(fallbackDate) || fallbackDate} às ${preferredTime}`,
+  };
+};
+
 const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED' | 'READ' | 'TYPING' | 'FAILED' | null => {
   const candidates = Array.from(collectStringCandidates([
     body?.type,
@@ -559,9 +734,10 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const body = request.body as any;
     const inboundPayload = body?.payload || {};
     const inboundMedia = extractInboundMedia(inboundPayload);
-    
-    const action = parseConfirmationAction(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
+    const confirmationAction = parseConfirmationAction(inboundPayload);
+    const examResultAction = parseExamResultAction(inboundPayload);
+    const action = confirmationAction || examResultAction;
     const source = normalizePhoneForConversation(inboundPayload?.source || inboundPayload?.sender?.phone || '');
     const messageEvent = parseWebhookMessageEvent(body, inboundPayload);
 
@@ -570,7 +746,8 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       source: inboundPayload?.source || inboundPayload?.sender?.phone || null,
       contextGsId: inboundPayload?.context?.gsId || null,
       contextId: inboundPayload?.context?.id || null,
-      confirmationAction: action,
+      confirmationAction,
+      examResultAction,
       inboundText,
       inboundMedia: inboundMedia.metadata || null,
       payloadPreview: inboundPayload,
@@ -681,10 +858,16 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       });
     }
 
+    const expectedMessageTypes = confirmationAction
+      ? ['APPOINTMENT_CONFIRMATION']
+      : examResultAction
+        ? ['EXAM_REPORT_READY', 'APPOINTMENT_REMINDER']
+        : ['APPOINTMENT_CONFIRMATION'];
+
     if (!originatingLog && (contextGsId || contextId)) {
       originatingLog = await prisma.whatsAppMessageLog.findFirst({
         where: {
-          messageType: 'APPOINTMENT_CONFIRMATION',
+          messageType: { in: expectedMessageTypes as any },
           providerMessageId: {
             in: [contextGsId, contextId].filter(Boolean) as string[],
           },
@@ -695,7 +878,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     if (!originatingLog && source) {
       originatingLog = await prisma.whatsAppMessageLog.findFirst({
         where: {
-          messageType: 'APPOINTMENT_CONFIRMATION',
+          messageType: { in: expectedMessageTypes as any },
           patientPhone: {
             contains: source.slice(-11),
           },
@@ -750,6 +933,12 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         observations: true,
         patientId: true,
         patientName: true,
+        patientCpf: true,
+        doctorName: true,
+        specialty: true,
+        date: true,
+        time: true,
+        convenio: true,
       },
     });
 
@@ -757,8 +946,16 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       return { success: true, ignored: true, reason: 'appointment-not-found' };
     }
 
-    const nextLogStatus = action === 'CONFIRMED' ? 'RESPONDED_CONFIRMED' : 'RESPONDED_RESCHEDULE';
-    if (CONFIRMATION_TERMINAL_STATUSES.has(String(originatingLog.status || '').trim().toUpperCase())) {
+    const isConfirmationFlow = originatingLog.messageType === 'APPOINTMENT_CONFIRMATION';
+    const isExamResultFlow = originatingLog.messageType === 'EXAM_REPORT_READY'
+      || originatingLog.messageType === 'APPOINTMENT_REMINDER';
+    const nextLogStatus = isConfirmationFlow
+      ? (action === 'CONFIRMED' ? 'RESPONDED_CONFIRMED' : 'RESPONDED_RESCHEDULE')
+      : (action === 'SCHEDULE_FOLLOWUP' ? 'RESPONDED_FOLLOWUP_SCHEDULE' : 'RESPONDED_FOLLOWUP_LATER');
+    const terminalStatuses = isConfirmationFlow
+      ? CONFIRMATION_TERMINAL_STATUSES
+      : EXAM_RESULT_TERMINAL_STATUSES;
+    if (terminalStatuses.has(String(originatingLog.status || '').trim().toUpperCase())) {
       await sendDecisionLockedGuidance({
         branchId: originatingLog.branchId,
         phone: source,
@@ -800,7 +997,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
 
     const timestamp = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 
-    const rescheduleQueue = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const flowResult = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.whatsAppMessageLog.update({
         where: { id: originatingLog!.id },
         data: {
@@ -813,7 +1010,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
           id: { not: originatingLog!.id },
           branchId: originatingLog!.branchId,
           appointmentId: originatingLog!.appointmentId,
-          messageType: 'APPOINTMENT_CONFIRMATION',
+          messageType: originatingLog!.messageType,
           status: { in: ['PENDING', 'SENT'] },
         },
         data: {
@@ -821,7 +1018,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         },
       });
 
-      if (action === 'CONFIRMED') {
+      if (isConfirmationFlow && action === 'CONFIRMED') {
         await tx.appointment.update({
           where: { id: appointment.id },
           data: {
@@ -832,7 +1029,116 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
             ),
           },
         });
-        return null;
+        return {
+          flow: 'confirmation',
+          rescheduleQueue: null,
+          followUpAppointmentId: null,
+          followUpSlotLabel: null,
+          followUpCreated: false,
+        };
+      }
+
+      if (isConfirmationFlow) {
+        await tx.appointment.update({
+          where: { id: appointment.id },
+          data: {
+            observations: appendObservation(
+              appointment.observations,
+              `[WhatsApp] Paciente solicitou reagendamento em ${timestamp}.`,
+            ),
+          },
+        });
+
+        const rescheduleQueue = await queueRescheduleHumanConversation(tx, {
+          branchId: originatingLog.branchId,
+          phone: source,
+          appointmentId: appointment.id,
+          patientId: appointment.patientId || null,
+          patientName: appointment.patientName || null,
+        });
+
+        return {
+          flow: 'confirmation',
+          rescheduleQueue,
+          followUpAppointmentId: null,
+          followUpSlotLabel: null,
+          followUpCreated: false,
+        };
+      }
+
+      if (isExamResultFlow && action === 'SCHEDULE_FOLLOWUP') {
+        const existingFollowUp = await tx.appointment.findFirst({
+          where: {
+            branchId: originatingLog.branchId,
+            rescheduledFromAppointmentId: appointment.id,
+            type: { in: ['CONSULTA', 'CONSULTATION'] },
+            isActive: true,
+            NOT: [
+              { status: 'CANCELADO' },
+              { status: 'CANCELED' },
+              { status: 'NAO_COMPARECEU' },
+              { status: 'NO_SHOW' },
+              { status: 'AUSENTE' },
+              { status: 'FALTOU' },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        let followUp = existingFollowUp;
+        let followUpCreated = false;
+        if (!followUp) {
+          const suggested = await findSuggestedFollowUpSlot(tx, {
+            branchId: originatingLog.branchId,
+            doctorName: appointment.doctorName || null,
+            baseDate: appointment.date || null,
+            preferredTime: appointment.time || null,
+          });
+
+          followUp = await tx.appointment.create({
+            data: {
+              branchId: originatingLog.branchId,
+              rescheduledFromAppointmentId: appointment.id,
+              patientName: appointment.patientName || null,
+              patientCpf: appointment.patientCpf || null,
+              patientId: appointment.patientId || null,
+              doctorName: appointment.doctorName || null,
+              specialty: resolveFollowUpSpecialty(appointment.specialty),
+              convenio: appointment.convenio || null,
+              date: suggested.date,
+              time: suggested.time,
+              durationMinutes: 30,
+              type: 'CONSULTA',
+              status: 'AGENDADO',
+              observations: `[WhatsApp] Retorno agendado automaticamente em ${timestamp}. Origem exame:${appointment.id}`,
+              requestedByDoctor: false,
+              scheduledByDoctor: false,
+            },
+          });
+          followUpCreated = true;
+        }
+
+        await tx.appointment.update({
+          where: { id: appointment.id },
+          data: {
+            observations: appendObservation(
+              appointment.observations,
+              `[WhatsApp] Paciente solicitou agendamento de retorno em ${timestamp}.`,
+            ),
+          },
+        });
+
+        const followUpSlotLabel = followUp
+          ? `${formatDatePtBr(followUp.date) || followUp.date || '-'} às ${followUp.time || '09:00'}`
+          : null;
+
+        return {
+          flow: 'exam-result',
+          rescheduleQueue: null,
+          followUpAppointmentId: followUp?.id || null,
+          followUpSlotLabel,
+          followUpCreated,
+        };
       }
 
       await tx.appointment.update({
@@ -840,41 +1146,67 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         data: {
           observations: appendObservation(
             appointment.observations,
-            `[WhatsApp] Paciente solicitou reagendamento em ${timestamp}.`,
+            `[WhatsApp] Paciente preferiu agendar retorno depois (${timestamp}).`,
           ),
         },
       });
 
-      return queueRescheduleHumanConversation(tx, {
-        branchId: originatingLog.branchId,
-        phone: source,
-        appointmentId: appointment.id,
-        patientId: appointment.patientId || null,
-        patientName: appointment.patientName || null,
-      });
+      return {
+        flow: 'exam-result',
+        rescheduleQueue: null,
+        followUpAppointmentId: null,
+        followUpSlotLabel: null,
+        followUpCreated: false,
+      };
     });
 
-    await WhatsAppAutoSender.sendMessage({
-      branchId: originatingLog.branchId,
-      appointmentId: originatingLog.appointmentId,
-      messageType: action === 'CONFIRMED'
-        ? 'CONFIRMATION_REPLY_CONFIRMED'
-        : 'CONFIRMATION_REPLY_RESCHEDULE',
-    });
+    if (isConfirmationFlow) {
+      await WhatsAppAutoSender.sendMessage({
+        branchId: originatingLog.branchId,
+        appointmentId: originatingLog.appointmentId,
+        messageType: action === 'CONFIRMED'
+          ? 'CONFIRMATION_REPLY_CONFIRMED'
+          : 'CONFIRMATION_REPLY_RESCHEDULE',
+      });
+    } else if (isExamResultFlow && action === 'SCHEDULE_FOLLOWUP') {
+      const message = flowResult.followUpSlotLabel
+        ? `Consulta de retorno ${flowResult.followUpCreated ? 'agendada' : 'já existente'} para ${flowResult.followUpSlotLabel}. Se precisar alterar, responda esta mensagem.`
+        : 'Recebi sua confirmação e vamos providenciar seu retorno.';
+      await WhatsAppAutoSender.sendMessage({
+        branchId: originatingLog.branchId,
+        appointmentId: flowResult.followUpAppointmentId || originatingLog.appointmentId,
+        messageType: 'EXAM_REPORT_READY',
+        customMessage: message,
+        skipNotificationSettings: true,
+      });
+    } else if (isExamResultFlow) {
+      await WhatsAppAutoSender.sendMessage({
+        branchId: originatingLog.branchId,
+        appointmentId: originatingLog.appointmentId,
+        messageType: 'EXAM_REPORT_READY',
+        customMessage: 'Sem problemas. Quando quiser, responda esta mensagem e ajudamos com seu retorno.',
+        skipNotificationSettings: true,
+      });
+    }
 
     request.log.info({
       action,
       appointmentId: originatingLog.appointmentId,
       originatingLogId: originatingLog.id,
-      queueConversationId: rescheduleQueue?.conversationId || null,
-      queueProtocolNumber: rescheduleQueue?.protocolNumber || null,
-      queueReusedProtocol: rescheduleQueue?.reusedProtocol || false,
+      flow: flowResult.flow,
+      queueConversationId: flowResult.rescheduleQueue?.conversationId || null,
+      queueProtocolNumber: flowResult.rescheduleQueue?.protocolNumber || null,
+      queueReusedProtocol: flowResult.rescheduleQueue?.reusedProtocol || false,
+      followUpAppointmentId: flowResult.followUpAppointmentId || null,
+      followUpCreated: Boolean(flowResult.followUpCreated),
     }, 'Processed WhatsApp confirmation reply');
 
     return {
       success: true,
       action,
       appointmentId: originatingLog.appointmentId,
+      followUpAppointmentId: flowResult.followUpAppointmentId || null,
+      followUpSlot: flowResult.followUpSlotLabel || null,
     };
   });
 }

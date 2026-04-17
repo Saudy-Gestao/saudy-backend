@@ -2,6 +2,7 @@ export const ACTIVE_TEMPLATE_TYPES = [
   'APPOINTMENT_CREATED',
   'TELECONSULTATION_LINK',
   'APPOINTMENT_CONFIRMATION',
+  'EXAM_REPORT_READY',
   'NO_SHOW',
   'CONFIRMATION_REPLY_CONFIRMED',
   'CONFIRMATION_REPLY_RESCHEDULE',
@@ -37,6 +38,12 @@ export const DEFAULT_TEMPLATES = [
     name: 'Resposta Reagendar',
     hsmTemplateName: 'resposta_reagendar_uuid',
     message: 'Em breve um atendente entrará em contato para realizar seu reagendamento.',
+  },
+  {
+    type: 'EXAM_REPORT_READY',
+    name: 'Laudo Finalizado',
+    hsmTemplateName: 'laudo_finalizado_uuid',
+    message: 'Olá, {{paciente_nome}}! Seu laudo de {{exame_nome}} já está pronto na {{clinica_nome}}.\nSugestão de retorno: {{retorno_data}} às {{retorno_hora}}.\nDeseja agendar o retorno?',
   },
   {
     type: 'NO_SHOW',
