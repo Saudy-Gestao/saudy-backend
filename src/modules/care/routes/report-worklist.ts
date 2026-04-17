@@ -68,6 +68,7 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
           search: { type: 'string' },
           status: { type: 'string' },
           examType: { type: 'string' },
+          appointmentId: { type: 'string' },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
@@ -78,12 +79,13 @@ export default async function reportWorklistRoutes(app: FastifyInstance) {
     const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
-    const { search, status, examType, limit = 50, offset = 0 } = request.query as any;
+    const { search, status, examType, appointmentId, limit = 50, offset = 0 } = request.query as any;
 
     // show items that either belong to this branch or have no branch assigned (imported by poller)
     const where: any = { isActive: true, OR: [{ branchId }, { branchId: null }] };
     if (status) where.status = status;
     if (examType) where.examType = examType;
+    if (appointmentId) where.appointmentId = String(appointmentId);
     if (search) {
       where.AND = where.AND || [];
       where.AND.push({
