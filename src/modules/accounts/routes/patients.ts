@@ -250,9 +250,9 @@ export default async function patientRoutes(app: FastifyInstance) {
     if (!isValidCpf(normalizedCpf)) fieldErrors.cpf = 'CPF inválido';
     if (!data?.birthDate || isNaN(Date.parse(String(data.birthDate)))) fieldErrors.birthDate = 'Data de nascimento inválida';
     else if (new Date(String(data.birthDate)) > new Date()) fieldErrors.birthDate = 'Data de nascimento inválida';
-    // gender is required and must be one of allowed enums
-    if (!data?.gender) fieldErrors.gender = 'Gênero é obrigatório';
-    else if (!['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
+    if (data?.gender !== undefined && data?.gender !== null && String(data.gender).trim() !== '') {
+      if (!['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
+    }
     if (data?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
     if (data?.hasHealthInsurance && !data?.healthInsuranceName) fieldErrors.healthInsuranceName = 'Nome do convênio é obrigatório';
 
@@ -273,6 +273,9 @@ export default async function patientRoutes(app: FastifyInstance) {
       const patient = await prisma.patient.create({
         data: {
           ...data,
+          gender: data?.gender !== undefined && data?.gender !== null && String(data.gender).trim() !== ''
+            ? String(data.gender).toUpperCase()
+            : null,
           cpf: normalizedCpf,
           email: normalizedEmail || null,
           guardianCpf: normalizedGuardianCpf || null,
@@ -362,15 +365,19 @@ export default async function patientRoutes(app: FastifyInstance) {
         else if (!/^\d{10,11}$/.test(String(data.cellphone))) fieldErrors.cellphone = 'Celular inválido';
       }
 
-      // gender: if provided on update, must be present and valid
+      // gender: if provided on update, it must be valid when not empty
       if (data?.gender !== undefined) {
-        if (!data.gender) fieldErrors.gender = 'Gênero é obrigatório';
-        else if (!['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
+        if (data.gender !== null && String(data.gender).trim() !== '' && !['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) {
+          fieldErrors.gender = 'Gênero inválido';
+        }
       }
 
       if (Object.keys(fieldErrors).length > 0) return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
 
       const updateData: any = { ...data };
+      if (data?.gender !== undefined) updateData.gender = data.gender !== null && String(data.gender).trim() !== ''
+        ? String(data.gender).toUpperCase()
+        : null;
       if (data?.cpf !== undefined) updateData.cpf = normalizedCpf || null;
       if (data?.email !== undefined) updateData.email = normalizedEmail || null;
       if (data?.guardianCpf !== undefined) updateData.guardianCpf = normalizedGuardianCpf || null;

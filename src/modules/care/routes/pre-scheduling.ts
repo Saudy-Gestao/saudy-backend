@@ -3,13 +3,19 @@ import { FastifyInstance } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { getAnexosStorage } from '../../../lib/storage';
+import GupshupService from '../lib/gupshup';
+import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
+const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
 
 const normalizeStatus = (value?: string | null) => String(value || '').trim().toUpperCase();
 const normalizeCpf = (value?: string | null) => String(value || '').replace(/\D/g, '');
 const toDateOnly = (value?: string | null) => String(value || '').slice(0, 10);
 const toBoolean = (value: unknown): boolean => ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+const isTeleconsultationAppointment = (appointment: any) => String(appointment?.observations || '')
+  .toUpperCase()
+  .includes(TELECONSULTATION_OBSERVATION_MARKER);
 
 const sanitizeFileName = (value: string) => String(value || 'arquivo')
   .replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -186,6 +192,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         patientName: appointment.patientName || linkedPatient?.name || null,
         patientCpf: normalizeCpf(appointment.patientCpf || linkedPatient?.cpf || ''),
         patientPhone: linkedPatient?.cellphone || linkedPatient?.phone || null,
+        source: 'COMMON',
         publicToken: makePublicToken(),
         linkSentByUserId: userId || null,
       },
@@ -276,9 +283,9 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         const flow = flowByAppointmentId.get(String(appointment.id));
         const anamnesisTemplate = await resolveAnamnesisTemplateForAppointment(branchId, appointment);
         const itemStatus = String(flow?.status || 'PENDING').toUpperCase();
-        const hasPreAuthorization = Boolean(flow?.preAuthorizedAt);
-        const docsApproved = itemStatus === 'COMPLETED';
-        const isResolved = hasPreAuthorization && docsApproved;
+        const isTeleconsultation = isTeleconsultationAppointment(appointment);
+        const teleconsultationLinkSent = Boolean(flow?.completedAt);
+        const isResolved = itemStatus === 'COMPLETED';
         return {
           id: String(appointment.id),
           appointmentId: String(appointment.id),
@@ -286,6 +293,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
           patientName: appointment.patientName || flow?.patientName || '',
           patientCpf: normalizeCpf(appointment.patientCpf || flow?.patientCpf || ''),
           patientPhone: flow?.patientPhone || null,
+          source: String(flow?.source || 'COMMON').toUpperCase(),
           doctorName: appointment.doctorName || null,
           specialty: appointment.specialty || null,
           convenio: appointment.convenio || null,
@@ -303,6 +311,8 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
           anamnesisAnswered: Boolean(flow?.anamnesisResponse?.submittedAt),
           anamnesisAnswersCount: Array.isArray(flow?.anamnesisResponse?.answers) ? flow.anamnesisResponse.answers.length : 0,
           tokenAvailable: Boolean(flow?.publicToken),
+          isTeleconsultation,
+          teleconsultationLinkSent,
           isResolved,
         };
       }));
@@ -359,15 +369,20 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       return reply.code((ensured as any).statusCode).send({ error: (ensured as any).error });
     }
 
-    const { flow } = ensured as any;
+    const { flow, appointment } = ensured as any;
+    if (flow?.preAuthorizedAt) {
+      return reply.code(400).send({ error: 'Este agendamento já foi pré-autorizado' });
+    }
+    const nextStatus = 'PRE_AUTHORIZED';
 
     const updatedFlow = await prisma.preSchedulingFlow.update({
       where: { id: flow.id },
       data: {
-        status: String(flow?.status || '').toUpperCase() === 'DOCUMENTS_RECEIVED' ? 'COMPLETED' : 'PRE_AUTHORIZED',
+        status: nextStatus,
         preAuthorizedAt: new Date(),
         guideNumber: guideNumber || flow.guideNumber || null,
         preAuthorizationNotes: notes || null,
+        completedAt: null,
       },
     });
 
@@ -388,7 +403,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
 
   app.post('/:appointmentId/send-link', {
     schema: {
-      summary: 'Send (mock) whatsapp link for patient document upload',
+      summary: 'Send whatsapp link for patient document upload',
       tags: ['PreScheduling'],
       params: {
         type: 'object',
@@ -419,16 +434,30 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     }
 
     const { flow, appointment } = ensured as any;
+    const flowWithProgress = await prisma.preSchedulingFlow.findUnique({
+      where: { id: flow.id },
+      include: {
+        documents: { select: { id: true } },
+        anamnesisResponse: { select: { id: true } },
+      },
+    });
+
+    const currentStatus = String(flowWithProgress?.status || flow?.status || '').toUpperCase();
+    const alreadySubmitted = Boolean(flowWithProgress?.patientSubmittedAt);
+    const documentsCount = Array.isArray(flowWithProgress?.documents) ? flowWithProgress.documents.length : 0;
+    const hasDocuments = documentsCount > 0;
+    const hasAnamnesisResponse = Boolean(flowWithProgress?.anamnesisResponse?.id);
+
     const anamnesisTemplate = await resolveAnamnesisTemplateForAppointment(branchId, appointment);
-    if (String(flow?.status || '').toUpperCase() === 'COMPLETED') {
-      return reply.code(400).send({ error: 'Fluxo já concluído. Não é possível reenviar link.' });
+    if (currentStatus === 'COMPLETED' || currentStatus === 'DOCUMENTS_RECEIVED' || alreadySubmitted || hasDocuments || hasAnamnesisResponse) {
+      return reply.code(400).send({ error: 'Documentos já recebidos/respondidos. Não é possível reenviar link de docs.' });
     }
 
     const token = makePublicToken();
-    const publicBase = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-    const publicUrl = `${publicBase}/pre-agendamento/documentos/${token}`;
+    const publicBase = String(process.env.PUBLIC_APP_URL);
+    const publicUrl = `${publicBase}/pre-atendimento/documentos/${token}`;
     const mockMessage = [
-      `Olá ${flow.patientName || appointment.patientName || 'paciente'}!`,
+      `Olá, ${flow.patientName || appointment.patientName || 'paciente'}!`,
       anamnesisTemplate
         ? 'Para adiantar seu atendimento, valide sua identidade e envie seus documentos, além de responder a anamnese neste link:'
         : 'Para adiantar seu atendimento, envie seus documentos neste link:',
@@ -455,14 +484,78 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       },
     });
 
-    return reply.send({
-      message: 'Link gerado e envio mockado com sucesso',
-      item: updatedFlow,
-      whatsappMock: {
-        provider: 'mock',
-        to: flow.patientPhone || null,
+    let whatsappResult: any = {
+      provider: 'mock',
+      to: flow.patientPhone || null,
+      message: mockMessage,
+    };
+
+    const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+    const resolvedMessagingConfig = await resolveWhatsAppConfigForBranch(branchId, {
+      requireActive: true,
+      requireCredentials: true,
+    });
+    const apiKey = resolvedMessagingConfig?.accountSid;
+    const appName = resolvedMessagingConfig?.authToken;
+    const sourceNumber = resolvedMessagingConfig?.fromNumber;
+
+    if ((whatsappConfig?.isActive || resolvedMessagingConfig?.isInherited) && flow.patientPhone && apiKey && appName && sourceNumber) {
+      const messageLog = await prisma.whatsAppMessageLog.create({
+        data: {
+          branchId,
+          appointmentId: appointment.id,
+          patientName: flow.patientName || appointment.patientName || null,
+          patientPhone: flow.patientPhone,
+          messageType: 'APPOINTMENT_CREATED',
+          message: mockMessage,
+          status: 'PENDING',
+        },
+      });
+
+      const gupshup = new GupshupService({
+        apiKey,
+        appName,
+        sourceNumber,
+      });
+      const sendResult = await gupshup.sendTextMessage({
+        to: flow.patientPhone,
         message: mockMessage,
-      },
+      });
+
+      if (sendResult.status === 'success') {
+        await prisma.whatsAppMessageLog.update({
+          where: { id: messageLog.id },
+          data: {
+            status: 'SENT',
+            providerMessageId: sendResult.messageId || null,
+            sentAt: new Date(),
+          },
+        });
+      } else {
+        await prisma.whatsAppMessageLog.update({
+          where: { id: messageLog.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: sendResult.error || 'Falha ao enviar mensagem de link de documentos.',
+          },
+        });
+      }
+
+      whatsappResult = {
+        provider: 'gupshup',
+        to: flow.patientPhone,
+        message: mockMessage,
+        status: sendResult.status,
+        messageId: sendResult.messageId || null,
+        error: sendResult.error || null,
+        logId: messageLog.id,
+      };
+    }
+
+    return reply.send({
+      message: 'Link gerado com sucesso',
+      item: updatedFlow,
+      whatsapp: whatsappResult,
       publicUrl,
       hasAnamnesis: Boolean(anamnesisTemplate),
     });
@@ -631,12 +724,13 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     }
 
     const nextStatus = action === 'APPROVE'
-      ? (flow.preAuthorizedAt ? 'COMPLETED' : 'DOCUMENTS_RECEIVED')
+      ? 'DOCUMENTS_RECEIVED'
       : 'WAITING_PATIENT_DOCUMENTS';
     const updated = await prisma.preSchedulingFlow.update({
       where: { id: flow.id },
       data: {
         status: nextStatus,
+        completedAt: null,
       },
     });
 
@@ -646,6 +740,64 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         : 'Reenvio de documentos solicitado com sucesso',
       status: updated.status,
       item: updated,
+    });
+  });
+
+  app.post('/:appointmentId/manual-finalize', {
+    schema: {
+      summary: 'Finalize teleconsultation pre-scheduling flow manually',
+      tags: ['PreScheduling'],
+      params: {
+        type: 'object',
+        required: ['appointmentId'],
+        properties: { appointmentId: { type: 'string' } },
+      },
+    },
+  }, async (request, reply) => {
+    if (!(await ensureAuthenticated(request, reply))) return;
+
+    const user = await getLoggedUser(request);
+    const branchId = user?.sector?.branch?.id || null;
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { appointmentId } = request.params as { appointmentId: string };
+    const flow = await prisma.preSchedulingFlow.findFirst({
+      where: { appointmentId, branchId },
+      include: {
+        appointment: true,
+      },
+    });
+
+    if (!flow) return reply.code(404).send({ error: 'Fluxo de pré-agendamento não encontrado' });
+    if (!isTeleconsultationAppointment(flow.appointment)) {
+      return reply.code(400).send({ error: 'Finalização manual disponível apenas para teleconsulta' });
+    }
+    if (!flow.preAuthorizedAt) {
+      return reply.code(400).send({ error: 'Pré-autorização pendente para este agendamento' });
+    }
+    if (String(flow.status || '').toUpperCase() === 'CANCELED') {
+      return reply.code(400).send({ error: 'Fluxo cancelado não pode ser finalizado' });
+    }
+    if (flow.completedAt) {
+      return reply.send({
+        message: 'Fluxo já finalizado manualmente',
+        status: flow.status,
+        completedAt: flow.completedAt,
+      });
+    }
+
+    const updated = await prisma.preSchedulingFlow.update({
+      where: { id: flow.id },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+      },
+    });
+
+    return reply.send({
+      message: 'Fluxo finalizado manualmente com sucesso',
+      status: updated.status,
+      completedAt: updated.completedAt,
     });
   });
 

@@ -6,6 +6,12 @@ type PasswordResetMailParams = {
   userName?: string;
 };
 
+type PatientPortalAccessMailParams = {
+  to: string;
+  code: string;
+  userName?: string;
+};
+
 type AdminRegisterMailParams = {
   to: string;
   code: string;
@@ -126,6 +132,43 @@ function buildAdminRegisterHtml(code: string, userName?: string) {
   `;
 }
 
+function buildPatientPortalAccessHtml(code: string, userName?: string) {
+  const firstName = userName?.trim()?.split(' ')[0] || 'paciente';
+
+  return `
+  <div style="margin:0;padding:24px;background:#f4f6fb;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e7eb;">
+      <tr>
+        <td style="padding:24px;background:linear-gradient(135deg,#003b7a 0%,#001f54 100%);color:#ffffff;">
+          <h1 style="margin:0;font-size:22px;">Saudy</h1>
+          <p style="margin:8px 0 0;font-size:14px;opacity:0.9;">Portal do Paciente</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:28px;">
+          <p style="margin:0 0 16px;font-size:16px;">Olá, ${firstName}.</p>
+          <p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:#334155;">
+            Use o código abaixo para acessar seu Portal do Paciente e visualizar consultas, exames e laudos:
+          </p>
+
+          <div style="margin:0 auto 20px;max-width:240px;background:#eef2ff;border:1px dashed #4f46e5;border-radius:12px;padding:14px 16px;text-align:center;">
+            <span style="display:block;font-size:30px;font-weight:700;letter-spacing:8px;color:#1e293b;">${code}</span>
+          </div>
+
+          <p style="margin:0 0 8px;font-size:13px;color:#475569;">Esse código expira em 10 minutos.</p>
+          <p style="margin:0;font-size:13px;color:#475569;">Se você não tentou acessar o portal, ignore este e-mail com segurança.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:18px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;">
+          <p style="margin:0;font-size:12px;color:#64748b;">© ${new Date().getFullYear()} Saudy — Acesso seguro ao Portal do Paciente.</p>
+        </td>
+      </tr>
+    </table>
+  </div>
+  `;
+}
+
 export async function sendPasswordResetCodeEmail({ to, code, userName }: PasswordResetMailParams) {
   const transporter = getTransporter();
 
@@ -142,6 +185,27 @@ export async function sendPasswordResetCodeEmail({ to, code, userName }: Passwor
     subject: 'Saudy | Código de recuperação de senha',
     text: `Seu código de recuperação de senha é: ${code}. Esse código expira em 10 minutos.`,
     html: buildPasswordResetHtml(code, userName),
+  });
+
+  return true;
+}
+
+export async function sendPatientPortalAccessCodeEmail({ to, code, userName }: PatientPortalAccessMailParams) {
+  const transporter = getTransporter();
+
+  if (!transporter) {
+    console.warn('SMTP is not configured. Skipping patient portal access email send.');
+    return false;
+  }
+
+  const from = getMailFrom();
+
+  await transporter.sendMail({
+    from,
+    to,
+    subject: 'Saudy | Código de acesso ao Portal do Paciente',
+    text: `Seu código de acesso ao Portal do Paciente é: ${code}. Esse código expira em 10 minutos.`,
+    html: buildPatientPortalAccessHtml(code, userName),
   });
 
   return true;

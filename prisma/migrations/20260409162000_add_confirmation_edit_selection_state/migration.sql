@@ -1,0 +1,6 @@
+DO $$
+BEGIN
+  ALTER TYPE "WhatsAppConversationState" ADD VALUE 'AWAITING_CONFIRMATION_EDIT_SELECTION';
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;

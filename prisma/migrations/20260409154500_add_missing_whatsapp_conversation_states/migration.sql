@@ -1,0 +1,13 @@
+DO $$
+BEGIN
+  ALTER TYPE "WhatsAppConversationState" ADD VALUE 'AWAITING_NEW_PATIENT_BIRTHDATE';
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER TYPE "WhatsAppConversationState" ADD VALUE 'AWAITING_NEW_PATIENT_GENDER';
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;

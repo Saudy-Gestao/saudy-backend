@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import prisma from './prisma';
 import GupshupService from './gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from './whatsapp-message-builder';
+import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 
 type WhatsAppMessageType =
   | 'APPOINTMENT_CREATED'
@@ -30,6 +31,13 @@ interface FailedLogParams {
   errorMessage: string;
 }
 
+const normalizeStatusKey = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase()
+  .replace(/\s+/g, '_');
+
 /**
  * Helper para envio automático de mensagens WhatsApp
  */
@@ -39,7 +47,7 @@ export class WhatsAppAutoSender {
   }
 
   static getPublicAppBase(): string {
-    return String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    return String(process.env.PUBLIC_APP_URL);
   }
 
   static async ensureDocumentsLink(params: {
@@ -66,7 +74,7 @@ export class WhatsAppAutoSender {
     });
 
     const token = existingFlow?.publicToken || this.makePublicToken();
-    const publicUrl = `${this.getPublicAppBase()}/pre-agendamento/documentos/${token}`;
+    const publicUrl = `${this.getPublicAppBase()}/pre-atendimento/documentos/${token}`;
 
     await prisma.preSchedulingFlow.upsert({
       where: { appointmentId: appointment.id },
@@ -156,6 +164,13 @@ export class WhatsAppAutoSender {
         return { success: false, error: 'Agendamento não encontrado' };
       }
 
+      if (params.messageType === 'APPOINTMENT_CONFIRMATION') {
+        const normalizedStatus = normalizeStatusKey((appointment as any)?.status);
+        if (normalizedStatus.startsWith('CONFIRM')) {
+          return { success: false, error: 'Agendamento já está confirmado; confirmação não enviada novamente.' };
+        }
+      }
+
       // Buscar telefone do paciente
       let patientPhone: string | null = null;
       if (appointment.patientId) {
@@ -183,6 +198,10 @@ export class WhatsAppAutoSender {
       const whatsappConfig = await prisma.whatsAppConfig.findUnique({
         where: { branchId: params.branchId },
       });
+      const resolvedMessagingConfig = await resolveWhatsAppConfigForBranch(params.branchId, {
+        requireActive: true,
+        requireCredentials: true,
+      });
 
       if (whatsappConfig && !whatsappConfig.isActive) {
         const errorMessage = 'WhatsApp está desativado para esta filial';
@@ -197,14 +216,18 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      // Buscar configuração de notificações
+      // Buscar configuração de notificações.
+      // Regras finais: para enviar mensagens automáticas,
+      // o template precisa estar ativo E o toggle da aba Notificações precisa estar habilitado.
       const notificationConfig = await prisma.whatsAppNotificationConfig.findUnique({
         where: { branchId: params.branchId },
       });
 
       // Verificar se deve enviar mensagem baseado no tipo
-      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CREATED' && notificationConfig && !notificationConfig.sendOnAppointmentCreated) {
-        const errorMessage = 'Envio de mensagem ao criar agendamento está desativado';
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CREATED' && notificationConfig?.sendOnAppointmentCreated !== true) {
+        const errorMessage = notificationConfig
+          ? 'Envio de mensagem ao criar agendamento está desativado'
+          : 'Configuração de notificação não encontrada para esta filial (APPOINTMENT_CREATED)';
         await this.createFailedLog({
           branchId: params.branchId,
           appointmentId: appointment.id,
@@ -216,8 +239,10 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig && !notificationConfig.sendConfirmationEnabled) {
-        const errorMessage = 'Envio de confirmação de agendamento está desativado';
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig?.sendConfirmationEnabled !== true) {
+        const errorMessage = notificationConfig
+          ? 'Envio de confirmação de agendamento está desativado'
+          : 'Configuração de notificação não encontrada para esta filial (APPOINTMENT_CONFIRMATION)';
         await this.createFailedLog({
           branchId: params.branchId,
           appointmentId: appointment.id,
@@ -275,19 +300,28 @@ export class WhatsAppAutoSender {
         documentsLink,
       };
 
+      const templateBranchPriority = Array.from(new Set([
+        String(resolvedMessagingConfig?.sourceBranchId || '').trim(),
+        String(params.branchId || '').trim(),
+      ].filter(Boolean)));
+
       // Buscar template de mensagem
       let message: string;
       let templateRecord: Awaited<ReturnType<typeof prisma.whatsAppMessageTemplate.findFirst>> | null = null;
       if (params.customMessage) {
         message = params.customMessage;
       } else {
-        templateRecord = await prisma.whatsAppMessageTemplate.findFirst({
+        const templateCandidates = await prisma.whatsAppMessageTemplate.findMany({
           where: {
-            branchId: params.branchId,
+            branchId: { in: templateBranchPriority },
             type: params.messageType,
             isActive: true,
           },
+          orderBy: [{ updatedAt: 'desc' }],
         });
+        templateRecord = templateBranchPriority
+          .map((candidateBranchId) => templateCandidates.find((item: any) => item.branchId === candidateBranchId))
+          .find(Boolean) || null;
 
         if (!templateRecord) {
           const errorMessage = 'Template de mensagem não encontrado';
@@ -304,12 +338,12 @@ export class WhatsAppAutoSender {
         message = WhatsAppMessageBuilder.buildMessage(templateRecord.message, appointmentData);
       }
 
-      const apiKey = whatsappConfig?.accountSid || process.env.GUPSHUP_API_KEY || '';
-      const appName = whatsappConfig?.authToken || process.env.GUPSHUP_APP_NAME || '';
-      const sourceNumber = whatsappConfig?.fromNumber || process.env.GUPSHUP_SOURCE_NUMBER || '';
+      const apiKey = resolvedMessagingConfig?.accountSid;
+      const appName = resolvedMessagingConfig?.authToken;
+      const sourceNumber = resolvedMessagingConfig?.fromNumber;
 
       if (!apiKey || !appName || !sourceNumber) {
-        const errorMessage = 'WhatsApp não está configurado. Salve as credenciais da filial ou defina GUPSHUP_API_KEY, GUPSHUP_APP_NAME e GUPSHUP_SOURCE_NUMBER.';
+        const errorMessage = 'WhatsApp não está configurado. Salve as credenciais da filial/empresa.';
         await this.createFailedLog({
           branchId: params.branchId,
           appointmentId: appointment.id,

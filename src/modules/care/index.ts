@@ -17,10 +17,12 @@ import teaEvolutionTemplateRoutes from './routes/tea-evolution-templates';
 import whatsappConfigRoutes from './routes/whatsapp-config';
 import whatsappMessagesRoutes from './routes/whatsapp-messages';
 import whatsappJobsRoutes from './routes/whatsapp-jobs';
+import whatsappConversationRoutes from './routes/whatsapp-conversations';
 import whatsappWebhookRoutes from './routes/whatsapp-webhook';
 import publicCheckInRoutes from './routes/public-check-in';
 import mwlRoutes from './routes/mwl';
 import preSchedulingRoutes from './routes/pre-scheduling';
+import teleconsultationLinksRoutes from './routes/teleconsultation-links';
 import spellCheckRoutes from './routes/spell-check';
 import ticketRoutes from './routes/tickets';
 
@@ -28,6 +30,7 @@ export default async function careModule(app: FastifyInstance) {
   app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
   app.register(mwlRoutes, { prefix: '/mwl' });
   app.register(preSchedulingRoutes, { prefix: '/pre-scheduling' });
+  app.register(teleconsultationLinksRoutes, { prefix: '/teleconsultation-links' });
   app.register(preAttendanceRoutes, { prefix: '/pre-attendances' });
   app.register(appointmentRoutes, { prefix: '/appointments' });
   app.register(consultationRoutes, { prefix: '/consultations' });
@@ -46,6 +49,7 @@ export default async function careModule(app: FastifyInstance) {
   app.register(whatsappConfigRoutes, { prefix: '/' });
   app.register(whatsappJobsRoutes, { prefix: '/' });
   app.register(whatsappMessagesRoutes, { prefix: '/' });
+  app.register(whatsappConversationRoutes, { prefix: '/' });
   app.register(whatsappWebhookRoutes, { prefix: '/' });
   app.register(spellCheckRoutes, { prefix: '/spell-check' });
   app.register(ticketRoutes, { prefix: '/tickets' });

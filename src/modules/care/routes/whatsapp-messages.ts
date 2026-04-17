@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import GupshupService, { SendMessageResponse } from '../lib/gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from '../lib/whatsapp-message-builder';
+import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
 type WhatsAppMessageType =
   | 'APPOINTMENT_CREATED'
@@ -99,30 +100,44 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       });
 
       // Buscar configuração do WhatsApp
-      const whatsappConfig = await prisma.whatsAppConfig.findUnique({
-        where: { branchId },
+      const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+      const resolvedMessagingConfig = await resolveWhatsAppConfigForBranch(branchId, {
+        requireActive: true,
+        requireCredentials: true,
       });
 
-      if (!whatsappConfig || !whatsappConfig.isActive) {
-        return reply.code(400).send({ error: 'WhatsApp não está configurado para esta filial' });
+      if (!resolvedMessagingConfig) {
+        return reply.code(400).send({ error: 'WhatsApp não está configurado para esta filial/empresa' });
       }
 
-      const apiKey     = whatsappConfig.accountSid;
-      const appName    = whatsappConfig.authToken;
-      const fromNumber = whatsappConfig.fromNumber;
+      if (whatsappConfig && !whatsappConfig.isActive && !resolvedMessagingConfig.isInherited) {
+        return reply.code(400).send({ error: 'WhatsApp está desativado para esta filial' });
+      }
+
+      const apiKey     = resolvedMessagingConfig.accountSid;
+      const appName    = resolvedMessagingConfig.authToken;
+      const fromNumber = resolvedMessagingConfig.fromNumber;
+      const templateBranchPriority = Array.from(new Set([
+        String(resolvedMessagingConfig.sourceBranchId || '').trim(),
+        String(branchId || '').trim(),
+      ].filter(Boolean)));
 
       // Buscar template de mensagem ou usar mensagem customizada
       let message: string;
       if (data.customMessage) {
         message = data.customMessage;
       } else {
-        const template = await prisma.whatsAppMessageTemplate.findFirst({
+        const templateCandidates = await prisma.whatsAppMessageTemplate.findMany({
           where: {
-            branchId,
+            branchId: { in: templateBranchPriority },
             type: data.messageType,
             isActive: true,
           },
+          orderBy: [{ updatedAt: 'desc' }],
         });
+        const template = templateBranchPriority
+          .map((candidateBranchId) => templateCandidates.find((item: any) => item.branchId === candidateBranchId))
+          .find(Boolean) || null;
 
         if (!template) {
           return reply.code(400).send({ 
@@ -173,9 +188,17 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       // Tenta HSM template se configurado (funciona sem sessão ativa)
       // Se HSM falhar, cai para session text message
       let result: SendMessageResponse | undefined;
-      const templateRecord = data.customMessage ? null : await prisma.whatsAppMessageTemplate.findFirst({
-        where: { branchId, type: data.messageType, isActive: true },
-      });
+      const templateCandidates = data.customMessage
+        ? []
+        : await prisma.whatsAppMessageTemplate.findMany({
+            where: { branchId: { in: templateBranchPriority }, type: data.messageType, isActive: true },
+            orderBy: [{ updatedAt: 'desc' }],
+          });
+      const templateRecord = data.customMessage
+        ? null
+        : templateBranchPriority
+            .map((candidateBranchId) => templateCandidates.find((item: any) => item.branchId === candidateBranchId))
+            .find(Boolean) || null;
 
       if (
         (!result || result.status === 'error')
@@ -282,7 +305,16 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         },
       },
       response: {
-        200: { type: 'object' },
+        200: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            items: { type: 'array' },
+            total: { type: 'integer' },
+            limit: { type: 'integer' },
+            offset: { type: 'integer' },
+          },
+        },
         403: { type: 'object' },
       },
     },
@@ -294,7 +326,24 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
     const limit = Number(query.limit) || 50;
     const offset = Number(query.offset) || 0;
 
-    const where: any = { branchId };
+    const currentBranch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { companyId: true },
+    });
+
+    let scopedBranchIds = [branchId];
+    if (currentBranch?.companyId) {
+      const companyBranches = await prisma.branch.findMany({
+        where: { companyId: currentBranch.companyId },
+        select: { id: true },
+      });
+      const branchIds = companyBranches.map((item: { id: string }) => String(item.id || '').trim()).filter(Boolean);
+      if (branchIds.length > 0) scopedBranchIds = branchIds;
+    }
+
+    const where: any = {
+      branchId: { in: scopedBranchIds },
+    };
     if (query.appointmentId) where.appointmentId = query.appointmentId;
     if (query.status) where.status = query.status;
     if (query.messageType) where.messageType = query.messageType;
@@ -327,7 +376,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         properties: { id: { type: 'string' } },
       },
       response: {
-        200: { type: 'object' },
+        200: { type: 'object', additionalProperties: true },
         403: { type: 'object' },
         404: { type: 'object' },
       },
@@ -338,8 +387,23 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
 
+    const currentBranch = await prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { companyId: true },
+    });
+
+    let scopedBranchIds = [branchId];
+    if (currentBranch?.companyId) {
+      const companyBranches = await prisma.branch.findMany({
+        where: { companyId: currentBranch.companyId },
+        select: { id: true },
+      });
+      const branchIds = companyBranches.map((item: { id: string }) => String(item.id || '').trim()).filter(Boolean);
+      if (branchIds.length > 0) scopedBranchIds = branchIds;
+    }
+
     const log = await prisma.whatsAppMessageLog.findFirst({
-      where: { id, branchId },
+      where: { id, branchId: { in: scopedBranchIds } },
     });
 
     if (!log) {
@@ -376,22 +440,23 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
     const data = request.body as any;
 
     try {
-      const whatsappConfig = await prisma.whatsAppConfig.findUnique({
-        where: { branchId },
+      const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
+      const resolvedMessagingConfig = await resolveWhatsAppConfigForBranch(branchId, {
+        requireActive: true,
+        requireCredentials: true,
       });
 
-      // Fall back to env vars if no DB config saved yet
-      const apiKey     = whatsappConfig?.accountSid  || process.env.GUPSHUP_API_KEY       || '';
-      const appName    = whatsappConfig?.authToken   || process.env.GUPSHUP_APP_NAME      || '';
-      const fromNumber = whatsappConfig?.fromNumber  || process.env.GUPSHUP_SOURCE_NUMBER || '';
+      const apiKey     = resolvedMessagingConfig?.accountSid;
+      const appName    = resolvedMessagingConfig?.authToken;
+      const fromNumber = resolvedMessagingConfig?.fromNumber;
 
       if (!apiKey || !appName || !fromNumber) {
         return reply.code(400).send({
-          error: 'Gupshup não configurado. Configure em Configurações > WhatsApp ou defina as variáveis de ambiente GUPSHUP_API_KEY, GUPSHUP_APP_NAME e GUPSHUP_SOURCE_NUMBER.',
+          error: 'Gupshup não configurado. Configure em Configurações > WhatsApp (filial ou empresa).',
         });
       }
 
-      if (whatsappConfig && !whatsappConfig.isActive) {
+      if (whatsappConfig && !whatsappConfig.isActive && !resolvedMessagingConfig?.isInherited) {
         return reply.code(400).send({ error: 'WhatsApp está desativado para esta filial' });
       }
 

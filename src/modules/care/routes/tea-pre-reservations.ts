@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prismaModule from '../lib/prisma';
+import { publishAppointmentCreatedEvent } from '../lib/appointment-whatsapp-events';
 
 const prisma: any = (prismaModule as any)?.default ?? prismaModule;
 
@@ -3252,6 +3253,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           },
         );
 
+        publishAppointmentCreatedEvent({ branchId, appointmentId: result.appointment.id });
         converted.push(result);
       }
 
@@ -3392,6 +3394,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       },
     );
 
+    publishAppointmentCreatedEvent({ branchId, appointmentId: result.appointment.id });
     return result;
   });
 

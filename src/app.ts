@@ -15,7 +15,7 @@ import dicomWebProxyModule from './modules/dicom-web-proxy';
 import { startOrthancPoller } from './modules/dicom/orthanc';
 import { MwlScp } from './modules/dicom/mwl';
 
-const app = fastify({ logger: true });
+const app = fastify();
 
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) {
@@ -84,7 +84,7 @@ app.register(dicomWebProxyModule, { prefix: '/dicom-web' });
 app.register(proceduresModule, { prefix: '/procedures' });
 
 // start Orthanc poller (if configured)
-//startOrthancPoller();
+startOrthancPoller();
 
 // start DICOM MWL SCP
 const mwlScp = new MwlScp();

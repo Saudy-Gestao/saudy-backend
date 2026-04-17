@@ -1,8 +1,10 @@
 import type { Prisma } from '@prisma/client';
 import prisma from './prisma';
 import WhatsAppAutoSender from './whatsapp-auto-sender';
+import GupshupService from './gupshup';
+import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 
-const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || process.env.TZ || 'America/Sao_Paulo';
+const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 
 const getTimeZoneParts = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -36,10 +38,169 @@ const formatTimeInTimeZone = (date: Date, timeZone = CLINIC_TIME_ZONE) => {
   return `${hour}:${minute}`;
 };
 
+const normalizeStatus = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase()
+  .replace(/\s+/g, '_');
+
+const isConfirmedStatus = (value?: string | null) => {
+  const normalized = normalizeStatus(value);
+  return normalized.startsWith('CONFIRM');
+};
+
 /**
  * Job para processar e enviar mensagens de confirmação de agendamentos
  */
 export class WhatsAppSchedulerJob {
+  static async processHumanConversationTimeouts(): Promise<{ warned: number; closed: number; failed: number }> {
+    let warned = 0;
+    let closed = 0;
+    let failed = 0;
+
+    try {
+      const conversations = await prisma.whatsAppConversation.findMany({
+        where: {
+          humanStatus: 'ASSIGNED',
+          humanAssignedUserId: { not: null },
+        },
+        include: {
+          messages: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
+      });
+
+      for (const conversation of conversations) {
+        try {
+          const settings = await prisma.whatsAppConversationSettings.findUnique({
+            where: { branchId: conversation.branchId },
+          });
+
+          const idleMinutes = Math.max(1, Number(settings?.idleTimeoutMinutes || 25));
+          const warningMinutes = Math.max(1, Number(settings?.closeWarningMinutes || 5));
+          const lastOperatorAt = conversation.humanLastOperatorMessageAt || null;
+          const lastPatientAt = conversation.humanLastPatientMessageAt || null;
+
+          if (!lastOperatorAt) continue;
+          if (lastPatientAt && lastPatientAt >= lastOperatorAt) continue;
+
+          const now = Date.now();
+          const idleMs = idleMinutes * 60 * 1000;
+          const warningMs = warningMinutes * 60 * 1000;
+          const branchConfig = await this.getBranchMessagingConfig(conversation.branchId);
+          if (!branchConfig) continue;
+
+          const gupshup = new GupshupService(branchConfig);
+
+          if (!conversation.humanIdleWarningSentAt && (now - lastOperatorAt.getTime()) >= idleMs) {
+            const warningMessage = `Como não tivemos retorno nos últimos ${idleMinutes} minutos, este atendimento será encerrado automaticamente em ${warningMinutes} minutos caso não haja nova mensagem.`;
+            const result = await gupshup.sendTextMessage({
+              to: conversation.phone,
+              message: warningMessage,
+            });
+
+            const sentAt = new Date();
+            await prisma.whatsAppConversation.update({
+              where: { id: conversation.id },
+              data: {
+                humanIdleWarningSentAt: sentAt,
+                lastOutboundMessage: warningMessage,
+                lastInteractionAt: sentAt,
+              },
+            });
+
+            await prisma.whatsAppConversationMessage.create({
+              data: {
+                conversationId: conversation.id,
+                branchId: conversation.branchId,
+                phone: conversation.phone,
+                flowKey: conversation.humanFlowKey || null,
+                authorType: 'SYSTEM',
+                authorUserId: conversation.humanAssignedUserId || null,
+                authorName: conversation.humanAssignedUserName || 'Sistema',
+                providerMessageId: result.messageId || null,
+                metadata: { event: 'idle-warning' },
+                message: warningMessage,
+              },
+            });
+            warned += 1;
+            continue;
+          }
+
+          if (conversation.humanIdleWarningSentAt && (now - conversation.humanIdleWarningSentAt.getTime()) >= warningMs) {
+            const closingMessage = 'Seu atendimento foi encerrado automaticamente por inatividade. Se precisar de algo mais, envie uma nova mensagem e o fluxo será iniciado novamente.';
+            const result = await gupshup.sendTextMessage({
+              to: conversation.phone,
+              message: closingMessage,
+            });
+
+            const closedAt = new Date();
+            await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+              await tx.whatsAppConversation.update({
+                where: { id: conversation.id },
+                data: {
+                  state: 'MENU',
+                  context: {},
+                  selectedService: null,
+                  humanStatus: 'CLOSED',
+                  humanAssignedUserId: null,
+                  humanAssignedUserName: null,
+                  humanClosedAt: closedAt,
+                  humanClosedByUserId: conversation.humanAssignedUserId || null,
+                  humanClosedByUserName: conversation.humanAssignedUserName || 'Sistema',
+                  humanProtocolClosedAt: closedAt,
+                  humanIdleWarningSentAt: null,
+                  lastOutboundMessage: closingMessage,
+                  lastInteractionAt: closedAt,
+                },
+              });
+
+              await tx.whatsAppConversationMessage.create({
+                data: {
+                  conversationId: conversation.id,
+                  branchId: conversation.branchId,
+                  phone: conversation.phone,
+                  flowKey: conversation.humanFlowKey || null,
+                  authorType: 'SYSTEM',
+                  authorUserId: conversation.humanAssignedUserId || null,
+                  authorName: conversation.humanAssignedUserName || 'Sistema',
+                  providerMessageId: result.messageId || null,
+                  metadata: { event: 'idle-auto-close' },
+                  message: `[Protocolo ${conversation.humanProtocolNumber || '-'}] Atendimento encerrado automaticamente por inatividade.\n${closingMessage}`,
+                },
+              });
+            });
+            closed += 1;
+          }
+        } catch (error) {
+          failed += 1;
+          console.error(`Error processing human timeout for conversation ${conversation.id}:`, error);
+        }
+      }
+
+      return { warned, closed, failed };
+    } catch (error) {
+      console.error('Error processing human conversation timeouts:', error);
+      return { warned, closed, failed };
+    }
+  }
+
+  private static async getBranchMessagingConfig(branchId: string) {
+    const config = await resolveWhatsAppConfigForBranch(branchId, {
+      requireActive: true,
+      requireCredentials: true,
+    });
+    if (!config) return null;
+    return {
+      apiKey: config.accountSid,
+      appName: config.authToken,
+      sourceNumber: config.fromNumber,
+    };
+  }
+
   static async processNoShows(): Promise<{ processed: number; updated: number; notified: number; failed: number }> {
     let processed = 0;
     let updated = 0;
@@ -137,13 +298,19 @@ export class WhatsAppSchedulerJob {
       for (const appointment of appointments) {
         processed++;
 
-        // Verificar se já enviou confirmação para este agendamento
+        if (isConfirmedStatus((appointment as any)?.status)) {
+          continue;
+        }
+
+        // Verificar se já enviou confirmação para este agendamento.
+        // Qualquer log não-falho conta como já processado (SENT, DELIVERED, READ, RESPONDED_*, etc.),
+        // evitando reenvios indevidos dentro da janela.
         const existingLog = await prisma.whatsAppMessageLog.findFirst({
           where: {
             appointmentId: appointment.id,
             messageType: 'APPOINTMENT_CONFIRMATION',
-            status: {
-              in: ['SENT', 'PENDING', 'RESPONDED_CONFIRMED', 'RESPONDED_RESCHEDULE'],
+            NOT: {
+              status: { in: ['FAILED', 'ERROR'] },
             },
           },
         });

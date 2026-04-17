@@ -111,6 +111,54 @@ model BranchPublicCheckInAuditLog {
     @@map("branch_public_check_in_audit_logs")
 }
 
+model PatientPortalAccessLog {
+    id        String   @id @default(uuid())
+    branchId  String?
+    patientId String?
+    cpf       String?
+    event     String
+    status    String
+    message   String   @db.Text
+    ipAddress String
+    userAgent String?  @db.Text
+    createdAt DateTime @default(now())
+
+    @@index([patientId, createdAt])
+    @@index([cpf, createdAt])
+    @@index([event, createdAt])
+    @@index([status, createdAt])
+    @@index([branchId, createdAt])
+    @@map("patient_portal_access_logs")
+}
+
+model PatientPortalDependentAuthorization {
+    id                   String   @id @default(uuid())
+    branchId             String?
+    guardianPatientId    String?
+    guardianCpf          String   @db.VarChar(11)
+    dependentPatientId   String
+    dependentCpf         String   @db.VarChar(11)
+    relationship         String?
+    authorizedByUserId   String?
+    authorizedByName     String?
+    status               String   @default("ACTIVE")
+    startsAt             DateTime @default(now())
+    expiresAt            DateTime?
+    revokedAt            DateTime?
+    revokedByUserId      String?
+    revokedByName        String?
+    notes                String?  @db.Text
+    createdAt            DateTime @default(now())
+    updatedAt            DateTime @updatedAt
+
+    @@index([guardianPatientId, status, startsAt, expiresAt])
+    @@index([guardianCpf, status, startsAt, expiresAt])
+    @@index([dependentPatientId, status])
+    @@index([dependentCpf, status])
+    @@index([branchId, status])
+    @@map("patient_portal_dependent_authorizations")
+}
+
 model Sector {
     id          String @id @default(uuid())
     branchId    String
@@ -263,7 +311,7 @@ model Patient {
     phone                        String?
     cellphone                    String
     birthDate                    DateTime
-    gender                       Gender
+    gender                       Gender?
     cpf                          String         @unique @db.VarChar(11)
     rg                           String?
     maritalStatus                MaritalStatus?
@@ -482,8 +530,81 @@ model InventoryItem {
     createdAt   DateTime  @default(now())
     updatedAt   DateTime  @updatedAt
     procedureMaterials ProcedureMaterial[]
+    lots        InventoryLot[]
+    procedureMaterialKitItems ProcedureMaterialKitItem[]
+    inventoryKitItems InventoryKitItem[]
 
     @@map("inventory_items")
+}
+
+model InventoryMovement {
+    id              String   @id @default(uuid())
+    inventoryItemId String
+    type            String
+    quantity        Int
+    reason          String
+    notes           String?
+    previousQty     Int
+    resultingQty    Int
+    createdByUserId String?
+    createdByName   String?
+    createdAt       DateTime @default(now())
+
+    @@index([inventoryItemId, createdAt])
+    @@map("inventory_movements")
+}
+
+model InventoryLot {
+    id              String   @id @default(uuid())
+    inventoryItemId String
+    lotCode         String
+    quantity        Int
+    expiryDate      DateTime?
+    unitPrice       Decimal? @db.Decimal(12, 2)
+    supplier        String?
+    notes           String?
+    createdByUserId String?
+    createdByName   String?
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+    @@unique([inventoryItemId, lotCode])
+    @@index([inventoryItemId, expiryDate])
+    @@map("inventory_lots")
+}
+
+model InventoryKit {
+    id          String   @id @default(uuid())
+    name        String
+    description String?
+    isActive    Boolean  @default(true)
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+
+    items       InventoryKitItem[]
+    procedureBindings ProcedureKitBinding[]
+
+    @@index([isActive, name])
+    @@map("inventory_kits")
+}
+
+model InventoryKitItem {
+    id              String   @id @default(uuid())
+    kitId           String
+    inventoryItemId String
+    quantity        Int      @default(1)
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    kit           InventoryKit   @relation(fields: [kitId], references: [id], onDelete: Cascade)
+    inventoryItem InventoryItem  @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+    @@unique([kitId, inventoryItemId])
+    @@index([kitId])
+    @@index([inventoryItemId])
+    @@map("inventory_kit_items")
 }
 
 model FinanceEntry {
@@ -772,7 +893,12 @@ model Appointment {
     authorizationStatus String @default("PENDING")
     authorizationNotes  String? @db.Text
     authorizedAt        DateTime?
+    inventoryReservedAt DateTime?
+    inventoryReservationSource String?
+    inventoryReservationSnapshot Json?
     inventoryConsumedAt DateTime?
+    inventoryConsumptionSource String?
+    inventoryConsumptionSnapshot Json?
     orderPriority   String?
     orderNotes      String? @db.Text
     preferredDate   String?
@@ -858,6 +984,7 @@ model PreSchedulingFlow {
     patientName           String?
     patientCpf            String?
     patientPhone          String?
+    source                String              @default("COMMON")
     status                PreSchedulingStatus @default(PENDING)
     preAuthorizedAt       DateTime?
     guideNumber           String?
@@ -884,6 +1011,24 @@ model PreSchedulingFlow {
     @@index([status])
     @@index([patientCpf])
     @@map("pre_scheduling_flows")
+}
+
+model TeleconsultationMessage {
+    id            String   @id @default(uuid())
+    branchId      String
+    appointmentId String
+    fromRole      String
+    messageType   String
+    text          String?  @db.Text
+    fileName      String?
+    fileMimeType  String?
+    fileSizeBytes Int?
+    fileDataUrl   String?  @db.Text
+    createdAt     DateTime @default(now())
+
+    @@index([appointmentId, createdAt])
+    @@index([branchId, createdAt])
+    @@map("teleconsultation_messages")
 }
 
 model PreSchedulingAnamnesisResponse {
@@ -1227,10 +1372,29 @@ model Procedure {
     anamnesisTemplates ProcedureAnamnesisTemplate[]
     nursingTemplates   ProcedureNursingTemplate[]
     materials          ProcedureMaterial[]
+    materialKits       ProcedureMaterialKit[]
+    kitBindings        ProcedureKitBinding[]
     equipmentLinks     MedicalEquipmentProcedure[]
 
     @@index([branchId])
     @@map("procedures")
+}
+
+model ProcedureKitBinding {
+    id             String   @id @default(uuid())
+    procedureId    String
+    inventoryKitId String
+    insuranceName  String?
+    isActive       Boolean  @default(true)
+    createdAt      DateTime @default(now())
+    updatedAt      DateTime @updatedAt
+
+    procedure    Procedure    @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+    inventoryKit InventoryKit @relation(fields: [inventoryKitId], references: [id], onDelete: Restrict)
+
+    @@index([procedureId, insuranceName, isActive])
+    @@index([inventoryKitId, isActive])
+    @@map("procedure_kit_bindings")
 }
 
 model MedicalEquipment {
@@ -1304,6 +1468,40 @@ model ProcedureMaterial {
     @@index([procedureId])
     @@index([inventoryItemId])
     @@map("procedure_materials")
+}
+
+model ProcedureMaterialKit {
+    id           String   @id @default(uuid())
+    procedureId  String
+    name         String
+    insuranceName String?
+    isDefault    Boolean  @default(false)
+    isActive     Boolean  @default(true)
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
+
+    procedure Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+    items     ProcedureMaterialKitItem[]
+
+    @@index([procedureId, insuranceName, isDefault, isActive])
+    @@map("procedure_material_kits")
+}
+
+model ProcedureMaterialKitItem {
+    id              String   @id @default(uuid())
+    kitId           String
+    inventoryItemId String
+    quantity        Int      @default(1)
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    kit           ProcedureMaterialKit @relation(fields: [kitId], references: [id], onDelete: Cascade)
+    inventoryItem InventoryItem       @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+    @@unique([kitId, inventoryItemId])
+    @@index([kitId])
+    @@index([inventoryItemId])
+    @@map("procedure_material_kit_items")
 }
 
 model TeaEvolutionTemplate {
@@ -1556,12 +1754,36 @@ model WhatsAppConfig {
 
 enum WhatsAppMessageType {
     APPOINTMENT_CREATED
+    TELECONSULTATION_LINK
     APPOINTMENT_CONFIRMATION
     APPOINTMENT_REMINDER
     APPOINTMENT_CANCELED
     NO_SHOW
     CONFIRMATION_REPLY_CONFIRMED
     CONFIRMATION_REPLY_RESCHEDULE
+}
+
+enum WhatsAppConversationState {
+    MENU
+    AWAITING_SERVICE
+    AWAITING_UNIT
+    AWAITING_INSURANCE
+    AWAITING_PROCEDURE
+    AWAITING_PROCEDURE_NOT_FOUND_ACTION
+    AWAITING_PRIVATE_PROCEDURE_INPUT
+    AWAITING_PRIVATE_PROCEDURE_CONFIRMATION
+    AWAITING_PRIVATE_PROCEDURE_MATCH_CONFIRMATION
+    AWAITING_SLOT_CONFIRMATION
+    AWAITING_PREFERRED_DATE
+    AWAITING_CPF
+    AWAITING_CPF_CONFIRMATION
+    AWAITING_NEW_PATIENT_NAME
+    AWAITING_NEW_PATIENT_BIRTHDATE
+    AWAITING_NEW_PATIENT_GENDER
+    AWAITING_FINAL_CONFIRMATION
+    AWAITING_CONFIRMATION_EDIT_SELECTION
+    COMPLETED
+    HANDED_OFF
 }
 
 model WhatsAppMessageTemplate {
@@ -1621,6 +1843,110 @@ model WhatsAppMessageLog {
     @@index([status])
     @@index([createdAt])
     @@map("whatsapp_message_logs")
+}
+
+model WhatsAppConversation {
+    id                    String                    @id @default(uuid())
+    branchId              String
+    phone                 String
+    patientId             String?
+    patientName           String?
+    state                 WhatsAppConversationState @default(MENU)
+    selectedService       String?
+    context               Json?
+    lastInboundMessage    String?
+    lastOutboundMessage   String?
+    handoffTicketId       String?
+    reservedAppointmentId String?
+    humanStatus           WhatsAppHumanConversationStatus?
+    humanFlowKey          String?
+    humanFlowLabel        String?
+    humanAssignedUserId   String?
+    humanAssignedUserName String?
+    humanAssignedAt       DateTime?
+    humanClosedAt         DateTime?
+    humanClosedByUserId   String?
+    humanClosedByUserName String?
+    humanProtocolNumber   String?
+    humanProtocolStartedAt DateTime?
+    humanProtocolClosedAt DateTime?
+    humanIdleWarningSentAt DateTime?
+    humanLastOperatorMessageAt DateTime?
+    humanLastPatientMessageAt DateTime?
+    lastInteractionAt     DateTime                  @default(now())
+    createdAt             DateTime                  @default(now())
+    updatedAt             DateTime                  @updatedAt
+    messages              WhatsAppConversationMessage[]
+
+    @@unique([branchId, phone])
+    @@index([branchId])
+    @@index([patientId])
+    @@index([state])
+    @@index([lastInteractionAt])
+    @@index([humanStatus])
+    @@index([humanAssignedUserId])
+    @@index([humanFlowKey])
+    @@map("whatsapp_conversations")
+}
+
+enum WhatsAppHumanConversationStatus {
+    QUEUED
+    ASSIGNED
+    CLOSED
+}
+
+enum WhatsAppConversationMessageAuthorType {
+    PATIENT
+    BOT
+    OPERATOR
+    SYSTEM
+}
+
+model WhatsAppConversationMessage {
+    id             String                             @id @default(uuid())
+    conversationId String
+    conversation   WhatsAppConversation               @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    branchId       String
+    phone          String
+    flowKey        String?
+    authorType     WhatsAppConversationMessageAuthorType
+    authorUserId   String?
+    authorName     String?
+    providerMessageId String?
+    metadata       Json?
+    message        String                             @db.Text
+    createdAt      DateTime                           @default(now())
+
+    @@index([conversationId, createdAt])
+    @@index([branchId, createdAt])
+    @@index([phone, createdAt])
+    @@index([providerMessageId])
+    @@map("whatsapp_conversation_messages")
+}
+
+model WhatsAppConversationOperatorConfig {
+    id                     String   @id @default(uuid())
+    userId                 String   @unique
+    isActive               Boolean  @default(true)
+    flowKeys               String[] @default([])
+    maxActiveConversations Int      @default(3)
+    createdAt              DateTime @default(now())
+    updatedAt              DateTime @updatedAt
+
+    @@index([isActive])
+    @@map("whatsapp_conversation_operator_configs")
+}
+
+model WhatsAppConversationSettings {
+    id                  String   @id @default(uuid())
+    branchId            String   @unique
+    idleTimeoutMinutes  Int      @default(25)
+    closeWarningMinutes Int      @default(5)
+    createdAt           DateTime @default(now())
+    updatedAt           DateTime @updatedAt
+
+    @@index([branchId])
+    @@map("whatsapp_conversation_settings")
 }
 
 enum LeadStatus {
