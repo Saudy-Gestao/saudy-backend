@@ -166,6 +166,7 @@ export default async function medicalRecordRoutes(app: FastifyInstance) {
       security: [{ bearerAuth: [] }],
       body: { $ref: 'MedicalRecordCreate#' },
       response: {
+        200: { $ref: 'MedicalRecord#' },
         201: { $ref: 'MedicalRecord#' },
         400: { type: 'object' },
       },
@@ -190,12 +191,64 @@ export default async function medicalRecordRoutes(app: FastifyInstance) {
       }
     }
 
+    const consultationId = data?.consultationId ? String(data.consultationId).trim() : '';
+    if (consultationId) {
+      const consultation = await prisma.consultation.findFirst({
+        where: { id: consultationId, branchId },
+        select: { id: true, patientName: true },
+      });
+      if (!consultation) {
+        return reply.code(400).send({ error: 'Consultation not found for this branch' });
+      }
+    }
+
     try {
+      const payload = {
+        ...data,
+        consultationId: consultationId || null,
+        riskClassification: data?.riskClassification ? String(data.riskClassification).trim().toUpperCase() : null,
+        recordDate: data.recordDate ? new Date(data.recordDate) : new Date(),
+      };
+
+      if (consultationId) {
+        const existing = await prisma.medicalRecord.findFirst({
+          where: {
+            consultationId,
+            patient: { branchId },
+          },
+          select: { id: true },
+        });
+
+        const record = existing
+          ? await prisma.medicalRecord.update({
+              where: { id: existing.id },
+              data: payload,
+              include: {
+                patient: {
+                  select: { id: true, name: true, cpf: true },
+                },
+                doctor: {
+                  select: { id: true, name: true, specialty: true },
+                },
+              },
+            })
+          : await prisma.medicalRecord.create({
+              data: payload,
+              include: {
+                patient: {
+                  select: { id: true, name: true, cpf: true },
+                },
+                doctor: {
+                  select: { id: true, name: true, specialty: true },
+                },
+              },
+            });
+
+        return reply.code(existing ? 200 : 201).send(record);
+      }
+
       const record = await prisma.medicalRecord.create({
-        data: {
-          ...data,
-          recordDate: data.recordDate ? new Date(data.recordDate) : new Date(),
-        },
+        data: payload,
         include: {
           patient: {
             select: { id: true, name: true, cpf: true },

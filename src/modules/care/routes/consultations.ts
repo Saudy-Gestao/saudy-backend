@@ -1510,6 +1510,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
           search: { type: 'string' },
           convenioStatus: { type: 'string' },
           queueType: { type: 'string' },
+          includeCompleted: { type: 'boolean', default: false },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
@@ -1522,7 +1523,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
     await applyAutomaticNoShowForBranchInConsultationQueue(branchId);
 
-    const { search, convenioStatus, queueType, limit = 50, offset = 0 } = request.query as any;
+    const { search, convenioStatus, queueType, includeCompleted = false, limit = 50, offset = 0 } = request.query as any;
 
     const where: any = { isActive: true, branchId };
     if (context?.doctorId || context?.doctorName) {
@@ -1654,6 +1655,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
     }));
 
     const visibleItems = enriched.filter((item: any) => {
+      if (includeCompleted) return true;
       if (isTerminalClinicalQueueStatus(item.queue)) return false;
       if (item.appointment && isTerminalAppointmentStatus(item.appointment.status)) return false;
 

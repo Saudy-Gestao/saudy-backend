@@ -480,8 +480,11 @@ model MedicalRecord {
     id                      String   @id @default(uuid())
     patientId               String
     patient                 Patient  @relation(fields: [patientId], references: [id])
+    consultationId          String?  @unique
+    consultation            Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
     doctorId                String?
     doctor                  Doctor?  @relation(fields: [doctorId], references: [id])
+    riskClassification      String?
     chiefComplaint          String?  @db.Text
     historyOfPresentIllness String?  @db.Text
     physicalExamination     String?  @db.Text
@@ -1141,6 +1144,7 @@ model Consultation {
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
 
+    medicalRecord    MedicalRecord?
     nursingResponse ConsultationNursingResponse?
 
     @@index([doctorId])

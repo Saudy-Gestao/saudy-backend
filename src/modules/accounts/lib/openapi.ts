@@ -372,7 +372,9 @@ export const swaggerComponents = {
       properties: {
         id: { type: 'string' },
         patientId: { type: 'string' },
+        consultationId: { type: 'string', nullable: true },
         doctorId: { type: 'string', nullable: true },
+        riskClassification: { type: 'string', nullable: true },
         chiefComplaint: { type: 'string', nullable: true },
         historyOfPresentIllness: { type: 'string', nullable: true },
         physicalExamination: { type: 'string', nullable: true },
@@ -420,7 +422,9 @@ export const swaggerComponents = {
       type: 'object',
       properties: {
         patientId: { type: 'string' },
+        consultationId: { type: 'string' },
         doctorId: { type: 'string' },
+        riskClassification: { type: 'string' },
         chiefComplaint: { type: 'string' },
         historyOfPresentIllness: { type: 'string' },
         physicalExamination: { type: 'string' },
@@ -460,6 +464,7 @@ export const swaggerComponents = {
       properties: {
         chiefComplaint: { type: 'string' },
         historyOfPresentIllness: { type: 'string' },
+        riskClassification: { type: 'string' },
         physicalExamination: { type: 'string' },
         diagnosis: { type: 'string' },
         treatment: { type: 'string' },
