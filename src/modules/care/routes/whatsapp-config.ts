@@ -370,7 +370,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       where: {
         branchId,
         type: {
-          in: ['APPOINTMENT_REMINDER', 'APPOINTMENT_CANCELED'],
+          in: ['APPOINTMENT_REMINDER', 'EXAM_REPORT_READY', 'APPOINTMENT_CANCELED'],
         },
       },
     });
@@ -681,6 +681,9 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       .replace(/\{\{paciente_cpf\}\}/gi, '123.456.789-00')
       .replace(/\{\{medico_nome\}\}/gi, 'Dr. Carlos')
       .replace(/\{\{especialidade\}\}/gi, 'Cardiologia')
+      .replace(/\{\{exame_nome\}\}/gi, 'Tomografia')
+      .replace(/\{\{retorno_data\}\}/gi, '25/04/2026')
+      .replace(/\{\{retorno_hora\}\}/gi, '09:00')
       .replace(/\{\{data\}\}/gi, '18/03/2026 (Quarta-feira)')
       .replace(/\{\{hora\}\}/gi, '14:00')
       .replace(/\{\{convenio\}\}/gi, 'Plano Saúdy')
@@ -701,6 +704,13 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       body.append('buttons', JSON.stringify([
         { type: 'QUICK_REPLY', text: 'Confirmar' },
         { type: 'QUICK_REPLY', text: 'Reagendar' },
+      ]));
+    }
+
+    if (template.type === 'EXAM_REPORT_READY') {
+      body.append('buttons', JSON.stringify([
+        { type: 'QUICK_REPLY', text: 'Agendar retorno' },
+        { type: 'QUICK_REPLY', text: 'Depois' },
       ]));
     }
 

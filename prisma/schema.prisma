@@ -84,6 +84,7 @@ model BranchSettings {
     id                                   String   @id @default(uuid())
     branchId                             String   @unique
     branch                               Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+    doctorCanScheduleExamFromConsultation Boolean @default(false)
     requireFacialForReportDelivery       Boolean  @default(false)
     requireFacialForPatientRegistration  Boolean  @default(true)
     noShowToleranceMinutes               Int      @default(30)
@@ -164,6 +165,9 @@ model Sector {
     branch      Branch @relation(fields: [branchId], references: [id])
     name        String
     description String
+    workingDays String[] @default([])
+    workingHoursStart String?
+    workingHoursEnd String?
     users       User[]
     doctors     Doctor[]
     doctorRooms DoctorRoom[]
@@ -476,8 +480,11 @@ model MedicalRecord {
     id                      String   @id @default(uuid())
     patientId               String
     patient                 Patient  @relation(fields: [patientId], references: [id])
+    consultationId          String?  @unique
+    consultation            Consultation? @relation(fields: [consultationId], references: [id], onDelete: SetNull)
     doctorId                String?
     doctor                  Doctor?  @relation(fields: [doctorId], references: [id])
+    riskClassification      String?
     chiefComplaint          String?  @db.Text
     historyOfPresentIllness String?  @db.Text
     physicalExamination     String?  @db.Text
@@ -870,10 +877,14 @@ model Appointment {
     rescheduledFromAppointmentId String?
     rescheduledFromAppointment Appointment? @relation("AppointmentReschedule", fields: [rescheduledFromAppointmentId], references: [id], onDelete: SetNull)
     rescheduledAppointments Appointment[] @relation("AppointmentReschedule")
+    sourceConsultationId String?
+    sourceProcedureId String?
     patientName     String?
     patientCpf      String?
     patientId       String?
     doctorName      String?
+    roomId          String?
+    medicalEquipmentId String?
     specialty       String?
     convenio        String?
     date            String?
@@ -891,6 +902,13 @@ model Appointment {
     inventoryConsumedAt DateTime?
     inventoryConsumptionSource String?
     inventoryConsumptionSnapshot Json?
+    orderPriority   String?
+    orderNotes      String? @db.Text
+    preferredDate   String?
+    preferredTime   String?
+    orderedAt       DateTime?
+    requestedByDoctor Boolean @default(false)
+    scheduledByDoctor Boolean @default(false)
     observations    String?
     totem           Int?
     preSchedulingFlow PreSchedulingFlow?
@@ -905,6 +923,10 @@ model Appointment {
     consultations   Consultation[]
 
     @@index([branchId])
+    @@index([roomId])
+    @@index([medicalEquipmentId])
+    @@index([sourceConsultationId])
+    @@index([sourceProcedureId])
     @@index([rescheduledFromAppointmentId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
     @@map("appointments")
@@ -1122,6 +1144,7 @@ model Consultation {
     updatedAt        DateTime @updatedAt
     isActive         Boolean  @default(true)
 
+    medicalRecord    MedicalRecord?
     nursingResponse ConsultationNursingResponse?
 
     @@index([doctorId])
@@ -1738,6 +1761,7 @@ enum WhatsAppMessageType {
     TELECONSULTATION_LINK
     APPOINTMENT_CONFIRMATION
     APPOINTMENT_REMINDER
+    EXAM_REPORT_READY
     APPOINTMENT_CANCELED
     NO_SHOW
     CONFIRMATION_REPLY_CONFIRMED

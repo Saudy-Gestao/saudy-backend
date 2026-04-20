@@ -78,6 +78,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
         properties: {
           requireFacialForReportDelivery: { type: 'boolean' },
           requireFacialForPatientRegistration: { type: 'boolean' },
+          doctorCanScheduleExamFromConsultation: { type: 'boolean' },
           noShowToleranceMinutes: { type: 'number' },
           publicCheckInEnabled: { type: 'boolean' },
         },
@@ -88,11 +89,13 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
     const {
       requireFacialForReportDelivery,
       requireFacialForPatientRegistration,
+      doctorCanScheduleExamFromConsultation,
       noShowToleranceMinutes,
       publicCheckInEnabled,
     } = request.body as {
       requireFacialForReportDelivery?: boolean;
       requireFacialForPatientRegistration?: boolean;
+      doctorCanScheduleExamFromConsultation?: boolean;
       noShowToleranceMinutes?: number;
       publicCheckInEnabled?: boolean;
     };
@@ -125,6 +128,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
         update: {
           ...(requireFacialForReportDelivery !== undefined ? { requireFacialForReportDelivery } : {}),
           ...(requireFacialForPatientRegistration !== undefined ? { requireFacialForPatientRegistration } : {}),
+          ...(doctorCanScheduleExamFromConsultation !== undefined ? { doctorCanScheduleExamFromConsultation } : {}),
           ...(noShowToleranceMinutes !== undefined ? { noShowToleranceMinutes: Math.max(0, Math.floor(Number(noShowToleranceMinutes) || 0)) } : {}),
           ...(publicCheckInEnabled !== undefined ? { publicCheckInEnabled: nextEnabled } : {}),
           ...(publicCheckInEnabled !== undefined && nextEnabled !== currentEnabled
@@ -145,6 +149,7 @@ export default async function branchSettingsRoutes(app: FastifyInstance) {
           branchId,
           ...(requireFacialForReportDelivery !== undefined ? { requireFacialForReportDelivery } : {}),
           ...(requireFacialForPatientRegistration !== undefined ? { requireFacialForPatientRegistration } : {}),
+          ...(doctorCanScheduleExamFromConsultation !== undefined ? { doctorCanScheduleExamFromConsultation } : {}),
           ...(noShowToleranceMinutes !== undefined ? { noShowToleranceMinutes: Math.max(0, Math.floor(Number(noShowToleranceMinutes) || 0)) } : {}),
           publicCheckInEnabled: nextEnabled,
           ...(publicCheckInEnabled !== undefined

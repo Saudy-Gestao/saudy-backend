@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto';
+﻿import { randomBytes } from 'crypto';
 import prisma from './prisma';
 import GupshupService from './gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from './whatsapp-message-builder';
@@ -8,6 +8,7 @@ type WhatsAppMessageType =
   | 'APPOINTMENT_CREATED'
   | 'APPOINTMENT_CONFIRMATION'
   | 'APPOINTMENT_REMINDER'
+  | 'EXAM_REPORT_READY'
   | 'APPOINTMENT_CANCELED'
   | 'NO_SHOW'
   | 'CONFIRMATION_REPLY_CONFIRMED'
@@ -18,6 +19,10 @@ export interface SendWhatsAppParams {
   appointmentId: string;
   messageType: WhatsAppMessageType;
   customMessage?: string;
+  skipNotificationSettings?: boolean;
+  quickReplyOptions?: Array<{ title: string; postbackText: string }>;
+  customTemplateData?: Partial<AppointmentData>;
+  requireApprovedTemplate?: boolean;
 }
 
 interface FailedLogParams {
@@ -36,6 +41,33 @@ const normalizeStatusKey = (value?: string | null) => String(value || '')
   .trim()
   .toUpperCase()
   .replace(/\s+/g, '_');
+
+const isValidTime = (value?: string | null) => /^\d{2}:\d{2}$/.test(String(value || '').trim());
+
+const addBusinessDays = (baseDate: Date, businessDays: number) => {
+  let added = 0;
+  const cursor = new Date(baseDate);
+  cursor.setHours(0, 0, 0, 0);
+
+  while (added < Math.max(0, businessDays)) {
+    cursor.setDate(cursor.getDate() + 1);
+    const weekDay = cursor.getDay();
+    if (weekDay !== 0 && weekDay !== 6) {
+      added += 1;
+    }
+  }
+
+  return cursor;
+};
+
+const formatDatePtBr = (date: Date) => {
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date);
+};
 
 /**
  * Helper para envio automático de mensagens WhatsApp
@@ -222,7 +254,8 @@ export class WhatsAppAutoSender {
         where: { branchId: params.branchId },
       });
 
-      if (params.messageType === 'APPOINTMENT_CREATED' && notificationConfig?.sendOnAppointmentCreated !== true) {
+      // Verificar se deve enviar mensagem baseado no tipo
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CREATED' && notificationConfig?.sendOnAppointmentCreated !== true) {
         const errorMessage = notificationConfig
           ? 'Envio de mensagem ao criar agendamento está desativado'
           : 'Configuração de notificação não encontrada para esta filial (APPOINTMENT_CREATED)';
@@ -237,7 +270,7 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      if (params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig?.sendConfirmationEnabled !== true) {
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_CONFIRMATION' && notificationConfig?.sendConfirmationEnabled !== true) {
         const errorMessage = notificationConfig
           ? 'Envio de confirmação de agendamento está desativado'
           : 'Configuração de notificação não encontrada para esta filial (APPOINTMENT_CONFIRMATION)';
@@ -252,7 +285,7 @@ export class WhatsAppAutoSender {
         return { success: false, error: errorMessage };
       }
 
-      if (params.messageType === 'APPOINTMENT_REMINDER' && notificationConfig && !notificationConfig.sendReminderEnabled) {
+      if (!params.skipNotificationSettings && params.messageType === 'APPOINTMENT_REMINDER' && notificationConfig && !notificationConfig.sendReminderEnabled) {
         const errorMessage = 'Envio de lembrete está desativado';
         await this.createFailedLog({
           branchId: params.branchId,
@@ -296,6 +329,7 @@ export class WhatsAppAutoSender {
         location: branch?.tradeName || branch?.address || '',
         professional: appointment.doctorName || '',
         documentsLink,
+        ...params.customTemplateData,
       };
 
       const templateBranchPriority = Array.from(new Set([
@@ -323,6 +357,18 @@ export class WhatsAppAutoSender {
 
         if (!templateRecord) {
           const errorMessage = 'Template de mensagem não encontrado';
+          await this.createFailedLog({
+            branchId: params.branchId,
+            appointmentId: appointment.id,
+            patientName: appointment.patientName,
+            patientPhone,
+            messageType: params.messageType,
+            errorMessage,
+          });
+          return { success: false, error: errorMessage };
+        }
+        if (params.requireApprovedTemplate && !templateRecord?.hsmTemplateApproved) {
+          const errorMessage = 'Template HSM para esta mensagem não está aprovado/ativo na Meta.';
           await this.createFailedLog({
             branchId: params.branchId,
             appointmentId: appointment.id,
@@ -392,19 +438,29 @@ export class WhatsAppAutoSender {
         }
       }
 
+      const shouldUseConfirmationQuickReply = (
+        !params.customMessage
+        && params.messageType === 'APPOINTMENT_CONFIRMATION'
+      );
+      const quickReplyOptions = Array.isArray(params.quickReplyOptions) && params.quickReplyOptions.length > 0
+        ? params.quickReplyOptions
+        : (shouldUseConfirmationQuickReply
+          ? [
+              { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
+              { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
+            ]
+          : null);
+
       if (
         (!result || result.status === 'error')
-        && !params.customMessage
-        && params.messageType === 'APPOINTMENT_CONFIRMATION'
+        && quickReplyOptions
+        && !params.requireApprovedTemplate
       ) {
         result = await gupshup.sendQuickReplyMessage({
           to: patientPhone,
           body: message,
           msgId: messageLog.id,
-          options: [
-            { title: 'Confirmar', postbackText: 'CONFIRM_APPOINTMENT' },
-            { title: 'Reagendar', postbackText: 'RESCHEDULE_APPOINTMENT' },
-          ],
+          options: quickReplyOptions,
         });
 
         if (result.status === 'error') {
@@ -412,11 +468,33 @@ export class WhatsAppAutoSender {
         }
       }
 
-      if (!result || result.status === 'error') {
+      if ((!result || result.status === 'error') && !params.requireApprovedTemplate) {
         result = await gupshup.sendTextMessage({
           to: patientPhone,
           message,
         });
+      }
+
+      if ((!result || result.status === 'error') && params.requireApprovedTemplate) {
+        await prisma.whatsAppMessageLog.update({
+          where: { id: messageLog.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: result?.error || 'Falha no envio de template HSM obrigatório.',
+          },
+        });
+        return { success: false, error: result?.error || 'Falha no envio de template HSM obrigatório.' };
+      }
+
+      if (!result) {
+        await prisma.whatsAppMessageLog.update({
+          where: { id: messageLog.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: 'Falha ao enviar mensagem para o provedor WhatsApp.',
+          },
+        });
+        return { success: false, error: 'Falha ao enviar mensagem para o provedor WhatsApp.' };
       }
 
       // Atualizar log com resultado
@@ -484,6 +562,46 @@ export class WhatsAppAutoSender {
       console.error('Failed to send no-show message:', err);
     }
   }
+
+  static async sendExamResultReadyMessage(params: {
+    branchId: string;
+    appointmentId: string;
+    patientName?: string | null;
+    examName?: string | null;
+    clinicName?: string | null;
+  }): Promise<{ success: boolean; error?: string }> {
+    const patientName = (params.patientName || '').trim();
+    const examName = (params.examName || 'seu exame').trim();
+    const clinicName = (params.clinicName || 'nossa clínica').trim();
+    const sourceAppointment = await prisma.appointment.findFirst({
+      where: { id: params.appointmentId, branchId: params.branchId },
+      select: { date: true, time: true },
+    });
+    const suggestedDateBase = sourceAppointment?.date
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(sourceAppointment.date))
+      ? new Date(`${sourceAppointment.date}T00:00:00`)
+      : new Date();
+    const suggestedDate = addBusinessDays(suggestedDateBase, 7);
+    const suggestedDateText = formatDatePtBr(suggestedDate);
+    const suggestedTime = isValidTime(sourceAppointment?.time) ? String(sourceAppointment?.time) : '09:00';
+
+    return this.sendMessage({
+      branchId: params.branchId,
+      appointmentId: params.appointmentId,
+      messageType: 'EXAM_REPORT_READY',
+      skipNotificationSettings: true,
+      requireApprovedTemplate: true,
+      customTemplateData: {
+        patientName,
+        clinicName,
+        examName,
+        returnDate: suggestedDateText,
+        returnTime: suggestedTime,
+      },
+    });
+  }
 }
 
 export default WhatsAppAutoSender;
+
+

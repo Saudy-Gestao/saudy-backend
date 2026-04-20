@@ -83,6 +83,15 @@ const APPOINTMENT_TERMINAL_STATUS_KEYS = new Set([
   'FALTOU',
 ]);
 const APPOINTMENT_NO_SHOW_UPDATABLE_STATUS_KEYS = new Set(['AGENDADO', 'CONFIRMADO']);
+const FINAL_REPORT_STATUSES = new Set([
+  'FINALIZADO',
+  'FINALIZADO_COM_REVISAO',
+  'LIBERADO',
+  'ASSINADO',
+  'CONCLUIDO',
+  'FINAL',
+  'APROVADO',
+]);
 
 const normalizeAppointmentStatusKey = (value?: string | null) => normalizeStatusKey(value).replace(/\s+/g, '_');
 
@@ -195,6 +204,61 @@ const isExamAppointment = (value?: string | null) => {
   return normalized === 'EXAME' || normalized === 'EXAM';
 };
 
+const NON_BLOCKING_APPOINTMENT_STATUSES = new Set([
+  'CANCELADO',
+  'CANCELED',
+  'REALIZADO',
+  'COMPLETED',
+  'FINALIZADO',
+  'NO_SHOW',
+  'NAO_COMPARECEU',
+  'NÃO_COMPARECEU',
+  'AUSENTE',
+  'FALTOU',
+]);
+
+const parseTimeToMinutes = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return (hours * 60) + minutes;
+};
+
+const rangesOverlap = (
+  startA?: string | null,
+  durationA?: number | null,
+  startB?: string | null,
+  durationB?: number | null,
+) => {
+  const startMinutesA = parseTimeToMinutes(startA);
+  const startMinutesB = parseTimeToMinutes(startB);
+  if (startMinutesA === null || startMinutesB === null) return false;
+  const safeDurationA = Number.isFinite(Number(durationA)) && Number(durationA) > 0 ? Number(durationA) : 30;
+  const safeDurationB = Number.isFinite(Number(durationB)) && Number(durationB) > 0 ? Number(durationB) : 30;
+  const endA = startMinutesA + safeDurationA;
+  const endB = startMinutesB + safeDurationB;
+  return startMinutesA < endB && startMinutesB < endA;
+};
+
+const formatDateToIso = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const normalizeReportStatusKey = (value?: string | null) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toUpperCase()
+  .replace(/\s+/g, '_');
+
+const isFinalizedReportStatus = (value?: string | null) => FINAL_REPORT_STATUSES.has(normalizeReportStatusKey(value));
+
 const isTeleconsultationAppointment = (appointment: any) => String(appointment?.observations || '')
   .toUpperCase()
   .includes(TELECONSULTATION_OBSERVATION_MARKER);
@@ -282,6 +346,141 @@ const resolveNursingTemplateForAppointment = async (branchId: string, appointmen
 
   const template = matchedProcedure?.nursingTemplates?.[0];
   return template ? sortTemplate(template) : null;
+};
+
+const resolveConsultationExamInsights = async (branchId: string, consultations: any[]) => {
+  const reportByPatientKey = new Map<string, any[]>();
+  const patientIds = new Set<string>();
+  const patientCpfs = new Set<string>();
+  const patientNames = new Set<string>();
+
+  for (const consultation of consultations) {
+    const appointment = consultation?.appointment || null;
+    const patientId = String(appointment?.patientId || '').trim();
+    const patientCpf = String(appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const patientName = String(appointment?.patientName || consultation?.patientName || '').trim().toLowerCase();
+    if (patientId) patientIds.add(patientId);
+    if (patientCpf) patientCpfs.add(patientCpf);
+    if (patientName) patientNames.add(patientName);
+  }
+
+  if (patientIds.size === 0 && patientCpfs.size === 0 && patientNames.size === 0) {
+    return reportByPatientKey;
+  }
+
+  const reports = await prisma.report.findMany({
+    where: {
+      branchId,
+      isActive: true,
+      OR: [
+        ...(patientIds.size > 0 ? [{ appointment: { is: { patientId: { in: Array.from(patientIds) } } } }] : []),
+        ...(patientCpfs.size > 0 ? [
+          { cpf: { in: Array.from(patientCpfs) } },
+          { appointment: { is: { patientCpf: { in: Array.from(patientCpfs) } } } },
+        ] : []),
+        ...(patientNames.size > 0
+          ? Array.from(patientNames).map((name) => ({ patientName: { equals: name, mode: 'insensitive' as const } }))
+          : []),
+      ],
+    },
+    select: {
+      id: true,
+      status: true,
+      exam: true,
+      updatedAt: true,
+      appointmentId: true,
+      patientName: true,
+      cpf: true,
+      appointment: {
+        select: {
+          patientId: true,
+          patientCpf: true,
+          patientName: true,
+        },
+      },
+      worklistItem: {
+        select: {
+          id: true,
+          dicomUrl: true,
+          dicomStudyUid: true,
+          dicomReceivedAt: true,
+        },
+      },
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 500,
+  });
+
+  for (const report of reports) {
+    const keys = new Set<string>();
+    const appointmentPatientId = String(report?.appointment?.patientId || '').trim();
+    const appointmentPatientCpf = String(report?.appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const reportCpf = String(report?.cpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const appointmentPatientName = String(report?.appointment?.patientName || '').trim().toLowerCase();
+    const reportPatientName = String(report?.patientName || '').trim().toLowerCase();
+    if (appointmentPatientId) keys.add(`id:${appointmentPatientId}`);
+    if (appointmentPatientCpf) keys.add(`cpf:${appointmentPatientCpf}`);
+    if (reportCpf) keys.add(`cpf:${reportCpf}`);
+    if (appointmentPatientName) keys.add(`name:${appointmentPatientName}`);
+    if (reportPatientName) keys.add(`name:${reportPatientName}`);
+
+    for (const key of keys) {
+      const existing = reportByPatientKey.get(key) || [];
+      existing.push(report);
+      reportByPatientKey.set(key, existing);
+    }
+  }
+
+  return reportByPatientKey;
+};
+
+const resolveConsultationDicomInsights = async (branchId: string, consultations: any[]) => {
+  const appointmentIds = Array.from(new Set(
+    consultations
+      .map((item: any) => String(item?.appointment?.id || item?.appointmentId || '').trim())
+      .filter(Boolean),
+  ));
+  const mapByAppointmentId = new Map<string, any>();
+  if (appointmentIds.length === 0) return mapByAppointmentId;
+
+  const items = await prisma.reportWorklistItem.findMany({
+    where: {
+      appointmentId: { in: appointmentIds },
+      OR: [{ branchId }, { branchId: null }],
+      isActive: true,
+    },
+    select: {
+      id: true,
+      appointmentId: true,
+      dicomStudyUid: true,
+      dicomUrl: true,
+      dicomReceivedAt: true,
+      createdAt: true,
+      dicomFiles: { select: { id: true }, take: 1 },
+    },
+    orderBy: [
+      { dicomReceivedAt: 'desc' },
+      { createdAt: 'desc' },
+    ],
+    take: 1000,
+  });
+
+  for (const worklist of items) {
+    const appointmentId = String(worklist?.appointmentId || '').trim();
+    if (!appointmentId || mapByAppointmentId.has(appointmentId)) continue;
+    const hasImage = Boolean(
+      worklist?.dicomReceivedAt
+      || worklist?.dicomStudyUid
+      || worklist?.dicomUrl
+      || (Array.isArray(worklist?.dicomFiles) && worklist.dicomFiles.length > 0),
+    );
+    mapByAppointmentId.set(appointmentId, {
+      hasImage,
+      worklist,
+    });
+  }
+
+  return mapByAppointmentId;
 };
 
 const toConsultationView = (item: any) => ({
@@ -1124,6 +1323,175 @@ export default async function consultationRoutes(app: FastifyInstance) {
     };
   };
 
+  const getExamOrderBranchSettings = async (branchId: string) => {
+    const settings = await prisma.branchSettings.upsert({
+      where: { branchId },
+      update: {},
+      create: { branchId },
+      select: { doctorCanScheduleExamFromConsultation: true },
+    });
+    return {
+      doctorCanScheduleExamFromConsultation: Boolean(settings?.doctorCanScheduleExamFromConsultation),
+    };
+  };
+
+  const resolveAvailableExamSlots = async (params: {
+    branchId: string;
+    procedureId: string;
+    doctorId?: string | null;
+    doctorName?: string | null;
+    durationMinutes?: number | null;
+    limit?: number;
+  }) => {
+    const limit = Math.max(3, Math.min(Number(params.limit || 5), 5));
+    const duration = Number.isFinite(Number(params.durationMinutes)) && Number(params.durationMinutes) > 0
+      ? Number(params.durationMinutes)
+      : 30;
+    const doctorName = String(params.doctorName || '').trim();
+    if (!doctorName && !params.doctorId) return [] as Array<any>;
+
+    const doctor = params.doctorId
+      ? await prisma.doctor.findFirst({
+          where: { id: String(params.doctorId), isActive: true },
+          select: { id: true, name: true, roomId: true, roomLinks: { select: { roomId: true } } },
+        })
+      : await prisma.doctor.findFirst({
+          where: {
+            branchId: params.branchId,
+            name: { equals: doctorName, mode: 'insensitive' },
+            isActive: true,
+          },
+          select: { id: true, name: true, roomId: true, roomLinks: { select: { roomId: true } } },
+        });
+    if (!doctor) return [] as Array<any>;
+
+    const roomIds = Array.from(new Set([
+      String(doctor.roomId || '').trim(),
+      ...((doctor.roomLinks || []).map((link: any) => String(link.roomId || '').trim())),
+    ].filter(Boolean)));
+    if (roomIds.length === 0) return [] as Array<any>;
+
+    const equipmentLinks = await prisma.medicalEquipmentProcedure.findMany({
+      where: { procedureId: String(params.procedureId) },
+      include: {
+        medicalEquipment: {
+          select: {
+            id: true,
+            branchId: true,
+            roomId: true,
+            name: true,
+            status: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+
+    const eligibleResources = equipmentLinks
+      .map((link: any) => link.medicalEquipment)
+      .filter((eq: any) => eq
+        && eq.isActive
+        && String(eq.branchId || '') === String(params.branchId)
+        && eq.roomId
+        && roomIds.includes(String(eq.roomId))
+        && !['INATIVO', 'MANUTENCAO', 'MANUTENÇÃO'].includes(normalizeStatusKey(eq.status || '')));
+    if (eligibleResources.length === 0) return [] as Array<any>;
+
+    const equipmentIds = eligibleResources.map((eq: any) => String(eq.id));
+
+    const now = new Date();
+    const suggested: Array<{
+      date: string;
+      time: string;
+      roomId: string;
+      medicalEquipmentId: string;
+      roomName?: string | null;
+      medicalEquipmentName?: string | null;
+    }> = [];
+
+    for (let dayOffset = 0; dayOffset < 30 && suggested.length < limit; dayOffset += 1) {
+      const day = new Date(now);
+      day.setDate(now.getDate() + dayOffset);
+      const weekDay = day.getDay();
+      if (weekDay === 0) continue;
+
+      const dateIso = formatDateToIso(day);
+      const appointments = await prisma.appointment.findMany({
+        where: {
+          branchId: params.branchId,
+          date: dateIso,
+          isActive: true,
+          OR: [
+            { doctorName: { equals: doctor.name, mode: 'insensitive' } },
+            { roomId: { in: roomIds } },
+            { medicalEquipmentId: { in: equipmentIds } },
+          ],
+        },
+        select: { time: true, durationMinutes: true, status: true, doctorName: true, roomId: true, medicalEquipmentId: true },
+      });
+
+      const busy = appointments.filter((item: any) =>
+        !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeStatusKey(item?.status || '')));
+
+      const startHour = 8;
+      const endHour = 18;
+      for (let hour = startHour; hour < endHour && suggested.length < limit; hour += 1) {
+        for (const minute of [0, 30]) {
+          const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+          if (dayOffset === 0) {
+            const slotDate = new Date(`${dateIso}T${time}:00`);
+            if (slotDate <= now) continue;
+          }
+
+          const doctorConflict = busy
+            .filter((item: any) => String(item?.doctorName || '').trim().toLowerCase() === String(doctor.name || '').trim().toLowerCase())
+            .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
+          if (doctorConflict) continue;
+
+          const availableResource = eligibleResources.find((resource: any) => {
+            const roomConflict = busy
+              .filter((item: any) => String(item?.roomId || '') === String(resource.roomId || ''))
+              .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
+            if (roomConflict) return false;
+            const equipmentConflict = busy
+              .filter((item: any) => String(item?.medicalEquipmentId || '') === String(resource.id || ''))
+              .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
+            return !equipmentConflict;
+          });
+
+          if (availableResource) {
+            suggested.push({
+              date: dateIso,
+              time,
+              roomId: String(availableResource.roomId),
+              medicalEquipmentId: String(availableResource.id),
+              roomName: null,
+              medicalEquipmentName: availableResource.name || null,
+            });
+            if (suggested.length >= limit) {
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    const roomIdsUsed = Array.from(new Set(suggested.map((slot) => slot.roomId)));
+    const rooms = roomIdsUsed.length
+      ? await prisma.sector.findMany({
+          where: { id: { in: roomIdsUsed } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const roomById = new Map<string, any>(rooms.map((room: any) => [String(room.id), room]));
+
+    for (const slot of suggested) {
+      slot.roomName = roomById.get(String(slot.roomId))?.name || null;
+    }
+
+    return suggested;
+  };
+
   app.addHook('onRequest', async (request, reply) => {
     try {
       await request.jwtVerify();
@@ -1142,6 +1510,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
           search: { type: 'string' },
           convenioStatus: { type: 'string' },
           queueType: { type: 'string' },
+          includeCompleted: { type: 'boolean', default: false },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
@@ -1154,7 +1523,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
     await applyAutomaticNoShowForBranchInConsultationQueue(branchId);
 
-    const { search, convenioStatus, queueType, limit = 50, offset = 0 } = request.query as any;
+    const { search, convenioStatus, queueType, includeCompleted = false, limit = 50, offset = 0 } = request.query as any;
 
     const where: any = { isActive: true, branchId };
     if (context?.doctorId || context?.doctorName) {
@@ -1190,7 +1559,18 @@ export default async function consultationRoutes(app: FastifyInstance) {
         orderBy: { createdAt: 'desc' },
         include: {
           appointment: {
-            select: { id: true, specialty: true, type: true, date: true, time: true, observations: true, status: true },
+            select: {
+              id: true,
+              specialty: true,
+              type: true,
+              date: true,
+              time: true,
+              observations: true,
+              status: true,
+              patientId: true,
+              patientCpf: true,
+              patientName: true,
+            },
           },
           nursingResponse: {
             include: { answers: true },
@@ -1202,12 +1582,59 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
     const nowDate = getTodayDateString();
     const nowTime = getNowTimeString();
+    const reportInsights = await resolveConsultationExamInsights(branchId, items as any[]);
+    const dicomInsights = await resolveConsultationDicomInsights(branchId, items as any[]);
     const enriched = await Promise.all(items.map(async (item: any) => {
       const nursingTemplate = item.appointment
         ? await resolveNursingTemplateForAppointment(branchId, item.appointment)
         : null;
+      const patientId = String(item?.appointment?.patientId || '').trim();
+      const patientCpf = String(item?.appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+      const patientName = String(item?.appointment?.patientName || item?.patientName || '').trim().toLowerCase();
+      const appointmentId = String(item?.appointment?.id || item?.appointmentId || '').trim();
+      const dicomInsight = appointmentId ? dicomInsights.get(appointmentId) : null;
+      const latestExamImage = dicomInsight?.worklist || null;
+      const hasExamImageReceived = Boolean(dicomInsight?.hasImage);
+      const relatedReports = [
+        ...(patientId ? (reportInsights.get(`id:${patientId}`) || []) : []),
+        ...(patientCpf ? (reportInsights.get(`cpf:${patientCpf}`) || []) : []),
+        ...(patientName ? (reportInsights.get(`name:${patientName}`) || []) : []),
+      ].filter(Boolean);
+      const finalReports = relatedReports.filter((report: any) => isFinalizedReportStatus(report?.status));
+      const latestFinalReport = finalReports
+        .sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0] || null;
+      const hasExamImagesAvailable = Boolean(
+        latestFinalReport?.worklistItem?.dicomStudyUid
+        || latestFinalReport?.worklistItem?.dicomUrl
+        || latestFinalReport?.worklistItem?.dicomReceivedAt,
+      );
       return toConsultationView({
         ...item,
+        hasExamImageReceived,
+        latestExamImage: latestExamImage
+          ? {
+              id: latestExamImage.id,
+              appointmentId: latestExamImage.appointmentId || null,
+              dicomStudyUid: latestExamImage.dicomStudyUid || null,
+              dicomUrl: latestExamImage.dicomUrl || null,
+              dicomReceivedAt: latestExamImage.dicomReceivedAt || null,
+            }
+          : null,
+        hasFinalizedExamReport: Boolean(latestFinalReport),
+        hasExamImagesAvailable,
+        latestFinalizedExamReport: latestFinalReport
+          ? {
+              id: latestFinalReport.id,
+              status: latestFinalReport.status,
+              exam: latestFinalReport.exam || null,
+              updatedAt: latestFinalReport.updatedAt,
+              appointmentId: latestFinalReport.appointmentId || null,
+              worklistItemId: latestFinalReport.worklistItem?.id || null,
+              dicomStudyUid: latestFinalReport.worklistItem?.dicomStudyUid || null,
+              dicomUrl: latestFinalReport.worklistItem?.dicomUrl || null,
+              dicomReceivedAt: latestFinalReport.worklistItem?.dicomReceivedAt || null,
+            }
+          : null,
         nursingTemplate: nursingTemplate
           ? {
               id: nursingTemplate.id,
@@ -1228,6 +1655,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
     }));
 
     const visibleItems = enriched.filter((item: any) => {
+      if (includeCompleted) return true;
       if (isTerminalClinicalQueueStatus(item.queue)) return false;
       if (item.appointment && isTerminalAppointmentStatus(item.appointment.status)) return false;
 
@@ -1273,7 +1701,17 @@ export default async function consultationRoutes(app: FastifyInstance) {
       },
       include: {
         appointment: {
-          select: { id: true, specialty: true, type: true, date: true, time: true, observations: true },
+          select: {
+            id: true,
+            specialty: true,
+            type: true,
+            date: true,
+            time: true,
+            observations: true,
+            patientId: true,
+            patientCpf: true,
+            patientName: true,
+          },
         },
         nursingResponse: {
           include: { answers: true },
@@ -1284,8 +1722,55 @@ export default async function consultationRoutes(app: FastifyInstance) {
     const nursingTemplate = item.appointment
       ? await resolveNursingTemplateForAppointment(branchId, item.appointment)
       : null;
+    const reportInsights = await resolveConsultationExamInsights(branchId, [item] as any[]);
+    const dicomInsights = await resolveConsultationDicomInsights(branchId, [item] as any[]);
+    const patientId = String(item?.appointment?.patientId || '').trim();
+    const patientCpf = String(item?.appointment?.patientCpf || '').replace(DIGITS_ONLY_REGEX, '').trim();
+    const patientName = String(item?.appointment?.patientName || item?.patientName || '').trim().toLowerCase();
+    const appointmentId = String(item?.appointment?.id || item?.appointmentId || '').trim();
+    const dicomInsight = appointmentId ? dicomInsights.get(appointmentId) : null;
+    const latestExamImage = dicomInsight?.worklist || null;
+    const hasExamImageReceived = Boolean(dicomInsight?.hasImage);
+    const relatedReports = [
+      ...(patientId ? (reportInsights.get(`id:${patientId}`) || []) : []),
+      ...(patientCpf ? (reportInsights.get(`cpf:${patientCpf}`) || []) : []),
+      ...(patientName ? (reportInsights.get(`name:${patientName}`) || []) : []),
+    ].filter(Boolean);
+    const finalReports = relatedReports.filter((report: any) => isFinalizedReportStatus(report?.status));
+    const latestFinalReport = finalReports
+      .sort((a: any, b: any) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0] || null;
+    const hasExamImagesAvailable = Boolean(
+      latestFinalReport?.worklistItem?.dicomStudyUid
+      || latestFinalReport?.worklistItem?.dicomUrl
+      || latestFinalReport?.worklistItem?.dicomReceivedAt,
+    );
     return toConsultationView({
       ...item,
+      hasExamImageReceived,
+      latestExamImage: latestExamImage
+        ? {
+            id: latestExamImage.id,
+            appointmentId: latestExamImage.appointmentId || null,
+            dicomStudyUid: latestExamImage.dicomStudyUid || null,
+            dicomUrl: latestExamImage.dicomUrl || null,
+            dicomReceivedAt: latestExamImage.dicomReceivedAt || null,
+          }
+        : null,
+      hasFinalizedExamReport: Boolean(latestFinalReport),
+      hasExamImagesAvailable,
+      latestFinalizedExamReport: latestFinalReport
+        ? {
+            id: latestFinalReport.id,
+            status: latestFinalReport.status,
+            exam: latestFinalReport.exam || null,
+            updatedAt: latestFinalReport.updatedAt,
+            appointmentId: latestFinalReport.appointmentId || null,
+            worklistItemId: latestFinalReport.worklistItem?.id || null,
+            dicomStudyUid: latestFinalReport.worklistItem?.dicomStudyUid || null,
+            dicomUrl: latestFinalReport.worklistItem?.dicomUrl || null,
+            dicomReceivedAt: latestFinalReport.worklistItem?.dicomReceivedAt || null,
+          }
+        : null,
       nursingTemplate: nursingTemplate
         ? {
             id: nursingTemplate.id,
@@ -1366,7 +1851,9 @@ export default async function consultationRoutes(app: FastifyInstance) {
       const defaultQueue = isExamAppointment(linkedAppointment?.type)
         ? (nursingTemplate ? 'Aguardando triagem' : 'Aguardando exame')
         : 'Aguardando atendimento';
-      const resolvedQueue = nursingTemplate ? defaultQueue : (data.queue || defaultQueue);
+      const resolvedQueue = isExamAppointment(linkedAppointment?.type)
+        ? defaultQueue
+        : (nursingTemplate ? defaultQueue : (data.queue || defaultQueue));
 
       const isClinicalQueueCreate = canonicalClinicalQueueStatus(data?.queueType) === 'FILA_CLINICA';
       if (isClinicalQueueCreate) {
@@ -1584,6 +2071,369 @@ export default async function consultationRoutes(app: FastifyInstance) {
     });
   });
 
+  app.get('/exam-order-config', {
+    schema: {
+      summary: 'Get exam order configuration for the branch',
+      tags: ['Consultations'],
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+    return getExamOrderBranchSettings(branchId);
+  });
+
+  app.put('/exam-order-config', {
+    schema: {
+      summary: 'Update exam order configuration for the branch',
+      tags: ['Consultations'],
+      body: {
+        type: 'object',
+        required: ['doctorCanScheduleExamFromConsultation'],
+        properties: {
+          doctorCanScheduleExamFromConsultation: { type: 'boolean' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const data = request.body as any;
+    const updated = await prisma.branchSettings.upsert({
+      where: { branchId },
+      update: {
+        doctorCanScheduleExamFromConsultation: Boolean(data?.doctorCanScheduleExamFromConsultation),
+      },
+      create: {
+        branchId,
+        doctorCanScheduleExamFromConsultation: Boolean(data?.doctorCanScheduleExamFromConsultation),
+      },
+      select: { doctorCanScheduleExamFromConsultation: true },
+    });
+
+    return {
+      doctorCanScheduleExamFromConsultation: Boolean(updated?.doctorCanScheduleExamFromConsultation),
+    };
+  });
+
+  app.get('/:id/exam-procedures', {
+    schema: {
+      summary: 'List exam procedures available to consultation context',
+      tags: ['Consultations'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const consultation = await prisma.consultation.findFirst({
+      where: { id, branchId, isActive: true },
+      select: { id: true, doctorId: true },
+    });
+    if (!consultation) return reply.code(404).send({ error: 'Consultation not found' });
+
+    const doctorId = String(consultation.doctorId || context?.doctorId || '').trim();
+    const procedures = await prisma.procedure.findMany({
+      where: {
+        branchId,
+        isActive: true,
+        appointmentType: { in: ['EXAME', 'EXAM'] },
+      },
+      include: { doctors: { select: { doctorId: true } } },
+      orderBy: { name: 'asc' },
+      take: 300,
+    });
+
+    const filtered = doctorId
+      ? procedures.filter((item: any) => item.doctors.length === 0 || item.doctors.some((link: any) => String(link.doctorId) === doctorId))
+      : procedures;
+
+    return {
+      items: filtered.map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        durationMinutes: item.durationMinutes || 30,
+        price: item.price || null,
+      })),
+      total: filtered.length,
+    };
+  });
+
+  app.get('/:id/exam-slots', {
+    schema: {
+      summary: 'Suggest available exam slots for doctor scheduling',
+      tags: ['Consultations'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      querystring: {
+        type: 'object',
+        required: ['procedureId'],
+        properties: {
+          procedureId: { type: 'string' },
+          limit: { type: 'number', default: 5 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const { procedureId, limit = 5 } = request.query as any;
+    const settings = await getExamOrderBranchSettings(branchId);
+    if (!settings.doctorCanScheduleExamFromConsultation) {
+      return reply.code(403).send({ error: 'Doctor scheduling from consultation is disabled for this branch' });
+    }
+
+    const consultation = await prisma.consultation.findFirst({
+      where: { id, branchId, isActive: true },
+      include: { appointment: true },
+    });
+    if (!consultation) return reply.code(404).send({ error: 'Consultation not found' });
+
+    const procedure = await prisma.procedure.findFirst({
+      where: {
+        id: String(procedureId),
+        branchId,
+        isActive: true,
+        appointmentType: { in: ['EXAME', 'EXAM'] },
+      },
+      select: { id: true, name: true, durationMinutes: true },
+    });
+    if (!procedure) return reply.code(404).send({ error: 'Procedure not found' });
+
+    const doctorName = String(consultation.doctorName || consultation.appointment?.doctorName || '').trim();
+    const slots = await resolveAvailableExamSlots({
+      branchId,
+      procedureId: procedure.id,
+      doctorId: consultation.doctorId || context?.doctorId || null,
+      doctorName,
+      durationMinutes: procedure.durationMinutes || 30,
+      limit,
+    });
+
+    return {
+      procedure: {
+        id: procedure.id,
+        name: procedure.name,
+        durationMinutes: procedure.durationMinutes || 30,
+      },
+      items: slots,
+      total: slots.length,
+    };
+  });
+
+  app.post('/:id/exam-orders', {
+    schema: {
+      summary: 'Create structured exam order from consultation',
+      tags: ['Consultations'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        properties: {
+          procedureId: { type: 'string' },
+          examType: { type: 'string' },
+          priority: { type: 'string' },
+          notes: { type: 'string' },
+          preferredDate: { type: 'string' },
+          preferredTime: { type: 'string' },
+          scheduleDate: { type: 'string' },
+          scheduleTime: { type: 'string' },
+          scheduleRoomId: { type: 'string' },
+          scheduleMedicalEquipmentId: { type: 'string' },
+        },
+      },
+      response: {
+        201: { type: 'object' },
+        400: { type: 'object', additionalProperties: true },
+        403: { type: 'object', additionalProperties: true },
+        409: { type: 'object', additionalProperties: true },
+        404: { type: 'object', additionalProperties: true },
+      },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const data = request.body as any;
+
+    const procedureId = String(data?.procedureId || '').trim();
+    const settings = await getExamOrderBranchSettings(branchId);
+
+    const consultation = await prisma.consultation.findFirst({
+      where: {
+        id,
+        branchId,
+        isActive: true,
+        ...((context?.doctorId || context?.doctorName)
+          ? {
+              OR: [
+                ...(context?.doctorId ? [{ doctorId: context.doctorId }] : []),
+                ...(context?.doctorName ? [{ doctorName: context.doctorName }] : []),
+              ],
+            }
+          : {}),
+      },
+      include: {
+        appointment: true,
+      },
+    });
+    if (!consultation) return reply.code(404).send({ error: 'Consultation not found' });
+
+    let procedure = null as any;
+    if (procedureId) {
+      procedure = await prisma.procedure.findFirst({
+        where: {
+          id: procedureId,
+          branchId,
+          isActive: true,
+          appointmentType: { in: ['EXAME', 'EXAM'] },
+        },
+        select: { id: true, name: true, durationMinutes: true },
+      });
+      if (!procedure) return reply.code(404).send({ error: 'Procedure not found' });
+    }
+
+    const examType = String(procedure?.name || data?.examType || '').trim();
+    if (!examType) return reply.code(400).send({ error: 'procedureId or examType is required' });
+
+    const requestedScheduleDate = String(data?.scheduleDate || '').trim();
+    const requestedScheduleTime = String(data?.scheduleTime || '').trim();
+    const requestedScheduleRoomId = String(data?.scheduleRoomId || '').trim();
+    const requestedScheduleMedicalEquipmentId = String(data?.scheduleMedicalEquipmentId || '').trim();
+    const hasRequestedScheduling = Boolean(requestedScheduleDate && requestedScheduleTime);
+    if (hasRequestedScheduling && !settings.doctorCanScheduleExamFromConsultation) {
+      return reply.code(403).send({ error: 'Doctor scheduling from consultation is disabled for this branch' });
+    }
+
+    const sourceAppointment = consultation.appointmentId
+      ? await prisma.appointment.findFirst({
+          where: { id: consultation.appointmentId, branchId, isActive: true },
+        })
+      : null;
+
+    const resolvedDate = hasRequestedScheduling
+      ? requestedScheduleDate
+      : (data?.preferredDate ? String(data.preferredDate).trim() : null);
+    const resolvedTime = hasRequestedScheduling
+      ? requestedScheduleTime
+      : (data?.preferredTime ? String(data.preferredTime).trim() : null);
+
+    if (hasRequestedScheduling && !/^\d{4}-\d{2}-\d{2}$/.test(requestedScheduleDate)) {
+      return reply.code(400).send({ error: 'scheduleDate must be YYYY-MM-DD' });
+    }
+    if (hasRequestedScheduling && !/^\d{2}:\d{2}$/.test(requestedScheduleTime)) {
+      return reply.code(400).send({ error: 'scheduleTime must be HH:mm' });
+    }
+    if (hasRequestedScheduling && (!requestedScheduleRoomId || !requestedScheduleMedicalEquipmentId)) {
+      return reply.code(400).send({ error: 'scheduleRoomId and scheduleMedicalEquipmentId are required when scheduling from consultation' });
+    }
+
+    if (hasRequestedScheduling) {
+      const doctorName = String(consultation.doctorName || sourceAppointment?.doctorName || '').trim();
+      const validEquipmentLink = procedure?.id
+        ? await prisma.medicalEquipmentProcedure.findFirst({
+            where: {
+              procedureId: procedure.id,
+              medicalEquipmentId: requestedScheduleMedicalEquipmentId,
+              medicalEquipment: {
+                branchId,
+                isActive: true,
+                roomId: requestedScheduleRoomId,
+              },
+            },
+            select: { medicalEquipmentId: true },
+          })
+        : null;
+      if (!validEquipmentLink) {
+        return reply.code(400).send({ error: 'Selected room/equipment is not valid for this procedure' });
+      }
+
+      const conflicts = await prisma.appointment.findMany({
+        where: {
+          branchId,
+          date: requestedScheduleDate,
+          isActive: true,
+          OR: [
+            { doctorName: { equals: doctorName, mode: 'insensitive' } },
+            { roomId: requestedScheduleRoomId },
+            { medicalEquipmentId: requestedScheduleMedicalEquipmentId },
+          ],
+        },
+        select: { id: true, time: true, durationMinutes: true, status: true, doctorName: true, roomId: true, medicalEquipmentId: true },
+      });
+      const duration = Number(procedure?.durationMinutes || 30);
+      const blocking = conflicts.filter((item: any) => !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeStatusKey(item?.status || '')));
+
+      const doctorConflict = blocking
+        .filter((item: any) => String(item?.doctorName || '').trim().toLowerCase() === doctorName.toLowerCase())
+        .some((item: any) => rangesOverlap(requestedScheduleTime, duration, item?.time, item?.durationMinutes));
+      if (doctorConflict) {
+        return reply.code(409).send({ error: 'Scheduling conflict: doctor is busy on selected slot' });
+      }
+
+      const roomConflict = blocking
+        .filter((item: any) => String(item?.roomId || '') === requestedScheduleRoomId)
+        .some((item: any) => rangesOverlap(requestedScheduleTime, duration, item?.time, item?.durationMinutes));
+      if (roomConflict) {
+        return reply.code(409).send({ error: 'Scheduling conflict: room is busy on selected slot' });
+      }
+
+      const equipmentConflict = blocking
+        .filter((item: any) => String(item?.medicalEquipmentId || '') === requestedScheduleMedicalEquipmentId)
+        .some((item: any) => rangesOverlap(requestedScheduleTime, duration, item?.time, item?.durationMinutes));
+      if (equipmentConflict) {
+        return reply.code(409).send({ error: 'Scheduling conflict: equipment is busy on selected slot' });
+      }
+    }
+
+    const normalizedPriority = data?.priority ? String(data.priority).trim().toUpperCase() : null;
+    const normalizedOrderNotes = data?.notes ? String(data.notes).trim() : null;
+    const normalizedPreferredDate = data?.preferredDate ? String(data.preferredDate).trim() : null;
+    const normalizedPreferredTime = data?.preferredTime ? String(data.preferredTime).trim() : null;
+    const normalizedProcedureId = procedureId || null;
+
+    const created = await prisma.appointment.create({
+      data: {
+        branchId,
+        sourceConsultationId: consultation.id,
+        sourceProcedureId: normalizedProcedureId,
+        patientName: sourceAppointment?.patientName || consultation.patientName || null,
+        patientCpf: sourceAppointment?.patientCpf || null,
+        patientId: sourceAppointment?.patientId || null,
+        doctorName: consultation.doctorName || sourceAppointment?.doctorName || null,
+        specialty: examType,
+        durationMinutes: Number(procedure?.durationMinutes || 30),
+        convenio: sourceAppointment?.convenio || consultation.convenio || null,
+        date: hasRequestedScheduling ? resolvedDate : null,
+        time: hasRequestedScheduling ? resolvedTime : null,
+        type: 'EXAME',
+        status: hasRequestedScheduling ? 'AGENDADO' : 'PEDIDO_MEDICO',
+        orderPriority: normalizedPriority,
+        orderNotes: normalizedOrderNotes,
+        preferredDate: normalizedPreferredDate,
+        preferredTime: normalizedPreferredTime,
+        orderedAt: new Date(),
+        requestedByDoctor: true,
+        scheduledByDoctor: hasRequestedScheduling,
+        roomId: hasRequestedScheduling ? requestedScheduleRoomId : null,
+        medicalEquipmentId: hasRequestedScheduling ? requestedScheduleMedicalEquipmentId : null,
+        observations: normalizedOrderNotes,
+      },
+    });
+
+    return reply.code(201).send({
+      message: hasRequestedScheduling ? 'Exam scheduled from consultation' : 'Exam order created',
+      appointment: created,
+    });
+  });
+
   app.put('/:id', {
     schema: {
       summary: 'Update consultation',
@@ -1648,6 +2498,60 @@ export default async function consultationRoutes(app: FastifyInstance) {
           error: 'Invalid status transition',
           message: `Não é permitido mudar de "${existing.queue || 'SEM_STATUS'}" para "${data.queue}".`,
         });
+      }
+
+      if (hasQueueStatusChange && toStatus === 'EXAME_CONCLUIDO') {
+        let appointmentForExamCompletion = null as any;
+        const deterministicAppointmentId = String(data?.appointmentId || existing.appointmentId || '').trim();
+        if (deterministicAppointmentId) {
+          appointmentForExamCompletion = await prisma.appointment.findFirst({
+            where: {
+              id: deterministicAppointmentId,
+              branchId,
+              isActive: true,
+            },
+          });
+        }
+
+        if (!appointmentForExamCompletion) {
+          appointmentForExamCompletion = await findTodayAppointmentCandidate({
+            branchId,
+            patientName: existing.patientName,
+            doctorName: existing.doctorName,
+            agenda: existing.agenda || existing.scheduledFor,
+          });
+        }
+
+        if (!appointmentForExamCompletion?.id) {
+          return reply.code(400).send({
+            error: 'Exam completion blocked',
+            message: 'Não foi possível identificar o agendamento do exame para validar as imagens recebidas.',
+          });
+        }
+
+        const hasImage = await prisma.reportWorklistItem.findFirst({
+          where: {
+            appointmentId: appointmentForExamCompletion.id,
+            isActive: true,
+            AND: [
+              { OR: [{ branchId }, { branchId: null }] },
+              { OR: [
+              { dicomReceivedAt: { not: null } },
+              { dicomStudyUid: { not: null } },
+              { dicomUrl: { not: null } },
+              { dicomFiles: { some: {} } },
+              ] },
+            ],
+          },
+          select: { id: true },
+        });
+
+        if (!hasImage) {
+          return reply.code(400).send({
+            error: 'Exam completion blocked',
+            message: 'Não é permitido finalizar exame sem imagem recebida no sistema.',
+          });
+        }
       }
 
       const nextData = {
