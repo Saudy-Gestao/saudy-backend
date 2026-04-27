@@ -26,7 +26,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     whatsAppConversationMessage: { create: vi.fn() },
     whatsAppNotificationConfig: { findMany: vi.fn() },
     whatsAppMessageLog: { findFirst: vi.fn() },
-    branch: { findMany: vi.fn() },
+    branch: { findMany: vi.fn(), findUnique: vi.fn() },
     branchSettings: { findUnique: vi.fn() },
     appointment: { findMany: vi.fn() },
     $transaction: vi.fn(),
@@ -54,6 +54,7 @@ describe('whatsapp scheduler job', () => {
     mockedPrisma.whatsAppNotificationConfig.findMany.mockResolvedValue([]);
     mockedPrisma.whatsAppMessageLog.findFirst.mockResolvedValue(null);
     mockedPrisma.branch.findMany.mockResolvedValue([{ id: 'b-1' }]);
+    mockedPrisma.branch.findUnique.mockResolvedValue({ companyId: null });
     mockedPrisma.branchSettings.findUnique.mockResolvedValue({ noShowToleranceMinutes: 30 });
     mockedPrisma.appointment.findMany.mockResolvedValue([]);
     mockedPrisma.mwlEntry.updateMany.mockResolvedValue({ count: 0 });

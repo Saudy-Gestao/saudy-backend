@@ -35,7 +35,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     whatsAppConfig: { findUnique: vi.fn() },
     whatsAppNotificationConfig: { findUnique: vi.fn() },
     branch: { findUnique: vi.fn() },
-    whatsAppMessageTemplate: { findFirst: vi.fn() },
+    whatsAppMessageTemplate: { findFirst: vi.fn(), findMany: vi.fn() },
     whatsAppMessageLog: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
     preSchedulingFlow: { findUnique: vi.fn(), upsert: vi.fn() },
   },
@@ -85,6 +85,11 @@ describe('whatsapp auto sender', () => {
       message: 'Olá {{patientName}}',
       hsmTemplateApproved: false,
     });
+    mockedPrisma.whatsAppMessageTemplate.findMany.mockResolvedValue([{
+      branchId: 'b-1',
+      message: 'Olá {{patientName}}',
+      hsmTemplateApproved: false,
+    }]);
     mockedPrisma.whatsAppMessageLog.findFirst.mockResolvedValue(null);
     mockedPrisma.whatsAppMessageLog.create.mockResolvedValue({ id: 'log-1' });
     mockedPrisma.whatsAppMessageLog.update.mockResolvedValue({ id: 'log-1' });
@@ -132,7 +137,7 @@ describe('whatsapp auto sender', () => {
   });
 
   it('returns failure when message template is not found', async () => {
-    mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce(null);
+    mockedPrisma.whatsAppMessageTemplate.findMany.mockResolvedValueOnce([]);
 
     const result = await WhatsAppAutoSender.sendMessage({
       branchId: 'b-1',
@@ -145,12 +150,15 @@ describe('whatsapp auto sender', () => {
   });
 
   it('returns failure when whatsapp credentials are incomplete', async () => {
-    mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({
+    const incompleteConfig = {
       isActive: true,
       accountSid: '',
       authToken: 'app-name',
       fromNumber: '5511999990000',
-    });
+    };
+    mockedPrisma.whatsAppConfig.findUnique
+      .mockResolvedValueOnce(incompleteConfig)
+      .mockResolvedValueOnce(incompleteConfig);
 
     const result = await WhatsAppAutoSender.sendMessage({
       branchId: 'b-1',
@@ -163,11 +171,12 @@ describe('whatsapp auto sender', () => {
   });
 
   it('falls back from template and quick reply to text for confirmation', async () => {
-    mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
+    mockedPrisma.whatsAppMessageTemplate.findMany.mockResolvedValueOnce([{
+      branchId: 'b-1',
       message: 'Confirme {{patientName}}',
       hsmTemplateApproved: true,
       hsmTemplateId: 'tpl-1',
-    });
+    }]);
     sendTemplateMessageMock.mockResolvedValueOnce({ status: 'error', error: 'hsm-fail' });
     sendQuickReplyMessageMock.mockResolvedValueOnce({ status: 'error', error: 'qr-fail' });
     sendTextMessageMock.mockResolvedValueOnce({ status: 'success', messageId: 'm-text' });

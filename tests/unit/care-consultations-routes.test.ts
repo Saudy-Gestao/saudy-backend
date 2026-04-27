@@ -28,6 +28,8 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
       deleteMany: vi.fn(),
       createMany: vi.fn(),
     },
+    report: { findMany: vi.fn() },
+    reportWorklistItem: { findMany: vi.fn(), findFirst: vi.fn() },
     invoice: {
       findUnique: vi.fn(),
       create: vi.fn(),
@@ -55,6 +57,17 @@ const tx = {
   consultation: {
     update: vi.fn(),
   },
+  appointment: {
+    findUnique: vi.fn(),
+    update: vi.fn(),
+  },
+  procedure: { findFirst: vi.fn() },
+  procedureMaterial: { findMany: vi.fn() },
+  inventoryItem: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() },
+  inventoryLot: { findMany: vi.fn(), updateMany: vi.fn() },
+  inventoryMovement: { create: vi.fn() },
+  user: { findUnique: vi.fn() },
+  adminUser: { findUnique: vi.fn() },
 };
 
 async function buildApp(opts?: { unauthorized?: boolean }) {
@@ -96,6 +109,9 @@ describe('care consultations routes', () => {
     mockedPrisma.patient.findFirst.mockResolvedValue(null);
     mockedPrisma.doctor.findFirst.mockResolvedValue(null);
     mockedPrisma.preSchedulingFlow.findUnique.mockResolvedValue(null);
+    mockedPrisma.report.findMany.mockResolvedValue([]);
+    mockedPrisma.reportWorklistItem.findMany.mockResolvedValue([]);
+    mockedPrisma.reportWorklistItem.findFirst.mockResolvedValue({ id: 'rw-1' });
 
     tx.consultationNursingAnswer.deleteMany.mockResolvedValue({ count: 0 });
     tx.consultationNursingAnswer.createMany.mockResolvedValue({ count: 1 });
@@ -107,6 +123,26 @@ describe('care consultations routes', () => {
       appointment: { id: 'a-1', type: 'EXAME', specialty: 'Tomografia', observations: '' },
       nursingResponse: { id: 'nr-1', answers: [{ orderIndex: 1 }] },
     });
+    tx.appointment.findUnique.mockResolvedValue({
+      id: 'a-1',
+      status: 'AGENDADO',
+      branchId: 'b-1',
+      specialty: 'Tomografia',
+      convenio: 'Plano X',
+      inventoryConsumedAt: null,
+      observations: '',
+    });
+    tx.appointment.update.mockResolvedValue({ id: 'a-1', status: 'REALIZADO' });
+    tx.procedure.findFirst.mockResolvedValue(null);
+    tx.procedureMaterial.findMany.mockResolvedValue([]);
+    tx.inventoryItem.findUnique.mockResolvedValue({ id: 'i-1', name: 'Item', quantity: 10, minQuantity: 1, status: 'AVAILABLE' });
+    tx.inventoryItem.updateMany.mockResolvedValue({ count: 1 });
+    tx.inventoryItem.update.mockResolvedValue({ id: 'i-1' });
+    tx.inventoryLot.findMany.mockResolvedValue([]);
+    tx.inventoryLot.updateMany.mockResolvedValue({ count: 1 });
+    tx.inventoryMovement.create.mockResolvedValue({ id: 'mov-1' });
+    tx.user.findUnique.mockResolvedValue({ name: 'User' });
+    tx.adminUser.findUnique.mockResolvedValue(null);
 
     mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
   });
@@ -362,7 +398,7 @@ describe('care consultations routes', () => {
       anamnese: 'Anamnese',
       triageNotes: 'ok',
     });
-    mockedPrisma.appointment.findFirst.mockResolvedValueOnce({
+    const examAppointment = {
       id: 'a-1',
       branchId: 'b-1',
       isActive: true,
@@ -378,7 +414,10 @@ describe('care consultations routes', () => {
       convenio: 'Plano X',
       observations: '',
       authorizedAt: null,
-    });
+    };
+    mockedPrisma.appointment.findFirst
+      .mockResolvedValueOnce(examAppointment)
+      .mockResolvedValueOnce(examAppointment);
     mockedPrisma.invoice.findUnique.mockResolvedValueOnce(null);
     mockedPrisma.procedure.findMany.mockResolvedValueOnce([
       { id: 'proc-1', name: 'Tomografia', price: 120, tussCode: 'TUSS-1', tussTableCode: '22' },
@@ -393,7 +432,7 @@ describe('care consultations routes', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(mockedPrisma.appointment.update).toHaveBeenCalled();
+    expect(tx.appointment.update).toHaveBeenCalled();
     expect(mockedPrisma.invoice.create).toHaveBeenCalled();
     await app.close();
   });
@@ -664,6 +703,23 @@ describe('care consultations routes', () => {
       { id: 'proc-1', name: 'Tomografia', price: 200, tussCode: 'T-1', tussTableCode: '22' },
     ]);
     mockedPrisma.preSchedulingFlow.findUnique.mockResolvedValueOnce(null);
+    tx.appointment.findUnique.mockResolvedValueOnce({
+      id: 'a-1',
+      status: 'REALIZADO',
+      branchId: 'b-1',
+      isActive: true,
+      type: 'EXAME',
+      specialty: 'Tomografia',
+      date: '2026-04-14',
+      time: '09:00',
+      convenio: null,
+      patientCpf: null,
+      patientId: null,
+      patientName: 'Maria',
+      doctorName: 'Dr A',
+      observations: '',
+      authorizedAt: null,
+    });
     const app = await buildApp();
     const res = await app.inject({
       method: 'PUT', url: '/consultations/c-1',

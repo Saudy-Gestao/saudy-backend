@@ -28,9 +28,9 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     user: { findUnique: vi.fn() },
     appointment: { findFirst: vi.fn() },
     patient: { findUnique: vi.fn() },
-    branch: { findUnique: vi.fn() },
+    branch: { findUnique: vi.fn(), findMany: vi.fn() },
     whatsAppConfig: { findUnique: vi.fn() },
-    whatsAppMessageTemplate: { findFirst: vi.fn() },
+    whatsAppMessageTemplate: { findFirst: vi.fn(), findMany: vi.fn() },
     whatsAppMessageLog: { create: vi.fn(), update: vi.fn(), findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
   },
 }));
@@ -73,7 +73,8 @@ describe('care whatsapp-messages routes', () => {
       observations: 'obs',
     });
     mockedPrisma.patient.findUnique.mockResolvedValue({ cellphone: '5511999998888' });
-    mockedPrisma.branch.findUnique.mockResolvedValue({ tradeName: 'Saudy', address: 'Rua 1' });
+    mockedPrisma.branch.findUnique.mockResolvedValue({ tradeName: 'Saudy', address: 'Rua 1', companyId: null });
+    mockedPrisma.branch.findMany.mockResolvedValue([{ id: 'b-1' }]);
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValue({
       branchId: 'b-1',
       accountSid: 'api-key',
@@ -83,11 +84,20 @@ describe('care whatsapp-messages routes', () => {
     });
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValue({
       id: 'tpl-1',
+      branchId: 'b-1',
       message: 'Olá {{paciente_nome}}',
       hsmTemplateId: 'hsm-1',
       hsmTemplateName: 'hsm_name',
       isActive: true,
     });
+    mockedPrisma.whatsAppMessageTemplate.findMany.mockResolvedValue([{
+      id: 'tpl-1',
+      branchId: 'b-1',
+      message: 'Olá {{paciente_nome}}',
+      hsmTemplateId: 'hsm-1',
+      hsmTemplateName: 'hsm_name',
+      isActive: true,
+    }]);
     mockedPrisma.whatsAppMessageLog.create.mockResolvedValue({ id: 'log-1' });
     mockedPrisma.whatsAppMessageLog.update.mockResolvedValue({ id: 'log-1' });
     mockedPrisma.whatsAppMessageLog.findMany.mockResolvedValue([{ id: 'log-1' }]);
@@ -137,7 +147,9 @@ describe('care whatsapp-messages routes', () => {
     });
     expect(res.statusCode).toBe(400);
 
-    mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce(null);
+    mockedPrisma.whatsAppConfig.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
     res = await app.inject({
       method: 'POST',
       url: '/wm/whatsapp/send',
@@ -232,12 +244,15 @@ describe('care whatsapp-messages routes', () => {
   it('handles test route success and error hints', async () => {
     const app = await buildApp();
 
-    mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({
+    const incompleteConfig = {
       accountSid: '',
       authToken: '',
       fromNumber: '',
       isActive: true,
-    });
+    };
+    mockedPrisma.whatsAppConfig.findUnique
+      .mockResolvedValueOnce(incompleteConfig)
+      .mockResolvedValueOnce(incompleteConfig);
     let res = await app.inject({
       method: 'POST',
       url: '/wm/whatsapp/test',

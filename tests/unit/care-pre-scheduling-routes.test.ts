@@ -31,7 +31,9 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     preSchedulingAnamnesisAnswer: { deleteMany: vi.fn(), create: vi.fn() },
     preSchedulingAnamnesisResponse: { upsert: vi.fn(), findUnique: vi.fn() },
     procedure: { findMany: vi.fn() },
-    whatsAppConfig: { findUnique: vi.fn() },
+    branch: { findUnique: vi.fn(), findMany: vi.fn() },
+    whatsAppConfig: { findUnique: vi.fn(), findMany: vi.fn() },
+    whatsAppMessageLog: { create: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -82,6 +84,8 @@ describe('care pre-scheduling routes', () => {
     ]);
     mockedPrisma.preSchedulingFlow.findMany.mockResolvedValue([]);
     mockedPrisma.procedure.findMany.mockResolvedValue([]);
+    mockedPrisma.branch.findUnique.mockResolvedValue({ companyId: null });
+    mockedPrisma.branch.findMany.mockResolvedValue([{ id: 'b-1' }]);
 
     mockedPrisma.appointment.findFirst.mockResolvedValue({
       id: 'a-1',
@@ -112,6 +116,9 @@ describe('care pre-scheduling routes', () => {
     mockedPrisma.preSchedulingAnamnesisAnswer.deleteMany.mockResolvedValue({ count: 0 });
     mockedPrisma.preSchedulingAnamnesisAnswer.create.mockResolvedValue({ id: 'aa-1' });
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValue(null);
+    mockedPrisma.whatsAppConfig.findMany.mockResolvedValue([]);
+    mockedPrisma.whatsAppMessageLog.create.mockResolvedValue({ id: 'log-1' });
+    mockedPrisma.whatsAppMessageLog.update.mockResolvedValue({ id: 'log-1' });
     mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb(mockedPrisma));
     mockedPrisma.preSchedulingFlow.findFirst.mockResolvedValue({
       id: 'f-1',
@@ -359,7 +366,7 @@ describe('care pre-scheduling routes', () => {
     const res = await app.inject({ method: 'POST', url: '/pre-scheduling/a-1/pre-authorize', payload: {} });
     expect(res.statusCode).toBe(200);
     expect(mockedPrisma.preSchedulingFlow.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED' }) }),
+      expect.objectContaining({ data: expect.objectContaining({ status: 'PRE_AUTHORIZED' }) }),
     );
     await app.close();
   });
@@ -409,9 +416,12 @@ describe('care pre-scheduling routes', () => {
     mockedPrisma.preSchedulingFlow.findUnique.mockResolvedValueOnce({
       id: 'f-1', status: 'PENDING', patientSubmittedAt: null, documents: [], anamnesisResponse: null,
     });
-    mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({
+    const activeConfig = {
       branchId: 'b-1', isActive: true, accountSid: 'key', authToken: 'app', fromNumber: 'src',
-    });
+    };
+    mockedPrisma.whatsAppConfig.findUnique
+      .mockResolvedValueOnce(activeConfig)
+      .mockResolvedValueOnce(activeConfig);
     mockedPrisma.preSchedulingFlow.update.mockResolvedValueOnce({ id: 'f-1', status: 'WAITING_PATIENT_DOCUMENTS' });
 
     const res = await app.inject({ method: 'POST', url: '/pre-scheduling/a-1/send-link', payload: {} });
@@ -488,16 +498,16 @@ describe('care pre-scheduling routes', () => {
       expect.objectContaining({ data: expect.objectContaining({ status: 'DOCUMENTS_RECEIVED' }) }),
     );
 
-    // APPROVE with preAuthorization + NON-teleconsult → completedAt set
+    // APPROVE with preAuthorization keeps the flow waiting for manual/final completion
     mockedPrisma.preSchedulingFlow.findFirst.mockResolvedValueOnce({
       id: 'f-1', preAuthorizedAt: new Date(), documents: [{ id: 'd-1' }],
       appointment: { observations: 'no-marker', type: 'CONSULTA', specialty: null }, anamnesisResponse: null,
     });
-    mockedPrisma.preSchedulingFlow.update.mockResolvedValueOnce({ id: 'f-1', status: 'COMPLETED', completedAt: new Date() });
+    mockedPrisma.preSchedulingFlow.update.mockResolvedValueOnce({ id: 'f-1', status: 'DOCUMENTS_RECEIVED', completedAt: null });
     res = await app.inject({ method: 'POST', url: '/pre-scheduling/a-1/review-documents', payload: { action: 'APPROVE' } });
     expect(res.statusCode).toBe(200);
     const lastUpdateCall = mockedPrisma.preSchedulingFlow.update.mock.calls.at(-1)?.[0];
-    expect(lastUpdateCall?.data?.completedAt).not.toBeNull();
+    expect(lastUpdateCall?.data?.completedAt).toBeNull();
 
     // REQUEST_RESUBMISSION
     mockedPrisma.preSchedulingFlow.findFirst.mockResolvedValueOnce({

@@ -37,6 +37,7 @@ const mockedPublishNoShow = publishAppointmentNoShowEventIfNeeded as any;
 
 const tx = {
   appointment: {
+    findUnique: vi.fn(),
     findMany: vi.fn(),
     create: vi.fn(),
     findFirst: vi.fn(),
@@ -57,6 +58,20 @@ const tx = {
     findUnique: vi.fn(),
     update: vi.fn(),
   },
+  inventoryLot: {
+    findMany: vi.fn(),
+    updateMany: vi.fn(),
+  },
+  inventoryMovement: {
+    create: vi.fn(),
+  },
+  whatsAppMessageLog: {
+    updateMany: vi.fn(),
+    findFirst: vi.fn(),
+    create: vi.fn(),
+  },
+  user: { findUnique: vi.fn() },
+  adminUser: { findUnique: vi.fn() },
 };
 
 async function buildApp(opts?: { unauthorized?: boolean }) {
@@ -86,6 +101,7 @@ describe('care appointments routes', () => {
     mockedPrisma.mwlEntry.findFirst.mockResolvedValue(null);
 
     tx.appointment.findMany.mockResolvedValue([]);
+    tx.appointment.findUnique.mockResolvedValue({ id: 'a-1', status: 'AGENDADO' });
     tx.appointment.create.mockResolvedValue({ id: 'a-1', status: 'AGENDADO', date: '2026-04-13', time: '09:00' });
     tx.appointment.findFirst.mockResolvedValue(null);
     tx.appointment.update.mockResolvedValue({ id: 'a-1', status: 'AGENDADO' });
@@ -102,6 +118,14 @@ describe('care appointments routes', () => {
     tx.inventoryItem.updateMany.mockResolvedValue({ count: 1 });
     tx.inventoryItem.findUnique.mockResolvedValue({ id: 'i-1', name: 'Item' });
     tx.inventoryItem.update.mockResolvedValue({ id: 'i-1' });
+    tx.inventoryLot.findMany.mockResolvedValue([]);
+    tx.inventoryLot.updateMany.mockResolvedValue({ count: 1 });
+    tx.inventoryMovement.create.mockResolvedValue({ id: 'mov-1' });
+    tx.whatsAppMessageLog.updateMany.mockResolvedValue({ count: 0 });
+    tx.whatsAppMessageLog.findFirst.mockResolvedValue(null);
+    tx.whatsAppMessageLog.create.mockResolvedValue({ id: 'log-1' });
+    tx.user.findUnique.mockResolvedValue({ name: 'User' });
+    tx.adminUser.findUnique.mockResolvedValue(null);
 
     mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
   });
@@ -404,8 +428,11 @@ describe('care appointments routes', () => {
       inventoryConsumedAt: null, specialty: 'USG', patientName: 'Maria',
     });
     mockedPrisma.$transaction.mockImplementationOnce(async (cb: any) => {
-      tx.procedure.findFirst.mockResolvedValueOnce({ id: 'proc-1', name: 'USG' });
-      tx.procedureMaterial.findMany.mockResolvedValueOnce([{ inventoryItemId: 'i-1', quantity: 2 }]);
+      tx.procedure.findFirst.mockResolvedValueOnce({
+        id: 'proc-1',
+        name: 'USG',
+        materials: [{ inventoryItemId: 'i-1', quantity: 2 }],
+      });
       tx.inventoryItem.updateMany.mockResolvedValueOnce({ count: 1 });
       tx.inventoryItem.findUnique.mockResolvedValueOnce({ id: 'i-1', name: 'Gel USG', quantity: 8, minQuantity: 5, status: 'AVAILABLE' });
       tx.appointment.update.mockResolvedValueOnce({ id: 'a-1', status: 'REALIZADO', inventoryConsumedAt: new Date() });
@@ -427,6 +454,10 @@ describe('care appointments routes', () => {
       id: 'a-1', branchId: 'b-1', status: 'REALIZADO', doctorName: 'Dr A',
       date: '2026-04-13', time: '10:00', durationMinutes: 30,
       inventoryConsumedAt: new Date('2026-04-13'), specialty: 'USG',
+      inventoryConsumptionSnapshot: {
+        source: 'PROCEDURE_MATERIALS',
+        materials: [{ inventoryItemId: 'i-1', quantity: 2 }],
+      },
     });
     mockedPrisma.$transaction.mockImplementationOnce(async (cb: any) => {
       tx.procedure.findFirst.mockResolvedValueOnce({ id: 'proc-1', name: 'USG' });
@@ -506,6 +537,11 @@ describe('care appointments routes', () => {
     });
     mockedPrisma.$transaction.mockImplementationOnce(async (cb: any) => {
       tx.mwlEntry.findFirst.mockResolvedValueOnce(null); // no existing
+      tx.appointment.update.mockResolvedValueOnce({
+        id: 'a-2', branchId: 'b-1', status: 'CONFIRMADO', isActive: true,
+        accessionNumber: 'ACC-1', date: '2026-04-13', time: '10:00',
+        specialty: 'USG', patientName: 'Maria',
+      });
       return cb(tx);
     });
     mockedPrisma.mwlEntry.findFirst.mockResolvedValueOnce({ id: 'm-2', appointmentId: 'a-2' });

@@ -198,6 +198,7 @@ describe('care whatsapp webhook routes', () => {
       id: 'log-1',
       appointmentId: 'a-1',
       branchId: 'b-1',
+      messageType: 'APPOINTMENT_CONFIRMATION',
       status: 'SENT',
     });
 
@@ -227,6 +228,7 @@ describe('care whatsapp webhook routes', () => {
       id: 'log-1',
       appointmentId: 'a-1',
       branchId: 'b-1',
+      messageType: 'APPOINTMENT_CONFIRMATION',
       status: 'RESPONDED_CONFIRMED',
     });
 
@@ -274,6 +276,7 @@ describe('care whatsapp webhook routes', () => {
       id: 'log-1',
       appointmentId: 'a-404',
       branchId: 'b-1',
+      messageType: 'APPOINTMENT_CONFIRMATION',
       status: 'SENT',
     });
     mockedPrisma.appointment.findFirst.mockResolvedValueOnce(null);
@@ -300,6 +303,7 @@ describe('care whatsapp webhook routes', () => {
       id: 'log-1',
       appointmentId: 'a-1',
       branchId: 'b-1',
+      messageType: 'APPOINTMENT_CONFIRMATION',
       status: 'SENT',
     });
     mockedPrisma.whatsAppConversation.findUnique.mockResolvedValueOnce({
@@ -332,6 +336,7 @@ describe('care whatsapp webhook routes', () => {
       id: 'log-1',
       appointmentId: 'a-1',
       branchId: 'b-1',
+      messageType: 'APPOINTMENT_CONFIRMATION',
       status: 'SENT',
     });
     mockedPrisma.whatsAppConversation.findUnique.mockResolvedValueOnce(null);

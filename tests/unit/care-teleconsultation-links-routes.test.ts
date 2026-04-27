@@ -20,7 +20,8 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     convenioAuthorizationAttachment: { count: vi.fn() },
     preSchedulingFlow: { findFirst: vi.fn(), updateMany: vi.fn() },
     consultation: { findFirst: vi.fn(), update: vi.fn(), create: vi.fn() },
-    whatsAppConfig: { findUnique: vi.fn() },
+    branch: { findUnique: vi.fn(), findMany: vi.fn() },
+    whatsAppConfig: { findUnique: vi.fn(), findMany: vi.fn() },
     teleconsultationMessage: { create: vi.fn(), findMany: vi.fn() },
   },
 }));
@@ -97,12 +98,17 @@ describe('care teleconsultation links routes', () => {
     mockedPrisma.consultation.findFirst.mockResolvedValue(null);
     mockedPrisma.consultation.update.mockResolvedValue({ id: 'c-1' });
     mockedPrisma.consultation.create.mockResolvedValue({ id: 'c-1' });
+    mockedPrisma.branch.findUnique.mockResolvedValue({ companyId: null });
+    mockedPrisma.branch.findMany.mockResolvedValue([{ id: 'b-1' }]);
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValue({
+      branchId: 'b-1',
       isActive: true,
       accountSid: 'key',
       authToken: 'app',
       fromNumber: '5511999990000',
+      appId: null,
     });
+    mockedPrisma.whatsAppConfig.findMany.mockResolvedValue([]);
     mockedPrisma.teleconsultationMessage.create.mockResolvedValue({ id: 'tm-1' });
     mockedPrisma.teleconsultationMessage.findMany.mockResolvedValue([
       {
@@ -308,7 +314,7 @@ describe('care teleconsultation links routes', () => {
     sendTextMessageMock.mockResolvedValueOnce({ status: 'success', messageId: 'mid-ok' });
     res = await app.inject({ method: 'POST', url: '/tele/appointment/a-1/send-whatsapp-link', payload: { notes: 'ok', sendPatientMessage: true } });
     expect(res.statusCode).toBe(200);
-    expect(res.json().message).toContain('enviado com sucesso');
+    expect(res.json().message).toContain('Link de teleconsulta gerado com sucesso');
 
     await app.close();
   });

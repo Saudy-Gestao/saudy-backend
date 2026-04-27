@@ -13,6 +13,9 @@ vi.mock('../../src/modules/admin/lib/prisma', () => ({
       update: vi.fn(),
       delete: vi.fn(),
     },
+    adminUser: { findUnique: vi.fn(), findMany: vi.fn() },
+    user: { findUnique: vi.fn(), findMany: vi.fn() },
+    inventoryMovement: { findMany: vi.fn(), count: vi.fn(), create: vi.fn() },
   },
 }));
 
@@ -20,6 +23,10 @@ const mockedPrisma = prisma as any;
 
 async function buildApp() {
   const app = Fastify();
+  app.decorateRequest('user', null);
+  app.decorateRequest('jwtVerify', async function jwtVerify(this: any) {
+    this.user = { id: 'admin-1', admHubOnly: true };
+  });
   await app.register(inventoryRoutes, { prefix: '/inventory' });
   return app;
 }
@@ -27,6 +34,13 @@ async function buildApp() {
 describe('admin inventory routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedPrisma.adminUser.findUnique.mockResolvedValue({ name: 'Admin' });
+    mockedPrisma.user.findUnique.mockResolvedValue({ name: 'User' });
+    mockedPrisma.adminUser.findMany.mockResolvedValue([]);
+    mockedPrisma.user.findMany.mockResolvedValue([]);
+    mockedPrisma.inventoryMovement.findMany.mockResolvedValue([]);
+    mockedPrisma.inventoryMovement.count.mockResolvedValue(0);
+    mockedPrisma.inventoryMovement.create.mockResolvedValue({ id: 'movement-1' });
   });
 
   it('lists inventory with filters', async () => {
@@ -73,7 +87,6 @@ describe('admin inventory routes', () => {
       fields: {
         code: 'Código é obrigatório',
         name: 'Nome do item é obrigatório',
-        expiryDate: 'Data de validade é obrigatória',
       },
     });
 

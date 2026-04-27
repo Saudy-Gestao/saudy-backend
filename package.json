@@ -11,7 +11,7 @@
     "test:integration": "vitest run tests/integration",
     "test:coverage": "vitest run --coverage",
     "verify:migrations": "node scripts/verify-migrations.cjs",
-    "precommit:verify": "pnpm run verify:migrations && pnpm run test && pnpm run build",
+    "precommit:verify": "pnpm run verify:migrations && pnpm run test:coverage && pnpm run build",
     "prepare": "husky",
     "start": "pnpm exec prisma migrate deploy && pnpm run seed && node dist/server.js",
     "seed": "node src/lib/seed.js",
