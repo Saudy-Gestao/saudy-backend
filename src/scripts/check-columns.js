@@ -1,19 +1,31 @@
 const { exec } = require('child_process');
 
-// Executar comando psql para verificar colunas
-exec(
-  `psql -U postgres -d saudy_db -h localhost -c "\\d branches"`,
-  { env: { ...process.env, PGPASSWORD: 'postgres' } },
-  (error, stdout, stderr) => {
-    if (error) {
-      console.error('Erro:', error.message);
-      return;
-    }
-    if (stderr) {
-      console.error('Stderr:', stderr);
-      return;
-    }
-    console.log('📋 Colunas da tabela branches:');
-    console.log(stdout);
-  }
-);
+function runCheckColumns(options = {}) {
+  const execFn = options.exec || exec;
+  const logger = options.logger || console;
+  const env = options.env || process.env;
+
+  execFn(
+    'psql -U postgres -d saudy_db -h localhost -c "\\d branches"',
+    { env: { ...env, PGPASSWORD: 'postgres' } },
+    (error, stdout, stderr) => {
+      if (error) {
+        logger.error('Erro:', error.message);
+        return;
+      }
+      if (stderr) {
+        logger.error('Stderr:', stderr);
+        return;
+      }
+      logger.log('📋 Colunas da tabela branches:');
+      logger.log(stdout);
+    },
+  );
+}
+
+module.exports = { runCheckColumns };
+
+/* c8 ignore next 3 */
+if (require.main === module) {
+  runCheckColumns();
+}

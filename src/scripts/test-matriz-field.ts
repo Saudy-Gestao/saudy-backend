@@ -1,25 +1,35 @@
 import { PrismaClient } from '@prisma/client';
 
-const prisma = new PrismaClient();
+export async function runTestMatrizField(options: {
+  PrismaClientCtor?: typeof PrismaClient;
+  logger?: Console;
+} = {}) {
+  const PrismaClientCtor = options.PrismaClientCtor || PrismaClient;
+  const logger = options.logger || console;
+  const prisma = new PrismaClientCtor();
 
-async function test() {
   try {
     const branches = await prisma.branch.findMany({
       take: 1,
     });
-    
-    console.log('✅ Primeira filial:');
-    console.log(JSON.stringify(branches[0], null, 2));
-    
+
+    logger.log('✅ Primeira filial:');
+    logger.log(JSON.stringify(branches[0], null, 2));
+
     if (branches[0]) {
-      console.log('\n🔍 Campo isMatriz existe?', 'isMatriz' in branches[0]);
-      console.log('Valor de isMatriz:', branches[0].isMatriz);
+      logger.log('\n🔍 Campo isMatriz existe?', 'isMatriz' in branches[0]);
+      logger.log('Valor de isMatriz:', branches[0].isMatriz);
     }
+    return branches[0] || null;
   } catch (error) {
-    console.error('❌ Erro:', error);
+    logger.error('❌ Erro:', error);
+    return null;
   } finally {
     await prisma.$disconnect();
   }
 }
 
-test();
+/* c8 ignore next 3 */
+if (require.main === module) {
+  void runTestMatrizField();
+}

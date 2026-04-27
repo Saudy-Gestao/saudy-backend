@@ -6,7 +6,9 @@ const { PrismaClient } = require('@prisma/client');
 
 const isSslEnabled = process.env.DATABASE_SSL === 'true';
 const pool = new Pool({
+  /* v8 ignore next */
   connectionString: process.env.DATABASE_URL || '',
+  /* v8 ignore next */
   ssl: isSslEnabled ? { rejectUnauthorized: false } : undefined,
 });
 const adapter = new PrismaPg(pool);
@@ -176,22 +178,22 @@ const modules = [
   }
 ];
 
-async function main() {
-  console.log('🌱 Starting seed...');
+async function runSeed({ client = prisma, logger = console } = {}) {
+  logger.log('🌱 Starting seed...');
 
   // Create modules
-  console.log('📦 Creating modules...');
+  logger.log('📦 Creating modules...');
   for (const module of modules) {
-    await prisma.module.upsert({
+    await client.module.upsert({
       where: { name: module.name },
       update: module,
       create: module,
     });
-    console.log(`  ✓ ${module.label}`);
+    logger.log(`  ✓ ${module.label}`);
   }
 
   // Remove módulos descontinuados para não aparecerem em permissões/acessos.
-  const removedCount = await prisma.module.deleteMany({
+  const removedCount = await client.module.deleteMany({
     where: {
       name: {
         in: ['envelopamento', 'documentos'],
@@ -199,17 +201,31 @@ async function main() {
     },
   });
   if (removedCount.count > 0) {
-    console.log(`  ✓ ${removedCount.count} módulo(s) descontinuado(s) removido(s) do catálogo`);
+    logger.log(`  ✓ ${removedCount.count} módulo(s) descontinuado(s) removido(s) do catálogo`);
   }
 
-  console.log('✅ Seed completed!');
+  logger.log('✅ Seed completed!');
 }
 
-main()
-  .catch((e) => {
-    console.error('❌ Seed failed:', e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+async function runCliSeed() {
+  await runSeed({ client: prisma, logger: console });
+}
+
+/* v8 ignore start */
+if (require.main === module) {
+  runCliSeed()
+    .catch((e) => {
+      console.error('❌ Seed failed:', e);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}
+/* v8 ignore stop */
+
+module.exports = {
+  modules,
+  runSeed,
+  runCliSeed,
+};

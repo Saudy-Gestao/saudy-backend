@@ -7,6 +7,12 @@
     "dev": "pnpm prisma:generate && pnpm tsx watch src/server.ts",
     "dev:network": "pnpm prisma:generate && pnpm tsx watch src/server.ts",
     "build": "pnpm prisma:generate && tsc",
+    "test": "vitest run",
+    "test:integration": "vitest run tests/integration",
+    "test:coverage": "vitest run --coverage",
+    "verify:migrations": "node scripts/verify-migrations.cjs",
+    "precommit:verify": "pnpm run verify:migrations && pnpm run test && pnpm run build",
+    "prepare": "husky",
     "start": "pnpm exec prisma migrate deploy && pnpm run seed && node dist/server.js",
     "seed": "node src/lib/seed.js",
     "reset:user-password": "pnpm exec tsx src/scripts/reset-user-password.ts",
@@ -40,7 +46,10 @@
     "@types/nodemailer": "^7.0.9",
     "@types/pg": "^8.15.6",
     "@types/uuid": "^11.0.0",
+    "husky": "^9.1.7",
+    "@vitest/coverage-v8": "^2.1.9",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
   }
 }

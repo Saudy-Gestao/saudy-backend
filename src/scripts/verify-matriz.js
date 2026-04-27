@@ -1,14 +1,16 @@
 const pg = require('pg');
 
-const pool = new pg.Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'saudy_db',
-  password: 'postgres',
-  port: 5432,
-});
+async function runVerifyMatriz(options = {}) {
+  const PoolCtor = options.PoolCtor || pg.Pool;
+  const logger = options.logger || console;
+  const pool = new PoolCtor({
+    user: 'postgres',
+    host: 'localhost',
+    database: 'saudy_db',
+    password: 'postgres',
+    port: 5432,
+  });
 
-async function verify() {
   try {
     const res = await pool.query(`
       SELECT 
@@ -20,15 +22,21 @@ async function verify() {
       JOIN companies c ON b."companyId" = c.id
       ORDER BY c.id, b.id
     `);
-    
-    console.log('\n✅ Resultado da query:');
-    console.log(res.rows);
-    
+
+    logger.log('\n✅ Resultado da query:');
+    logger.log(res.rows);
+    return res.rows;
   } catch (err) {
-    console.error('❌ Erro:', err.message);
+    logger.error('❌ Erro:', err.message);
+    return [];
   } finally {
     await pool.end();
   }
 }
 
-verify();
+module.exports = { runVerifyMatriz };
+
+/* c8 ignore next 3 */
+if (require.main === module) {
+  void runVerifyMatriz();
+}

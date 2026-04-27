@@ -1,10 +1,15 @@
 import { Pool } from 'pg';
 
-const pool = new Pool({
-  connectionString: 'postgresql://postgres:postgres@localhost:5432/saudy_db',
-});
+export async function runCheckMatriz(options: {
+  PoolCtor?: typeof Pool;
+  logger?: Console;
+} = {}) {
+  const PoolCtor = options.PoolCtor || Pool;
+  const logger = options.logger || console;
+  const pool = new PoolCtor({
+    connectionString: 'postgresql://postgres:postgres@localhost:5432/saudy_db',
+  });
 
-async function checkMatriz() {
   try {
     const result = await pool.query(`
       SELECT 
@@ -18,20 +23,25 @@ async function checkMatriz() {
       ORDER BY c.id, b.id
     `);
 
-    console.log('\n📋 Filiais no banco:');
-    console.log('═'.repeat(70));
+    logger.log('\n📋 Filiais no banco:');
+    logger.log('═'.repeat(70));
     result.rows.forEach((row) => {
-      console.log(`Empresa: ${row.company_name}`);
-      console.log(`  Nome Fantasia: ${row.tradeName}`);
-      console.log(`  isMatriz: ${row.isMatriz}`);
-      console.log(`  ID: ${row.id}`);
-      console.log('─'.repeat(70));
+      logger.log(`Empresa: ${row.company_name}`);
+      logger.log(`  Nome Fantasia: ${row.tradeName}`);
+      logger.log(`  isMatriz: ${row.isMatriz}`);
+      logger.log(`  ID: ${row.id}`);
+      logger.log('─'.repeat(70));
     });
+    return result.rows;
   } catch (error) {
-    console.error('❌ Erro:', error);
+    logger.error('❌ Erro:', error);
+    return [];
   } finally {
     await pool.end();
   }
 }
 
-checkMatriz();
+/* c8 ignore next 3 */
+if (require.main === module) {
+  void runCheckMatriz();
+}

@@ -2,25 +2,38 @@ import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma';
 
-function digitsOnly(value: string) {
+export function digitsOnly(value: string) {
   return value.replace(/\D/g, '');
 }
 
-function isEmail(value: string) {
+export function isEmail(value: string) {
   return value.includes('@');
 }
 
-async function main() {
-  const identifier = String(process.argv[2] || '').trim();
-  const newPassword = String(process.argv[3] || '').trim();
+export async function runResetUserPassword(options: {
+  argv?: string[];
+  prismaClient?: typeof prisma;
+  bcryptLib?: typeof bcrypt;
+  logger?: Console;
+  exit?: (code: number) => never | void;
+} = {}) {
+  const argv = options.argv || process.argv;
+  const prismaClient = options.prismaClient || prisma;
+  const bcryptLib = options.bcryptLib || bcrypt;
+  const logger = options.logger || console;
+  const exit = options.exit || ((code: number) => process.exit(code));
+
+  const identifier = String(argv[2] || '').trim();
+  const newPassword = String(argv[3] || '').trim();
 
   if (!identifier || !newPassword) {
-    console.error('Usage: pnpm exec tsx src/scripts/reset-user-password.ts <email_or_cpf> <new_password>');
-    process.exit(1);
+    logger.error('Usage: pnpm exec tsx src/scripts/reset-user-password.ts <email_or_cpf> <new_password>');
+    exit(1);
+    return;
   }
 
   const users = isEmail(identifier)
-    ? await prisma.user.findMany({
+    ? await prismaClient.user.findMany({
         where: {
           email: {
             equals: identifier,
@@ -33,7 +46,7 @@ async function main() {
           cpf: true,
         },
       })
-    : await prisma.user.findMany({
+    : await prismaClient.user.findMany({
         where: {
           OR: [
             { cpf: identifier },
@@ -48,15 +61,16 @@ async function main() {
       });
 
   if (users.length === 0) {
-    console.error('No users found for identifier:', identifier);
-    process.exit(1);
+    logger.error('No users found for identifier:', identifier);
+    exit(1);
+    return;
   }
 
-  const hashedPassword = await bcrypt.hash(newPassword, 10);
+  const hashedPassword = await bcryptLib.hash(newPassword, 10);
 
-  await prisma.$transaction(
+  await prismaClient.$transaction(
     users.map((user: { id: string; email: string }) =>
-      prisma.user.update({
+      prismaClient.user.update({
         where: { id: user.id },
         data: {
           password: hashedPassword,
@@ -66,13 +80,16 @@ async function main() {
     )
   );
 
-  console.log('Password reset completed for users:');
+  logger.log('Password reset completed for users:');
   for (const user of users) {
-    console.log(`- ${user.id} | ${user.email} | cpf=${user.cpf ?? 'null'}`);
+    logger.log(`- ${user.id} | ${user.email} | cpf=${user.cpf ?? 'null'}`);
   }
+  return users;
 }
 
-main()
+/* c8 ignore next 9 */
+if (require.main === module) {
+  runResetUserPassword()
   .catch((error) => {
     console.error(error);
     process.exitCode = 1;
@@ -80,3 +97,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+}

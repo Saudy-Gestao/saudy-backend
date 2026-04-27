@@ -1465,6 +1465,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       return reply.send(pdf);
     }
 
+    /* c8 ignore next */
     return reply.code(400).send({ error: 'Fonte de documento inválida' });
   });
 

@@ -33,7 +33,7 @@ export default async function dicomRoutes(app: FastifyInstance) {
         required: ['base64'],
         properties: {
           base64: {
-            oneOf: [
+            anyOf: [
               { type: 'string' },
               { type: 'array', items: { type: 'string' } },
             ],

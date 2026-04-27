@@ -1,0 +1,2 @@
+-- Intentionally left blank: this migration folder existed without SQL content.
+-- Keeping an explicit file here prevents Prisma migration status from failing with P3015.
