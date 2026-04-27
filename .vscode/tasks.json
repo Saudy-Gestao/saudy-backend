@@ -1,0 +1,1183 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "vitest-chatbot",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-coverage",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-after-more-tests",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-coverage-after-more-tests",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-full-coverage-progress",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-after-cpf-newpatient-tests",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-coverage-after-cpf-newpatient-tests",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-after-preferreddate-tests",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-after-fix-failing-test",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-coverage-after-fix-failing-test",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-slot-found-branch",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-coverage-slot-found-branch",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-after-slot-cpf-branches",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-coverage-after-slot-cpf-branches",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "show-chatbot-lines-2000-2140",
+			"type": "shell",
+			"command": "nl",
+			"args": [
+				"-ba",
+				"src/modules/care/lib/whatsapp-chatbot.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "show-chatbot-lines-2000-2140-v2",
+			"type": "shell",
+			"command": "sed",
+			"args": [
+				"-n",
+				"2000,2140p",
+				"src/modules/care/lib/whatsapp-chatbot.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "show-chatbot-lines-2488-2530",
+			"type": "shell",
+			"command": "sed",
+			"args": [
+				"-n",
+				"2488,2530p",
+				"src/modules/care/lib/whatsapp-chatbot.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-after-private-final-branches",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-after-final-fix-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-chatbot-coverage-after-final-fix-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-full-coverage-after-chatbot-sprint",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-full-coverage-summary-only",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "count-lines-summary-output",
+			"type": "shell",
+			"command": "wc",
+			"args": [
+				"-l",
+				"/home/capzera/.config/Code/User/workspaceStorage/eb4bce8b8dabcae173c00425bd34e7a2/GitHub.copilot-chat/chat-session-resources/330503a5-e6de-475d-9c90-1d11d61c6b4a/call_oT4UkcQwgiU0yuwGUjJtcucW__vscode-1776166369550/content.txt"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-reservations-target",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "print-tea-pre-uncovered-from-coverage-json",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"const fs=require('fs');const p='coverage/coverage-final.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));const key=Object.keys(j).find(k=>k.endsWith('/src/modules/care/routes/tea-pre-reservations.ts'));if(!key){console.log('file not found');process.exit(0);}const f=j[key];const uncoveredLines=Object.entries(f.s).filter(([,v])=>v===0).map(([sid])=>f.statementMap[sid].start.line);const uniq=[...new Set(uncoveredLines)].sort((a,b)=>a-b);console.log('UNCOVERED_STATEMENT_LINES',uniq.join(','));const uncoveredBranches=[];for(const [bid,hits] of Object.entries(f.b)){hits.forEach((h,idx)=>{if(h===0){const loc=f.branchMap[bid].locations[idx];uncoveredBranches.push(loc.start.line);}})}const buniq=[...new Set(uncoveredBranches)].sort((a,b)=>a-b);console.log('UNCOVERED_BRANCH_LINES',buniq.join(','));"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "print-tea-pre-uncovered-from-coverage-json-2",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"const fs=require(\"fs\"); const p=\"coverage/coverage-final.json\"; const j=JSON.parse(fs.readFileSync(p,\"utf8\")); const key=Object.keys(j).find(k=>k.endsWith(\"/src/modules/care/routes/tea-pre-reservations.ts\")); if(!key){console.log(\"file not found\"); process.exit(0);} const f=j[key]; const uncoveredLines=Object.entries(f.s).filter(([,v])=>v===0).map(([sid])=>f.statementMap[sid].start.line); const uniq=[...new Set(uncoveredLines)].sort((a,b)=>a-b); console.log(\"UNCOVERED_STATEMENT_LINES\",uniq.join(\",\")); const uncoveredBranches=[]; for(const [bid,hits] of Object.entries(f.b)){ hits.forEach((h,idx)=>{ if(h===0){ const loc=f.branchMap[bid].locations[idx]; uncoveredBranches.push(loc.start.line); } }); } const buniq=[...new Set(uncoveredBranches)].sort((a,b)=>a-b); console.log(\"UNCOVERED_BRANCH_LINES\",buniq.join(\",\"));"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-reservations-json-coverage",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=json"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "print-tea-pre-uncovered-from-json-now",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"const fs=require(\"fs\");const p=\"coverage/coverage-final.json\";const j=JSON.parse(fs.readFileSync(p,\"utf8\"));const key=Object.keys(j).find(k=>k.endsWith('/src/modules/care/routes/tea-pre-reservations.ts'));if(!key){console.log('file-not-found');process.exit(0);}const f=j[key];const s=[...new Set(Object.entries(f.s).filter(([,v])=>v===0).map(([sid])=>f.statementMap[sid].start.line))].sort((a,b)=>a-b);const b=[];for(const [bid,hits] of Object.entries(f.b)){hits.forEach((h,idx)=>{if(h===0){b.push(f.branchMap[bid].locations[idx].start.line);}})}const bu=[...new Set(b)].sort((a,b)=>a-b);console.log('S',s.join(','));console.log('B',bu.join(','));"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "print-tea-pre-uncovered-from-json-now-3",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"-e",
+				"const fs=require(\"fs\");const p=\"coverage/coverage-final.json\";const j=JSON.parse(fs.readFileSync(p,\"utf8\"));const key=Object.keys(j).find(k=>k.endsWith(\"/src/modules/care/routes/tea-pre-reservations.ts\"));if(!key){console.log(\"file-not-found\");process.exit(0);}const f=j[key];const s=[...new Set(Object.entries(f.s).filter(([,v])=>v===0).map(([sid])=>f.statementMap[sid].start.line))].sort((a,b)=>a-b);const b=[];for(const [bid,hits] of Object.entries(f.b)){hits.forEach((h,idx)=>{if(h===0){b.push(f.branchMap[bid].locations[idx].start.line);}})}const bu=[...new Set(b)].sort((a,b)=>a-b);console.log(\"S\",s.join(\",\"));console.log(\"B\",bu.join(\",\"));"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-one",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"-t",
+				"regenerates invalid hsm name and succeeds with non-json provider response"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target-3",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target-4",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-coverage-iteration",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-after-tea",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-3",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tickets-target-next",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tickets-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tickets.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tickets-target-next-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tickets-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tickets.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-4",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-after-next-gains",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target-5",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-after-whatsapp-config",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target-6",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target-7",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-whatsapp-config-target-8",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-whatsapp-config-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/whatsapp-config.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-gupshup-lib-baseline",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/gupshup-lib.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/gupshup.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-gupshup-lib-next",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/gupshup-lib.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/gupshup.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-final-pass",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-5",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-6",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-7",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-8",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-after-tea-round",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-message-builder-baseline",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-message-builder.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-message-builder.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-message-builder-next",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-message-builder.test.ts",
+				"tests/unit/whatsapp-message-builder-error.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-message-builder.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-after-message-builder",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-message-builder-next-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-message-builder.test.ts",
+				"tests/unit/whatsapp-message-builder-error.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-message-builder.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-9",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-10",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-11",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-12",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-tea-pre-target-next-13",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-after-latest-tea",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-message-builder-next-3",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-message-builder.test.ts",
+				"tests/unit/whatsapp-message-builder-error.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-message-builder.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "vitest-global-summary-after-message-builder-100",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"--coverage",
+				"--coverage.reporter=text-summary"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tickets-coverage",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tickets-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tickets.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-full-coverage",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"run",
+				"test:coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-show-chatbot-1990-2155",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"nl -ba src/modules/care/lib/whatsapp-chatbot.ts | sed -n '1990,2155p'"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-show-chatbot-2508-2535",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"nl -ba src/modules/care/lib/whatsapp-chatbot.ts | sed -n '2508,2535p'"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-chatbot",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-chatbot-rerun",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-chatbot-rerun-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-chatbot-coverage-new",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-full-coverage-after-chatbot",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"run",
+				"test:coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tea-pre-coverage",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-show-tea-lines",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"nl -ba src/modules/care/routes/tea-pre-reservations.ts | sed -n '2198,2322p'"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tea-pre-tests-rerun",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tea-pre-tests-rerun-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tea-pre-coverage-after",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-full-coverage-next",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"run",
+				"test:coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-show-tea-recurring-block",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"nl -ba src/modules/care/routes/tea-pre-reservations.ts | sed -n '1860,2130p'"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tea-pre-tests-rerun-3",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tea-pre-tests-rerun-4",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-tea-pre-coverage-after-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/care-tea-pre-reservations-routes.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/routes/tea-pre-reservations.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-full-coverage-after-tea",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"run",
+				"test:coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-chatbot-coverage-current",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-show-chatbot-lines-target",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"nl -ba src/modules/care/lib/whatsapp-chatbot.ts | sed -n '1808,2012p'"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-chatbot-after-additions",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-chatbot-coverage-after-additions",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"vitest",
+				"run",
+				"tests/unit/whatsapp-chatbot.test.ts",
+				"--coverage",
+				"--coverage.include=src/modules/care/lib/whatsapp-chatbot.ts",
+				"--coverage.reporter=text"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-vitest-full-coverage-after-chatbot-2",
+			"type": "shell",
+			"command": "pnpm",
+			"args": [
+				"run",
+				"test:coverage"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "tmp-show-chatbot-next-gap",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"nl -ba src/modules/care/lib/whatsapp-chatbot.ts | sed -n '1668,1818p'"
+			],
+			"isBackground": false
+		}
+	]
+}

@@ -797,6 +797,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
   app.get<{
     Params: { mediaId: string };
   }>('/whatsapp/media/:mediaId', {
+    preHandler: async (request) => { await request.jwtVerify(); },
     schema: {
       summary: 'Get WhatsApp media URL',
       description: 'Fetches the media URL from Gupshup using the mediaId',

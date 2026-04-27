@@ -15,6 +15,8 @@
  */
 
 import { Readable } from 'stream';
+import { GcsStorageProvider } from './gcs-provider';
+import { LocalStorageProvider } from './local-provider';
 
 export interface StorageUploadOptions {
   contentType?: string;
@@ -49,13 +51,11 @@ function buildProvider(role: BucketRole): StorageProvider {
   const providerType = (process.env.STORAGE_PROVIDER || 'gcs').toLowerCase().trim();
 
   if (providerType === 'local') {
-    const { LocalStorageProvider } = require('./local-provider');
     const baseDir = process.env.LOCAL_STORAGE_BASE_DIR || '/app/uploads/storage';
     return new LocalStorageProvider(baseDir, role);
   }
 
   if (providerType === 'gcs') {
-    const { GcsStorageProvider } = require('./gcs-provider');
     const bucketName = role === 'dicom'
       ? (process.env.GOOGLE_STORAGE_BUCKET_DICOM || process.env.GOOGLE_STORAGE_BUCKET || '')
       : (process.env.GOOGLE_STORAGE_BUCKET_ANEXOS || process.env.GOOGLE_STORAGE_BUCKET || '');

@@ -1,11 +1,15 @@
 import { PrismaClient } from '@prisma/client';
 
-// Criar cliente sem adapter para scripts
-const prisma = new PrismaClient();
+export async function runUpdateMatrizFlags(options: {
+  PrismaClientCtor?: typeof PrismaClient;
+  logger?: Console;
+} = {}) {
+  const PrismaClientCtor = options.PrismaClientCtor || PrismaClient;
+  const logger = options.logger || console;
+  const prisma = new PrismaClientCtor();
 
-async function updateMatrizFlags() {
   try {
-    console.log('🔄 Atualizando flags de matriz nas filiais...');
+    logger.log('🔄 Atualizando flags de matriz nas filiais...');
 
     // Buscar todas as empresas
     const companies = await prisma.company.findMany({
@@ -28,7 +32,7 @@ async function updateMatrizFlags() {
           data: { isMatriz: true },
         });
 
-        console.log(`✅ Empresa ${company.tradeName}: Filial "${firstBranch.tradeName}" marcada como Matriz`);
+        logger.log(`✅ Empresa ${company.tradeName}: Filial "${firstBranch.tradeName}" marcada como Matriz`);
 
         // Garantir que as outras filiais não sejam matriz
         if (company.branches.length > 1) {
@@ -38,17 +42,20 @@ async function updateMatrizFlags() {
               data: { isMatriz: false },
             });
           }
-          console.log(`   Outras ${company.branches.length - 1} filiais marcadas como não-matriz`);
+          logger.log(`   Outras ${company.branches.length - 1} filiais marcadas como não-matriz`);
         }
       }
     }
 
-    console.log('✨ Atualização concluída com sucesso!');
+    logger.log('✨ Atualização concluída com sucesso!');
   } catch (error) {
-    console.error('❌ Erro ao atualizar flags de matriz:', error);
+    logger.error('❌ Erro ao atualizar flags de matriz:', error);
   } finally {
     await prisma.$disconnect();
   }
 }
 
-updateMatrizFlags();
+/* c8 ignore next 3 */
+if (require.main === module) {
+  void runUpdateMatrizFlags();
+}

@@ -1,7 +1,5 @@
 const { PrismaClient } = require('@prisma/client');
 
-const prisma = new PrismaClient();
-
 function iso(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -9,7 +7,11 @@ function iso(date) {
   return `${y}-${m}-${d}`;
 }
 
-async function main() {
+async function runReleaseStaleTeaSlots(options = {}) {
+  const PrismaClientCtor = options.PrismaClientCtor || PrismaClient;
+  const logger = options.logger || console;
+  const prisma = options.prisma || new PrismaClientCtor();
+
   const todayIso = iso(new Date());
   const rows = await prisma.teaPreReservation.findMany({
     where: {
@@ -58,14 +60,25 @@ async function main() {
     updatedTotal += Number(updated.count || 0);
   }
 
-  console.log(JSON.stringify({ scannedReservations: rows.length, canceledAppointments: updatedTotal }));
+  const result = { scannedReservations: rows.length, canceledAppointments: updatedTotal };
+  logger.log(JSON.stringify(result));
+  return result;
 }
 
-main()
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+module.exports = {
+  iso,
+  runReleaseStaleTeaSlots,
+};
+
+/* c8 ignore next 10 */
+if (require.main === module) {
+  const prisma = new PrismaClient();
+  runReleaseStaleTeaSlots({ prisma })
+    .catch((error) => {
+      console.error(error);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}

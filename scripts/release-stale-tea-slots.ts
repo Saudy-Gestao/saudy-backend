@@ -1,15 +1,21 @@
 import prisma from '../src/lib/prisma';
 
-function iso(date: Date): string {
+export function iso(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 
-async function main() {
+export async function runReleaseStaleTeaSlots(options: {
+  prismaClient?: typeof prisma;
+  logger?: Console;
+} = {}) {
+  const prismaClient = options.prismaClient || prisma;
+  const logger = options.logger || console;
+
   const todayIso = iso(new Date());
-  const rows = await prisma.teaPreReservation.findMany({
+  const rows = await prismaClient.teaPreReservation.findMany({
     where: {
       status: 'CONVERTED' as any,
       pit: { status: 'Inativo' },
@@ -32,7 +38,7 @@ async function main() {
       conflictClauses.push({ doctorName: row.professionalName });
     }
 
-    const updated = await prisma.appointment.updateMany({
+    const updated = await prismaClient.appointment.updateMany({
       where: {
         isActive: true,
         date: dateIso,
@@ -55,13 +61,17 @@ async function main() {
     updatedTotal += Number(updated.count || 0);
   }
 
-  console.log(JSON.stringify({
+  const result = {
     scannedReservations: rows.length,
     canceledAppointments: updatedTotal,
-  }));
+  };
+  logger.log(JSON.stringify(result));
+  return result;
 }
 
-main()
+/* c8 ignore next 8 */
+if (require.main === module) {
+  runReleaseStaleTeaSlots()
   .catch((error) => {
     console.error(error);
     process.exit(1);
@@ -69,3 +79,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+}

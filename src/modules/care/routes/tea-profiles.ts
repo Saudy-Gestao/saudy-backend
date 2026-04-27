@@ -181,6 +181,21 @@ async function resolveProcedureNameById(procedureId?: string, branchId?: string)
   return procedure?.name ? String(procedure.name) : null;
 }
 
+export const __teaProfilesTestables = {
+  toGender,
+  normalizePreferredShift,
+  resolveActorFromRequest,
+  normalizeWeekdays,
+  buildTherapySignature,
+  formatDateToIso,
+  normalizeDoctorName,
+  resolveAppointmentIdsForConvertedReservations,
+  cancelAppointmentsForConvertedReservations,
+  normalizeStrategies,
+  resolveDoctorNameById,
+  resolveProcedureNameById,
+};
+
 export default async function teaProfilesRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
