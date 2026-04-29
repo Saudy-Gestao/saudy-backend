@@ -205,7 +205,19 @@ export default async function inventoryRoutes(app: FastifyInstance) {
         : existing.expiryDate;
       const computedStatus = data.status ? String(data.status).toUpperCase() : recomputeStatus(newQuantity, newMin, expiryDate);
 
-      const toUpdate = { ...data, quantity: data.quantity !== undefined ? newQuantity : undefined, minQuantity: data.minQuantity !== undefined ? data.minQuantity : undefined, status: computedStatus };
+      const toUpdate: any = {
+        code: data.code !== undefined ? String(data.code) : undefined,
+        name: data.name !== undefined ? String(data.name) : undefined,
+        category: data.category !== undefined ? (data.category ? String(data.category) : null) : undefined,
+        unit: data.unit !== undefined ? (data.unit ? String(data.unit) : null) : undefined,
+        quantity: data.quantity !== undefined ? newQuantity : undefined,
+        minQuantity: data.minQuantity !== undefined ? Number(data.minQuantity) : undefined,
+        maxQuantity: data.maxQuantity !== undefined ? (data.maxQuantity === null ? null : Number(data.maxQuantity)) : undefined,
+        unitPrice: data.unitPrice !== undefined ? (data.unitPrice === null ? null : Number(data.unitPrice)) : undefined,
+        expiryDate: data.expiryDate !== undefined ? expiryDate : undefined,
+        notes: data.notes !== undefined ? (data.notes ? String(data.notes) : null) : undefined,
+        status: computedStatus,
+      };
 
       const item = await prisma.inventoryItem.update({ where: { id }, data: toUpdate });
       return item;
@@ -217,6 +229,69 @@ export default async function inventoryRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Failed to update', details: err.message });
     }
   });
+
+  // Aliases for clients that use trailing slash or PATCH for partial updates.
+  const updateInventoryItemAliasSchema = {
+    summary: 'Update inventory item (alias)',
+    tags: ['Inventory'],
+    params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    body: { type: 'object' },
+    response: { 200: { type: 'object' }, 400: { type: 'object', additionalProperties: true }, 404: { type: 'object', additionalProperties: true } },
+  };
+
+  const updateInventoryItemAliasHandler = async (request: any, reply: any) => {
+    const { id } = request.params as any;
+    const data = request.body as any;
+
+    const fieldErrors: Record<string, string> = {};
+    if (data?.code !== undefined && String(data.code).trim() === '') fieldErrors.code = 'Código não pode ser vazio';
+    if (data?.name !== undefined && String(data.name).trim() === '') fieldErrors.name = 'Nome do item não pode ser vazio';
+    if (data?.quantity !== undefined && Number.isNaN(Number(data.quantity))) fieldErrors.quantity = 'Quantidade inválida';
+    if (data?.minQuantity !== undefined && Number.isNaN(Number(data.minQuantity))) fieldErrors.minQuantity = 'Quantidade mínima inválida';
+    if (data?.unitPrice !== undefined && Number.isNaN(Number(data.unitPrice))) fieldErrors.unitPrice = 'Preço inválido';
+    if (data?.expiryDate !== undefined && data.expiryDate && isNaN(Date.parse(String(data.expiryDate)))) fieldErrors.expiryDate = 'Data de validade inválida';
+
+    if (Object.keys(fieldErrors).length > 0) return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
+
+    try {
+      const existing = await prisma.inventoryItem.findUnique({ where: { id } });
+      if (!existing) return reply.code(404).send({ error: 'Item not found' });
+
+      const newQuantity = data.quantity !== undefined ? Number(data.quantity) : existing.quantity;
+      const newMin = data.minQuantity !== undefined ? Number(data.minQuantity) : (existing.minQuantity ?? 0);
+      const expiryDate = data.expiryDate !== undefined
+        ? (data.expiryDate ? new Date(data.expiryDate) : null)
+        : existing.expiryDate;
+      const computedStatus = data.status ? String(data.status).toUpperCase() : recomputeStatus(newQuantity, newMin, expiryDate);
+
+      const toUpdate: any = {
+        code: data.code !== undefined ? String(data.code) : undefined,
+        name: data.name !== undefined ? String(data.name) : undefined,
+        category: data.category !== undefined ? (data.category ? String(data.category) : null) : undefined,
+        unit: data.unit !== undefined ? (data.unit ? String(data.unit) : null) : undefined,
+        quantity: data.quantity !== undefined ? newQuantity : undefined,
+        minQuantity: data.minQuantity !== undefined ? Number(data.minQuantity) : undefined,
+        maxQuantity: data.maxQuantity !== undefined ? (data.maxQuantity === null ? null : Number(data.maxQuantity)) : undefined,
+        unitPrice: data.unitPrice !== undefined ? (data.unitPrice === null ? null : Number(data.unitPrice)) : undefined,
+        expiryDate: data.expiryDate !== undefined ? expiryDate : undefined,
+        notes: data.notes !== undefined ? (data.notes ? String(data.notes) : null) : undefined,
+        status: computedStatus,
+      };
+
+      const item = await prisma.inventoryItem.update({ where: { id }, data: toUpdate });
+      return item;
+    } catch (err: any) {
+      request.log.error({ err }, 'Failed to update inventory item (alias)');
+      if (err?.code === 'P2002' && err?.meta?.target?.includes('code')) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { code: 'Código já existe' } });
+      }
+      return reply.code(400).send({ error: 'Failed to update', details: err.message });
+    }
+  };
+
+  app.put('/:id/', { schema: updateInventoryItemAliasSchema }, updateInventoryItemAliasHandler);
+  app.patch('/:id', { schema: updateInventoryItemAliasSchema }, updateInventoryItemAliasHandler);
+  app.patch('/:id/', { schema: updateInventoryItemAliasSchema }, updateInventoryItemAliasHandler);
 
   app.get('/:id/movements', {
     schema: {
@@ -642,6 +717,85 @@ export default async function inventoryRoutes(app: FastifyInstance) {
       if (err?.message === 'ITEM_NOT_FOUND') return reply.code(404).send({ error: 'Item não encontrado' });
       if (err?.message === 'NEGATIVE_STOCK') return reply.code(400).send({ error: 'Estoque insuficiente para saída' });
       request.log.error({ err }, 'Failed to create inventory movement');
+      return reply.code(400).send({ error: 'Falha ao registrar movimentação' });
+    }
+  });
+
+  // Alias with trailing slash for movement creation.
+  app.post('/:id/movements/', {
+    schema: {
+      summary: 'Create inventory movement (alias)',
+      tags: ['Inventory'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        required: ['type', 'quantity', 'reason'],
+        properties: {
+          type: { type: 'string', enum: ['ENTRY', 'EXIT', 'ADJUSTMENT'] },
+          quantity: { type: 'number' },
+          reason: { type: 'string' },
+          notes: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as any;
+    const { type, quantity, reason, notes } = request.body as any;
+    const normalizedType = String(type || '').trim().toUpperCase();
+    const qty = Number(quantity);
+    const normalizedReason = String(reason || '').trim();
+
+    if (!['ENTRY', 'EXIT', 'ADJUSTMENT'].includes(normalizedType)) {
+      return reply.code(400).send({ error: 'Tipo de movimentação inválido' });
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return reply.code(400).send({ error: 'Quantidade deve ser maior que zero' });
+    }
+    if (!normalizedReason) {
+      return reply.code(400).send({ error: 'Motivo é obrigatório' });
+    }
+
+    try {
+      const { actorId, actorName } = await resolveActor(request);
+      const result = await prisma.$transaction(async (tx: any) => {
+        const item = await tx.inventoryItem.findUnique({ where: { id } });
+        if (!item) throw new Error('ITEM_NOT_FOUND');
+
+        const previousQty = Number(item.quantity || 0);
+        let resultingQty = previousQty;
+        if (normalizedType === 'ENTRY') resultingQty = previousQty + qty;
+        if (normalizedType === 'EXIT') resultingQty = previousQty - qty;
+        if (normalizedType === 'ADJUSTMENT') resultingQty = qty;
+        if (resultingQty < 0) throw new Error('NEGATIVE_STOCK');
+
+        const status = recomputeStatus(resultingQty, item.minQuantity, item.expiryDate);
+        const updatedItem = await tx.inventoryItem.update({
+          where: { id },
+          data: { quantity: resultingQty, status },
+        });
+
+        const movement = await tx.inventoryMovement.create({
+          data: {
+            inventoryItemId: id,
+            type: normalizedType,
+            quantity: qty,
+            reason: normalizedReason,
+            notes: notes ? String(notes) : null,
+            previousQty,
+            resultingQty,
+            createdByUserId: actorId || null,
+            createdByName: actorName,
+          },
+        });
+
+        return { item: updatedItem, movement };
+      });
+
+      return reply.code(201).send(result);
+    } catch (err: any) {
+      if (err?.message === 'ITEM_NOT_FOUND') return reply.code(404).send({ error: 'Item não encontrado' });
+      if (err?.message === 'NEGATIVE_STOCK') return reply.code(400).send({ error: 'Estoque insuficiente para saída' });
+      request.log.error({ err }, 'Failed to create inventory movement (alias)');
       return reply.code(400).send({ error: 'Falha ao registrar movimentação' });
     }
   });
