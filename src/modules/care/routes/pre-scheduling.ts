@@ -1201,9 +1201,16 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         required: ['token'],
         properties: { token: { type: 'string' } },
       },
+      body: {
+        type: 'object',
+        properties: {
+          patientComplaints: { type: 'string' },
+        },
+      },
     },
   }, async (request, reply) => {
     const { token } = request.params as { token: string };
+    const { patientComplaints } = (request.body || {}) as { patientComplaints?: string };
 
     const flow = await prisma.preSchedulingFlow.findFirst({
       where: { publicToken: token },
@@ -1242,6 +1249,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       data: {
         status: 'DOCUMENTS_RECEIVED',
         patientSubmittedAt: new Date(),
+        patientComplaints: patientComplaints ? String(patientComplaints).trim() : null,
       },
     });
 
