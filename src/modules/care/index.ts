@@ -24,6 +24,7 @@ import mwlRoutes from './routes/mwl';
 import preSchedulingRoutes from './routes/pre-scheduling';
 import teleconsultationLinksRoutes from './routes/teleconsultation-links';
 import spellCheckRoutes from './routes/spell-check';
+import aiQuestionnaireRoutes from './routes/ai-questionnaire';
 import ticketRoutes from './routes/tickets';
 
 export default async function careModule(app: FastifyInstance) {
@@ -52,5 +53,6 @@ export default async function careModule(app: FastifyInstance) {
   app.register(whatsappConversationRoutes, { prefix: '/' });
   app.register(whatsappWebhookRoutes, { prefix: '/' });
   app.register(spellCheckRoutes, { prefix: '/spell-check' });
+  app.register(aiQuestionnaireRoutes, { prefix: '/ai-questionnaire' });
   app.register(ticketRoutes, { prefix: '/tickets' });
 }
