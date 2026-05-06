@@ -1298,6 +1298,7 @@ model ReportPhrase {
     branchId  String?
     examType  String
     label     String
+    shortcut  String?
     text      String   @db.Text
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
@@ -1311,6 +1312,7 @@ model ReportConfig {
     id               String   @id @default(uuid())
     branchId         String?
     requiresReviewer Boolean  @default(true)
+    reportLayout     Json?
     createdAt        DateTime @default(now())
     updatedAt        DateTime @updatedAt
 

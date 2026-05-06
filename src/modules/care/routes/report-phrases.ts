@@ -46,6 +46,7 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
         { label: { contains: search, mode: 'insensitive' } },
         { text: { contains: search, mode: 'insensitive' } },
         { examType: { contains: search, mode: 'insensitive' } },
+        { shortcut: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -67,6 +68,7 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
         properties: {
           examType: { type: 'string', minLength: 1 },
           label: { type: 'string', minLength: 1 },
+          shortcut: { type: 'string', minLength: 1, maxLength: 40 },
           text: { type: 'string', minLength: 1 },
         },
       },
@@ -86,6 +88,7 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
     if (!data.text || !String(data.text).trim()) {
       return reply.code(400).send({ error: 'text is required' });
     }
+    const shortcut = data.shortcut ? String(data.shortcut).trim() : null;
 
     try {
       const item = await prisma.reportPhrase.create({
@@ -93,6 +96,7 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
           branchId,
           examType: data.examType,
           label: data.label,
+          shortcut,
           text: data.text,
         },
       });
@@ -117,12 +121,22 @@ export default async function reportPhraseRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
     const data = request.body as any;
+    const shortcut = data.shortcut === undefined
+      ? undefined
+      : (data.shortcut ? String(data.shortcut).trim() : null);
 
     try {
       const existing = await prisma.reportPhrase.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Report phrase not found' });
 
-      const item = await prisma.reportPhrase.update({ where: { id }, data: { ...data, branchId } });
+      const item = await prisma.reportPhrase.update({
+        where: { id },
+        data: {
+          ...data,
+          branchId,
+          shortcut,
+        },
+      });
       return item;
     } catch (err: any) {
       request.log.error({ err }, 'Failed to update report phrase');
