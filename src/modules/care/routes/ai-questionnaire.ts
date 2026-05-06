@@ -103,14 +103,16 @@ Com base na queixa principal do paciente, gere de 5 a 7 perguntas clínicas obje
 Regras:
 - As perguntas devem aprofundar a queixa principal (localização, intensidade, duração, fatores de melhora/piora, sintomas associados, histórico)
 - Escreva em português brasileiro, de forma clara e simples
-- Retorne SOMENTE um array JSON com objetos no formato: [{"id": 1, "question": "..."}, ...]
+- Para perguntas que admitem respostas predefinidas (ex.: localização, intensidade, frequência, sim/não), inclua um campo "options" com 3 a 5 opções curtas; a última opção deve ser sempre "Outra"
+- Para perguntas abertas (ex.: descrição livre de sintomas), omita o campo "options"
+- Retorne SOMENTE um array JSON com objetos no formato: [{"id": 1, "question": "...", "options": ["Op1", "Op2", "Outra"]}, {"id": 2, "question": "..."}]
 - Não inclua explicações, markdown ou blocos de código — apenas o JSON puro`;
 
     const userPrompt = patientComplaints
       ? `Queixa principal do paciente: "${patientComplaints}"`
       : 'O paciente não informou queixa principal. Gere perguntas gerais de anamnese.';
 
-    let questions: { id: number; question: string }[] = [];
+    let questions: { id: number; question: string; options?: string[] }[] = [];
     try {
       const raw = await callGroq([
         { role: 'system', content: systemPrompt },
