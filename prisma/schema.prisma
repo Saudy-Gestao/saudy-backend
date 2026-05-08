@@ -912,6 +912,7 @@ model Appointment {
     observations    String?
     totem           Int?
     preSchedulingFlow PreSchedulingFlow?
+    aiQuestionnaire   AiQuestionnaire?
     createdAt       DateTime @default(now())
     updatedAt       DateTime @updatedAt
     isActive        Boolean  @default(true)
@@ -1003,6 +1004,7 @@ model PreSchedulingFlow {
     patientAccessExpiresAt DateTime?
     anamnesisSentAt       DateTime?
     anamnesisSentByUserId String?
+    patientComplaints     String?             @db.Text
     patientSubmittedAt    DateTime?
     completedAt           DateTime?
     createdAt             DateTime            @default(now())
@@ -1014,6 +1016,19 @@ model PreSchedulingFlow {
     @@index([status])
     @@index([patientCpf])
     @@map("pre_scheduling_flows")
+}
+
+model AiQuestionnaire {
+    id            String   @id @default(uuid())
+    appointmentId String   @unique
+    appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+    patientComplaints String? @db.Text
+    questions     Json
+    answers       Json?
+    generatedAt   DateTime @default(now())
+    savedAt       DateTime?
+
+    @@map("ai_questionnaires")
 }
 
 model TeleconsultationMessage {
