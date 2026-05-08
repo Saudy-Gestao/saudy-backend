@@ -33,6 +33,7 @@ describe('dicom-web-proxy module', () => {
       headers: {
         host: 'localhost:3000',
         'x-forwarded-for': '1.1.1.1',
+        authorization: 'Bearer saudy-token',
       },
     });
 
@@ -42,6 +43,7 @@ describe('dicom-web-proxy module', () => {
     expect(targetUrl).toBe('http://orthanc.local:8042/dicom-web/studies?limit=10');
     expect(init.method).toBe('GET');
     expect(init.headers.Authorization).toBe('Basic dXNlcjpwYXNz');
+    expect(init.headers.authorization).toBeUndefined();
     expect(init.headers.host).toBeUndefined();
     expect(init.headers.connection).toBeUndefined();
 

@@ -105,7 +105,7 @@ describe('admin inventory routes', () => {
         name: 'Luva',
         quantity: 2,
         minQuantity: 2,
-        expiryDate: '2026-05-01',
+        expiryDate: '2099-05-01',
       },
     });
 
@@ -127,7 +127,7 @@ describe('admin inventory routes', () => {
     let res = await app.inject({
       method: 'POST',
       url: '/inventory',
-      payload: { code: 'COD-1', name: 'Luva', expiryDate: '2026-05-01' },
+      payload: { code: 'COD-1', name: 'Luva', expiryDate: '2099-05-01' },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'Validation failed', fields: { code: 'Código já existe' } });
@@ -135,7 +135,7 @@ describe('admin inventory routes', () => {
     res = await app.inject({
       method: 'POST',
       url: '/inventory',
-      payload: { code: 'COD-1', name: 'Luva', expiryDate: '2026-05-01' },
+      payload: { code: 'COD-1', name: 'Luva', expiryDate: '2099-05-01' },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'Failed to create item', details: 'create failed' });
