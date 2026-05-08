@@ -2,6 +2,8 @@ import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
+import { deleteOrthancStudy } from '../../dicom/orthanc';
+import { hasPermanentStudyReference, uploadTemporaryPriorStudy } from '../../dicom/temporary-prior-studies';
 
 export default async function reportRoutes(app: FastifyInstance) {
   const getLoggedUser = async (request: any) => {
@@ -42,6 +44,22 @@ export default async function reportRoutes(app: FastifyInstance) {
       // audit log failures must not break the main operation
     }
   };
+
+  const reportAccessWhere = (id: string, branchId: string, doctorName?: string | null): any => ({
+    id,
+    branchId,
+    ...(doctorName
+      ? {
+          OR: [
+            { requestingDoctor: { equals: doctorName, mode: 'insensitive' } },
+            { reportingDoctor: { equals: doctorName, mode: 'insensitive' } },
+            { reviewingDoctor: { equals: doctorName, mode: 'insensitive' } },
+            { responsibleDoctor: { equals: doctorName, mode: 'insensitive' } },
+            { appointment: { doctorName: { equals: doctorName, mode: 'insensitive' } } },
+          ],
+        }
+      : {}),
+  });
 
   app.addHook('onRequest', async (request, reply) => {
     try {
@@ -131,29 +149,207 @@ export default async function reportRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
     const item = await prisma.report.findFirst({
-      where: {
-        id,
-        branchId,
-        ...(context?.doctorName
-          ? {
-              OR: [
-                { requestingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-                { reportingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-                { reviewingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-                { responsibleDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-                { appointment: { doctorName: { equals: context.doctorName, mode: 'insensitive' } } },
-              ],
-            }
-          : {}),
-      },
+      where: reportAccessWhere(id, branchId, context?.doctorName),
       include: {
         appointment: { select: { id: true, patientName: true, patientCpf: true, specialty: true, date: true, time: true, doctorName: true, status: true } },
         worklistItem: { select: { id: true, dicomStudyUid: true, dicomUrl: true, dicomReceivedAt: true, accessionNumber: true } },
         addendums: { where: { isActive: true }, orderBy: { updatedAt: 'desc' } },
+        temporaryDicomStudies: { where: { deletedAt: null }, orderBy: { createdAt: 'desc' } },
       },
     });
     if (!item) return reply.code(404).send({ error: 'Report not found' });
     return item;
+  });
+
+  app.get('/:id/temporary-prior-studies', {
+    schema: {
+      summary: 'List temporary prior DICOM studies for a report',
+      tags: ['Reports'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedUser(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const report = await prisma.report.findFirst({
+      where: reportAccessWhere(id, branchId, context?.doctorName),
+      select: { id: true },
+    });
+    if (!report) return reply.code(404).send({ error: 'Report not found' });
+
+    const items = await prisma.temporaryDicomStudy.findMany({
+      where: { reportId: id, branchId, deletedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return { items, total: items.length };
+  });
+
+  app.post('/:id/temporary-prior-studies', {
+    bodyLimit: Number(process.env.TEMP_DICOM_BODY_LIMIT_BYTES || String(700 * 1024 * 1024)),
+    schema: {
+      summary: 'Upload a temporary prior DICOM study for report comparison',
+      tags: ['Reports'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        properties: {
+          files: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['base64'],
+              properties: {
+                fileName: { type: 'string' },
+                base64: { type: 'string' },
+              },
+            },
+          },
+          filesBase64: { type: 'array', items: { type: 'string' } },
+          zipBase64: { type: 'string' },
+          zipFileName: { type: 'string' },
+          description: { type: 'string' },
+          ttlHours: { type: 'number' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const report = await prisma.report.findFirst({
+      where: reportAccessWhere(id, branchId, doctorName),
+      select: { id: true, patientName: true, cpf: true, exam: true },
+    });
+    if (!report) return reply.code(404).send({ error: 'Report not found' });
+
+    const payload = request.body as any;
+    const files = Array.isArray(payload?.files)
+      ? payload.files.map((file: any) => ({
+          fileName: typeof file?.fileName === 'string' ? file.fileName : undefined,
+          base64: String(file?.base64 || ''),
+        }))
+      : Array.isArray(payload?.filesBase64)
+        ? payload.filesBase64.map((base64: string, index: number) => ({
+            fileName: `dicom-${index + 1}.dcm`,
+            base64: String(base64 || ''),
+          }))
+        : [];
+
+    const zipBase64 = typeof payload?.zipBase64 === 'string' ? payload.zipBase64 : null;
+
+    if (!files.length && !zipBase64) {
+      return reply.code(400).send({ error: 'Envie ao menos um arquivo DICOM ou um ZIP com DICOMs' });
+    }
+
+    try {
+      const item = await uploadTemporaryPriorStudy({
+        branchId,
+        reportId: id,
+        uploadedByUserId: userId,
+        description: payload?.description || null,
+        ttlHours: payload?.ttlHours,
+        files,
+        zipBase64,
+      });
+
+      await createAuditLog({
+        branchId,
+        reportId: id,
+        action: 'estudo_dicom_temporario_carregado',
+        performedByUserId: userId,
+        performedByName: userName,
+        details: JSON.stringify({
+          temporaryStudyId: item.id,
+          orthancStudyId: item.orthancStudyId,
+          studyInstanceUid: item.studyInstanceUid,
+          instancesCount: item.instancesCount,
+          expiresAt: item.expiresAt,
+        }),
+      });
+
+      return reply.code(201).send({
+        item,
+        temporaryStudyId: item.id,
+        orthancStudyId: item.orthancStudyId,
+        studyInstanceUid: item.studyInstanceUid,
+        expiresAt: item.expiresAt,
+        viewer: {
+          type: 'orthanc',
+          dicomWebStudyPath: `/dicom-web/studies/${item.studyInstanceUid}`,
+        },
+      });
+    } catch (err: any) {
+      request.log.error({ err, reportId: id }, 'Failed to upload temporary prior study');
+      return reply.code(400).send({
+        error: 'Failed to upload temporary prior DICOM study',
+        details: err?.message || 'Unknown error',
+      });
+    }
+  });
+
+  app.delete('/:id/temporary-prior-studies/:temporaryStudyId', {
+    schema: {
+      summary: 'Delete a temporary prior DICOM study from Orthanc',
+      tags: ['Reports'],
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          temporaryStudyId: { type: 'string' },
+        },
+        required: ['id', 'temporaryStudyId'],
+      },
+    },
+  }, async (request, reply) => {
+    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id, temporaryStudyId } = request.params as any;
+    const report = await prisma.report.findFirst({
+      where: reportAccessWhere(id, branchId, doctorName),
+      select: { id: true },
+    });
+    if (!report) return reply.code(404).send({ error: 'Report not found' });
+
+    const study = await prisma.temporaryDicomStudy.findFirst({
+      where: { id: temporaryStudyId, reportId: id, branchId, deletedAt: null },
+    });
+    if (!study) return reply.code(404).send({ error: 'Temporary DICOM study not found' });
+
+    try {
+      if (study.deleteFromOrthanc || !(await hasPermanentStudyReference(study.studyInstanceUid))) {
+        await deleteOrthancStudy(study.orthancStudyId);
+      }
+      await prisma.temporaryDicomStudy.update({
+        where: { id: study.id },
+        data: { deletedAt: new Date() },
+      });
+
+      await createAuditLog({
+        branchId,
+        reportId: id,
+        action: 'estudo_dicom_temporario_removido',
+        performedByUserId: userId,
+        performedByName: userName,
+        details: JSON.stringify({
+          temporaryStudyId: study.id,
+          orthancStudyId: study.orthancStudyId,
+          studyInstanceUid: study.studyInstanceUid,
+        }),
+      });
+
+      return { message: 'Temporary DICOM study deleted' };
+    } catch (err: any) {
+      request.log.error({ err, reportId: id, temporaryStudyId }, 'Failed to delete temporary prior study');
+      return reply.code(500).send({
+        error: 'Failed to delete temporary DICOM study',
+        details: err?.message || 'Unknown error',
+      });
+    }
   });
 
   app.post('/', {

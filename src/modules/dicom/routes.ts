@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import prisma from './lib/prisma';
 import { processDicomBuffer } from './processor';
 import { getDicomStreamFromGcs } from './gcs';
-import { ensureOrthancStudyFromGcs } from './orthanc';
+import { ensureOrthancStudyFromGcs, getOrthancInstanceFileBuffer } from './orthanc';
 
 export default async function dicomRoutes(app: FastifyInstance) {
   // require authentication similar to other modules
@@ -111,6 +111,29 @@ export default async function dicomRoutes(app: FastifyInstance) {
       request.log.error({ err, key, studyInstanceUid }, 'failed to ensure Orthanc study');
       return reply.code(500).send({
         error: 'Failed to prepare study in Orthanc',
+        details: err?.message || 'Unknown error',
+      });
+    }
+  });
+
+  app.get('/orthanc/studies/:studyUid/series/:seriesUid/instances/:sopUid/file', async (request, reply) => {
+    const { studyUid, seriesUid, sopUid } = request.params as any;
+
+    try {
+      const buffer = await getOrthancInstanceFileBuffer({
+        studyInstanceUid: studyUid,
+        seriesInstanceUid: seriesUid,
+        sopInstanceUid: sopUid,
+      });
+
+      if (!buffer) return reply.code(404).send({ error: 'Orthanc DICOM instance not found' });
+
+      reply.header('Content-Type', 'application/dicom');
+      return reply.send(buffer);
+    } catch (err: any) {
+      request.log.error({ err, studyUid, seriesUid, sopUid }, 'failed to fetch Orthanc DICOM instance');
+      return reply.code(500).send({
+        error: 'Failed to fetch Orthanc DICOM instance',
         details: err?.message || 'Unknown error',
       });
     }

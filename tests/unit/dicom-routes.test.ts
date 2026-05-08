@@ -5,7 +5,7 @@ import dicomRoutes from '../../src/modules/dicom/routes';
 import prisma from '../../src/modules/dicom/lib/prisma';
 import { processDicomBuffer } from '../../src/modules/dicom/processor';
 import { getDicomStreamFromGcs } from '../../src/modules/dicom/gcs';
-import { ensureOrthancStudyFromGcs } from '../../src/modules/dicom/orthanc';
+import { ensureOrthancStudyFromGcs, getOrthancInstanceFileBuffer } from '../../src/modules/dicom/orthanc';
 
 vi.mock('../../src/modules/dicom/lib/prisma', () => ({
   default: {
@@ -25,12 +25,14 @@ vi.mock('../../src/modules/dicom/gcs', () => ({
 
 vi.mock('../../src/modules/dicom/orthanc', () => ({
   ensureOrthancStudyFromGcs: vi.fn(),
+  getOrthancInstanceFileBuffer: vi.fn(),
 }));
 
 const mockedPrisma = prisma as any;
 const mockedProcessDicomBuffer = processDicomBuffer as any;
 const mockedGetDicomStreamFromGcs = getDicomStreamFromGcs as any;
 const mockedEnsureOrthancStudyFromGcs = ensureOrthancStudyFromGcs as any;
+const mockedGetOrthancInstanceFileBuffer = getOrthancInstanceFileBuffer as any;
 
 async function buildApp(authenticated = true) {
   const app = Fastify();
@@ -161,6 +163,21 @@ describe('dicom routes', () => {
     res = await app.inject({ method: 'GET', url: '/dicom/file/f1' });
     expect(res.statusCode).toBe(200);
 
+    await app.close();
+  });
+
+  it('serves a temporary Orthanc instance as raw DICOM for the viewer', async () => {
+    mockedGetOrthancInstanceFileBuffer.mockResolvedValueOnce(Buffer.from('orthanc-dicom'));
+    const app = await buildApp(true);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/dicom/orthanc/studies/study-1/series/series-1/instances/sop-1/file',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('application/dicom');
+    expect(res.body).toBe('orthanc-dicom');
     await app.close();
   });
 

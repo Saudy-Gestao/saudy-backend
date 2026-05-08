@@ -42,7 +42,15 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function postDicomInstance(buffer: Buffer): Promise<void> {
+export interface OrthancInstanceUploadResult {
+  ID?: string;
+  ParentStudy?: string;
+  ParentSeries?: string;
+  Status?: string;
+  [key: string]: unknown;
+}
+
+export async function postDicomInstance(buffer: Buffer): Promise<OrthancInstanceUploadResult> {
   const res = await fetch(`${ORTHANC_URL}/instances`, {
     method: 'POST',
     headers: {
@@ -55,6 +63,19 @@ async function postDicomInstance(buffer: Buffer): Promise<void> {
   if (!res.ok) {
     throw new Error(`Orthanc upload failed: ${res.status}`);
   }
+
+  if (typeof (res as any).json !== 'function') return {};
+  return (await res.json().catch(() => ({}))) as OrthancInstanceUploadResult;
+}
+
+export async function deleteOrthancStudy(orthancStudyId: string): Promise<boolean> {
+  const res = await fetch(`${ORTHANC_URL}/studies/${orthancStudyId}`, {
+    method: 'DELETE',
+    headers: { Authorization: authHeader() },
+  });
+
+  if (res.ok || res.status === 404) return true;
+  throw new Error(`Orthanc delete failed: ${res.status}`);
 }
 
 export async function findOrthancStudyIdByDicomStudyUid(studyInstanceUid: string): Promise<string | null> {
@@ -66,6 +87,37 @@ export async function findOrthancStudyIdByDicomStudyUid(studyInstanceUid: string
   });
 
   return result[0] || null;
+}
+
+export async function findOrthancInstanceId(params: {
+  studyInstanceUid: string;
+  seriesInstanceUid?: string | null;
+  sopInstanceUid: string;
+}): Promise<string | null> {
+  const query: Record<string, string> = {
+    StudyInstanceUID: params.studyInstanceUid,
+    SOPInstanceUID: params.sopInstanceUid,
+  };
+  if (params.seriesInstanceUid) query.SeriesInstanceUID = params.seriesInstanceUid;
+
+  const result = await postJson<string[]>('/tools/find', {
+    Level: 'Instance',
+    Query: query,
+  });
+
+  return result[0] || null;
+}
+
+export async function getOrthancInstanceFileBuffer(params: {
+  studyInstanceUid: string;
+  seriesInstanceUid?: string | null;
+  sopInstanceUid: string;
+}): Promise<Buffer | null> {
+  const instanceId = await findOrthancInstanceId(params);
+  if (!instanceId) return null;
+
+  const data = await fetchBuffer(`/instances/${instanceId}/file`);
+  return Buffer.from(data);
 }
 
 export async function ensureOrthancStudyFromGcs(studyInstanceUid: string) {

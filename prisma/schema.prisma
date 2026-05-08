@@ -1192,6 +1192,7 @@ model Report {
     issuerSignedAt    String?
     reviewerSignedAt  String?
     addendums         ReportAddendum[]
+    temporaryDicomStudies TemporaryDicomStudy[]
     createdAt         DateTime            @default(now())
     updatedAt         DateTime            @updatedAt
     isActive          Boolean             @default(true)
@@ -1254,6 +1255,31 @@ model OrthancStudy {
     @@map("orthanc_studies")
 }
 
+model TemporaryDicomStudy {
+    id               String    @id @default(uuid())
+    branchId         String
+    reportId         String
+    report           Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+    orthancStudyId   String
+    studyInstanceUid String
+    patientName      String?
+    patientId        String?
+    modality         String?
+    studyDate        String?
+    description      String?
+    instancesCount   Int       @default(0)
+    uploadedByUserId String?
+    expiresAt        DateTime
+    deleteFromOrthanc Boolean  @default(true)
+    deletedAt        DateTime?
+    createdAt        DateTime  @default(now())
+
+    @@index([branchId])
+    @@index([reportId])
+    @@index([expiresAt, deletedAt])
+    @@map("temporary_dicom_studies")
+}
+
 model ReportAddendum {
     id               String              @id @default(uuid())
     branchId         String?
@@ -1313,6 +1339,7 @@ model ReportPhrase {
     branchId  String?
     examType  String
     label     String
+    shortcut  String?
     text      String   @db.Text
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
@@ -1326,6 +1353,7 @@ model ReportConfig {
     id               String   @id @default(uuid())
     branchId         String?
     requiresReviewer Boolean  @default(true)
+    reportLayout     Json?
     createdAt        DateTime @default(now())
     updatedAt        DateTime @updatedAt
 

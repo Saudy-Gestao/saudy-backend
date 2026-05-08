@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import reportRoutes from '../../src/modules/care/routes/reports';
 import prisma from '../../src/modules/care/lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../src/lib/cpf';
+import { deleteOrthancStudy } from '../../src/modules/dicom/orthanc';
+import { hasPermanentStudyReference, uploadTemporaryPriorStudy } from '../../src/modules/dicom/temporary-prior-studies';
 
 vi.mock('../../src/modules/care/lib/prisma', () => ({
   default: {
@@ -18,6 +20,11 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     reportAuditLog: {
       create: vi.fn(),
     },
+    temporaryDicomStudy: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      update: vi.fn(),
+    },
   },
 }));
 
@@ -26,9 +33,21 @@ vi.mock('../../src/lib/cpf', () => ({
   normalizeCpf: vi.fn(),
 }));
 
+vi.mock('../../src/modules/dicom/orthanc', () => ({
+  deleteOrthancStudy: vi.fn(),
+}));
+
+vi.mock('../../src/modules/dicom/temporary-prior-studies', () => ({
+  hasPermanentStudyReference: vi.fn(),
+  uploadTemporaryPriorStudy: vi.fn(),
+}));
+
 const mockedPrisma = prisma as any;
 const mockedIsValidCpf = isValidCpf as any;
 const mockedNormalizeCpf = normalizeCpf as any;
+const mockedDeleteOrthancStudy = deleteOrthancStudy as any;
+const mockedHasPermanentStudyReference = hasPermanentStudyReference as any;
+const mockedUploadTemporaryPriorStudy = uploadTemporaryPriorStudy as any;
 
 async function buildApp(opts?: { unauthorized?: boolean }) {
   const app = Fastify();
@@ -49,6 +68,11 @@ describe('care reports routes', () => {
     mockedIsValidCpf.mockReturnValue(true);
     mockedPrisma.user.findUnique.mockResolvedValue({ id: 'u-1', name: 'Doc', sector: { branch: { id: 'b-1' } } });
     mockedPrisma.reportAuditLog.create.mockResolvedValue({});
+    mockedPrisma.temporaryDicomStudy.findMany.mockResolvedValue([]);
+    mockedPrisma.temporaryDicomStudy.findFirst.mockResolvedValue(null);
+    mockedPrisma.temporaryDicomStudy.update.mockResolvedValue({});
+    mockedDeleteOrthancStudy.mockResolvedValue(true);
+    mockedHasPermanentStudyReference.mockResolvedValue(false);
   });
 
   it('handles auth and list/get', async () => {
@@ -190,6 +214,100 @@ describe('care reports routes', () => {
     res = await app.inject({ method: 'DELETE', url: '/reports/r-1' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ message: 'Deleted' });
+
+    await app.close();
+  });
+
+  it('uploads, lists and deletes temporary prior DICOM studies', async () => {
+    const expiresAt = new Date('2026-05-07T20:00:00Z');
+    const tempStudy = {
+      id: 'tmp-1',
+      reportId: 'r-1',
+      branchId: 'b-1',
+      orthancStudyId: 'orthanc-1',
+      studyInstanceUid: 'study-1',
+      instancesCount: 2,
+      expiresAt,
+      deleteFromOrthanc: false,
+    };
+
+    mockedPrisma.report.findFirst.mockResolvedValue({ id: 'r-1', patientName: 'Maria', cpf: '12345678901', exam: 'TC' });
+    mockedUploadTemporaryPriorStudy.mockResolvedValue(tempStudy);
+    mockedPrisma.temporaryDicomStudy.findMany.mockResolvedValue([tempStudy]);
+    mockedPrisma.temporaryDicomStudy.findFirst.mockResolvedValue(tempStudy);
+    mockedPrisma.temporaryDicomStudy.update.mockResolvedValue({ ...tempStudy, deletedAt: new Date() });
+
+    const app = await buildApp();
+
+    let res = await app.inject({
+      method: 'POST',
+      url: '/reports/r-1/temporary-prior-studies',
+      payload: { filesBase64: ['ZGljb20='], description: 'Comparativo externo' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(mockedUploadTemporaryPriorStudy).toHaveBeenCalledWith(expect.objectContaining({
+      branchId: 'b-1',
+      reportId: 'r-1',
+      files: [{ fileName: 'dicom-1.dcm', base64: 'ZGljb20=' }],
+    }));
+    expect(res.json().viewer.dicomWebStudyPath).toBe('/dicom-web/studies/study-1');
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/reports/r-1/temporary-prior-studies',
+      payload: { zipBase64: 'emlw', description: 'ZIP externo' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(mockedUploadTemporaryPriorStudy).toHaveBeenCalledWith(expect.objectContaining({
+      branchId: 'b-1',
+      reportId: 'r-1',
+      files: [],
+      zipBase64: 'emlw',
+    }));
+
+    res = await app.inject({ method: 'GET', url: '/reports/r-1/temporary-prior-studies' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(1);
+
+    res = await app.inject({ method: 'DELETE', url: '/reports/r-1/temporary-prior-studies/tmp-1' });
+    expect(res.statusCode).toBe(200);
+    expect(mockedHasPermanentStudyReference).toHaveBeenCalledWith('study-1');
+    expect(mockedDeleteOrthancStudy).toHaveBeenCalledWith('orthanc-1');
+
+    await app.close();
+  });
+
+  it('validates temporary prior DICOM study upload and delete errors', async () => {
+    mockedPrisma.report.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'r-1' }).mockResolvedValueOnce({ id: 'r-1' });
+    mockedUploadTemporaryPriorStudy.mockRejectedValueOnce(new Error('invalid dicom'));
+    mockedPrisma.temporaryDicomStudy.findFirst.mockResolvedValueOnce(null);
+
+    const app = await buildApp();
+
+    let res = await app.inject({
+      method: 'POST',
+      url: '/reports/r-missing/temporary-prior-studies',
+      payload: { filesBase64: ['ZGljb20='] },
+    });
+    expect(res.statusCode).toBe(404);
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/reports/r-1/temporary-prior-studies',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/reports/r-1/temporary-prior-studies',
+      payload: { files: [{ base64: 'bad' }] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().details).toBe('invalid dicom');
+
+    res = await app.inject({ method: 'DELETE', url: '/reports/r-1/temporary-prior-studies/nope' });
+    expect(res.statusCode).toBe(404);
 
     await app.close();
   });
