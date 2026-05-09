@@ -2098,3 +2098,23 @@ model TicketMessage {
     @@index([ticketId, createdAt])
     @@map("ticket_messages")
 }
+
+model BiInsightCache {
+    id          String   @id @default(uuid())
+    companyId   String
+    cacheKey    String
+    startDate   String
+    endDate     String
+    summary     String   @db.Text
+    positives   Json
+    negatives   Json
+    alerts      Json
+    suggestions Json
+    generatedAt DateTime @default(now())
+    expiresAt   DateTime
+
+    @@unique([companyId, cacheKey])
+    @@index([companyId, cacheKey])
+    @@index([expiresAt])
+    @@map("bi_insight_cache")
+}

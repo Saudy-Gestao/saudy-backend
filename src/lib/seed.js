@@ -106,6 +106,13 @@ const modules = [
     category: 'administrativo',
   },
   {
+    name: 'bi-gestao',
+    label: 'BI Gestão',
+    description: 'Indicadores executivos da clínica',
+    icon: 'BarChart3',
+    category: 'administrativo',
+  },
+  {
     name: 'whatsapp-config',
     label: 'WhatsApp',
     description: 'Configurações de WhatsApp e notificações',

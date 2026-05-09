@@ -44,6 +44,19 @@ describe('seed lib', () => {
     expect(logger.log).not.toHaveBeenCalledWith(expect.stringContaining('descontinuado'));
   });
 
+  it('contains BI module in seed catalog', async () => {
+    const seed = await import('../../src/lib/seed.js');
+    expect(seed.modules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'bi-gestao',
+          label: 'BI Gestão',
+          category: 'administrativo',
+        }),
+      ]),
+    );
+  });
+
   it('logs removed modules when deleteMany returns count > 0', async () => {
     const logger = { log: vi.fn(), error: vi.fn() };
     const seed = await import('../../src/lib/seed.js');
