@@ -6,11 +6,8 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     clearMocks: true,
     coverage: {
-      thresholds: {
-        statements: 85,
-        lines: 85,
-        functions: 85,
-      },
+      reporter: ['text', 'json-summary'],
+      thresholds: { statements: 85, lines: 85, functions: 85 },
     },
   },
 });
