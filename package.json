@@ -9,7 +9,7 @@
     "build": "pnpm prisma:generate && tsc",
     "test": "vitest run",
     "test:integration": "vitest run tests/integration",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "pnpm prisma:generate && vitest run --coverage",
     "verify:migrations": "node scripts/verify-migrations.cjs",
     "precommit:verify": "pnpm run verify:migrations && pnpm run test:coverage && pnpm run build",
     "prepare": "husky",
