@@ -301,7 +301,7 @@ describe('auth routes', () => {
     await app.close();
   });
 
-  it('handles /login with admin and user fallbacks, including plain password upgrade', async () => {
+  it('handles /login with admin and user fallbacks; rejects plaintext passwords', async () => {
     mockedPrisma.adminUser.findUnique
       .mockResolvedValueOnce({ id: 'adm-1', name: 'ADM', email: 'adm@etechdev', password: 'hash', emailVerifiedAt: null })
       .mockResolvedValueOnce({ id: 'adm-1', name: 'ADM', email: 'adm@etechdev', password: 'hash', emailVerifiedAt: new Date() })
@@ -312,8 +312,10 @@ describe('auth routes', () => {
     mockedBcrypt.compare
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false)
+      // bcrypt-hashed user: compare returns true
       .mockResolvedValueOnce(true);
+
+    const BCRYPT_HASH = '$2b$10$YrjQ4YG9HW1sPZ5jPz1EWe2nOzZlvNl2qO2BrgYV7jn2pAD.kqlmq';
 
     mockedPrisma.user.findMany
       .mockResolvedValueOnce([])
@@ -322,6 +324,18 @@ describe('auth routes', () => {
           id: 'u-1',
           name: 'User',
           email: 'USER@mail.com',
+          password: BCRYPT_HASH,
+          sector: { branch: { id: 'b-1', companyId: 'c-1' } },
+          accesses: [],
+          doctor: null,
+        },
+      ])
+      // plaintext user — no valid bcrypt hash → rejected
+      .mockResolvedValueOnce([
+        {
+          id: 'u-2',
+          name: 'Plain User',
+          email: 'plain@mail.com',
           password: 'plainpass',
           sector: { branch: { id: 'b-1', companyId: 'c-1' } },
           accesses: [],
@@ -331,16 +345,14 @@ describe('auth routes', () => {
 
     mockedPrisma.user.findFirst
       .mockResolvedValueOnce({
-        id: 'u-2',
+        id: 'u-3',
         name: 'Cpf User',
         email: 'cpf@mail.com',
-        password: 'x',
+        password: BCRYPT_HASH,
         sector: { branch: { id: 'b-2', companyId: 'c-2' } },
         accesses: [],
         doctor: null,
       });
-
-    mockedBcrypt.hash.mockResolvedValue('upgraded-hash');
 
     const app = await buildApp();
 
@@ -353,12 +365,15 @@ describe('auth routes', () => {
     const invalid = await app.inject({ method: 'POST', url: '/login', payload: { email: 'nobody@mail.com', password: 'x' } });
     expect(invalid.statusCode).toBe(401);
 
-    const plain = await app.inject({ method: 'POST', url: '/login', payload: { email: 'user@mail.com', password: 'plainpass' } });
-    expect(plain.statusCode).toBe(200);
-    expect(mockedPrisma.user.update).toHaveBeenCalled();
+    // bcrypt hash → login accepted
+    const bcryptUser = await app.inject({ method: 'POST', url: '/login', payload: { email: 'user@mail.com', password: 'correctpass' } });
+    expect(bcryptUser.statusCode).toBe(200);
+    // no upgrade migration should run anymore
+    expect(mockedPrisma.user.update).not.toHaveBeenCalled();
 
-    const cpfLogin = await app.inject({ method: 'POST', url: '/login', payload: { email: '123.456.789-00', password: 'x' } });
-    expect(cpfLogin.statusCode).toBe(200);
+    // plaintext password stored without bcrypt → rejected (security fix)
+    const plainRejected = await app.inject({ method: 'POST', url: '/login', payload: { email: 'plain@mail.com', password: 'plainpass' } });
+    expect(plainRejected.statusCode).toBe(401);
 
     await app.close();
   });

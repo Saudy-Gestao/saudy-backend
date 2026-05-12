@@ -101,9 +101,9 @@ describe('app bootstrap config', () => {
     );
   });
 
-  it('registers plugins with boolean CORS origin and default port', async () => {
+  it('registers plugins with explicit origin list and default port', async () => {
     const { mod, appMock, corsPlugin, jwtPlugin, swaggerPlugin, swaggerUiPlugin, startSpy } =
-      await loadAppWithEnv({ JWT_SECRET: 'secret', CORS_ORIGIN: 'true' });
+      await loadAppWithEnv({ JWT_SECRET: 'secret', CORS_ORIGIN: 'http://localhost:5173' });
 
     expect(mod.default).toBeDefined();
     expect(startSpy).toHaveBeenCalledTimes(1);
@@ -112,7 +112,7 @@ describe('app bootstrap config', () => {
 
     expect(appMock.register).toHaveBeenCalledWith(
       corsPlugin,
-      expect.objectContaining({ origin: true }),
+      expect.objectContaining({ origin: ['http://localhost:5173'] }),
     );
     expect(appMock.register).toHaveBeenCalledWith(
       jwtPlugin,
@@ -129,16 +129,16 @@ describe('app bootstrap config', () => {
     expect(appMock.register).toHaveBeenCalledWith(swaggerUiPlugin, expect.any(Object));
   });
 
-  it('registers CORS string origin and custom port', async () => {
+  it('registers multiple CORS origins from comma-separated list and custom port', async () => {
     const { appMock, corsPlugin, swaggerPlugin } = await loadAppWithEnv({
       JWT_SECRET: 'secret',
-      CORS_ORIGIN: 'https://saudy.example',
+      CORS_ORIGIN: 'https://saudy.example,https://app.saudy.example',
       PORT: '9876',
     });
 
     expect(appMock.register).toHaveBeenCalledWith(
       corsPlugin,
-      expect.objectContaining({ origin: 'https://saudy.example' }),
+      expect.objectContaining({ origin: ['https://saudy.example', 'https://app.saudy.example'] }),
     );
     expect(appMock.register).toHaveBeenCalledWith(
       swaggerPlugin,
@@ -150,12 +150,12 @@ describe('app bootstrap config', () => {
     );
   });
 
-  it('falls back to permissive CORS when CORS_ORIGIN is unset', async () => {
+  it('disables CORS when CORS_ORIGIN is unset', async () => {
     const { appMock, corsPlugin } = await loadAppWithEnv({ JWT_SECRET: 'secret' });
 
     expect(appMock.register).toHaveBeenCalledWith(
       corsPlugin,
-      expect.objectContaining({ origin: true }),
+      expect.objectContaining({ origin: false }),
     );
   });
 });
