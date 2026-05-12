@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import prisma from '../lib/prisma';
 import GupshupService from '../lib/gupshup';
 import { HUMAN_FLOWS } from '../lib/whatsapp-chatbot';
@@ -20,6 +21,17 @@ const normalizeProtocolNumber = (value: unknown) => {
 const HUMAN_STATUSES = ['QUEUED', 'ASSIGNED', 'CLOSED'] as const;
 
 type HumanStatus = (typeof HUMAN_STATUSES)[number];
+
+type WhatsAppConversationTemplateRow = {
+  id: string;
+  companyId: string;
+  createdByUserId: string | null;
+  createdByName: string | null;
+  name: string;
+  text: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 const normalizeHumanStatus = (value: unknown): HumanStatus | 'ALL' => {
   if (typeof value !== 'string') return 'ALL';
@@ -142,6 +154,22 @@ async function getCurrentOperatorConfig(userId: string) {
   });
 }
 
+async function requireActiveOperator(request: any, reply: any) {
+  const scope = await getCurrentUserScope(request);
+  if (!scope) {
+    reply.code(403).send({ error: 'User not associated with a company' });
+    return null;
+  }
+
+  const operatorConfig = await getCurrentOperatorConfig(scope.currentUser.id);
+  if (!operatorConfig?.isActive) {
+    reply.code(403).send({ error: 'Operator not enabled for WhatsApp conversations' });
+    return null;
+  }
+
+  return { scope, operatorConfig };
+}
+
 async function getConversationSettings(branchId: string) {
   const existing = await prisma.whatsAppConversationSettings.findUnique({
     where: { branchId },
@@ -238,6 +266,86 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         };
       }),
     };
+  });
+
+  app.get('/whatsapp/conversations/templates', {
+    preHandler: async (request) => { await request.jwtVerify(); },
+  }, async (request, reply) => {
+    const access = await requireActiveOperator(request, reply);
+    if (!access) return;
+
+    const items = await prisma.$queryRaw<WhatsAppConversationTemplateRow[]>`
+      SELECT
+        "id",
+        "companyId",
+        "createdByUserId",
+        "createdByName",
+        "name",
+        "text",
+        "createdAt",
+        "updatedAt"
+      FROM "whatsapp_conversation_templates"
+      WHERE "companyId" = ${access.scope.companyId}
+      ORDER BY lower("name") ASC, "createdAt" DESC
+    `;
+
+    return { items };
+  });
+
+  app.post('/whatsapp/conversations/templates', {
+    preHandler: async (request) => { await request.jwtVerify(); },
+  }, async (request, reply) => {
+    const access = await requireActiveOperator(request, reply);
+    if (!access) return;
+
+    const body = request.body as { name?: string; text?: string };
+    const name = normalizeOptionalString(body?.name);
+    const text = typeof body?.text === 'string' ? body.text : '';
+
+    if (!name) return reply.code(400).send({ error: 'Template name is required' });
+    if (!text.trim()) return reply.code(400).send({ error: 'Template text is required' });
+
+    const id = randomUUID();
+    const now = new Date();
+
+    await prisma.$executeRaw`
+      INSERT INTO "whatsapp_conversation_templates" (
+        "id",
+        "companyId",
+        "createdByUserId",
+        "createdByName",
+        "name",
+        "text",
+        "createdAt",
+        "updatedAt"
+      ) VALUES (
+        ${id},
+        ${access.scope.companyId},
+        ${access.scope.currentUser.id},
+        ${access.scope.currentUser.name},
+        ${name},
+        ${text},
+        ${now},
+        ${now}
+      )
+    `;
+
+    const created = await prisma.$queryRaw<WhatsAppConversationTemplateRow[]>`
+      SELECT
+        "id",
+        "companyId",
+        "createdByUserId",
+        "createdByName",
+        "name",
+        "text",
+        "createdAt",
+        "updatedAt"
+      FROM "whatsapp_conversation_templates"
+      WHERE "id" = ${id}
+      LIMIT 1
+    `;
+
+    return reply.code(201).send(created[0]);
   });
 
   app.put('/whatsapp/conversations/settings', {

@@ -1349,6 +1349,8 @@ describe('handleWhatsAppChatbot', () => {
   });
 
   it('returns personalized no-appointments message when patient is identified', async () => {
+    mockedPrisma.appointment.findMany.mockReset();
+    mockedPrisma.appointment.findMany.mockResolvedValue([]);
     mockedPrisma.whatsAppConversation.findUnique.mockResolvedValueOnce(makeConversation({
       state: 'AWAITING_SERVICE',
       context: {},
@@ -1374,7 +1376,6 @@ describe('handleWhatsAppChatbot', () => {
           updatedAt: new Date(),
         },
       ]);
-    mockedPrisma.appointment.findMany.mockResolvedValueOnce([]);
 
     const result = await handleWhatsAppChatbot({
       phone: '5511999998888',
@@ -1394,6 +1395,7 @@ describe('handleWhatsAppChatbot', () => {
   it('returns next appointment details when patient has an upcoming schedule', async () => {
     mockedPrisma.whatsAppConversation.findUnique.mockReset();
     mockedPrisma.patient.findMany.mockReset();
+    mockedPrisma.appointment.findMany.mockReset();
     mockedPrisma.whatsAppConversation.findUnique.mockResolvedValueOnce(makeConversation({
       state: 'AWAITING_SERVICE',
       context: {},
@@ -1438,6 +1440,7 @@ describe('handleWhatsAppChatbot', () => {
   it('returns generic no-appointments message when identified patient has no name', async () => {
     mockedPrisma.whatsAppConversation.findUnique.mockReset();
     mockedPrisma.patient.findMany.mockReset();
+    mockedPrisma.appointment.findMany.mockReset();
     mockedPrisma.whatsAppConversation.findUnique.mockResolvedValueOnce(makeConversation({
       state: 'AWAITING_SERVICE',
       context: {},

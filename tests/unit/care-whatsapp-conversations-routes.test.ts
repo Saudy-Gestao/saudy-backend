@@ -24,6 +24,8 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     patient: { findFirst: vi.fn() },
     appointment: { findMany: vi.fn() },
     whatsAppConfig: { findUnique: vi.fn() },
+    $queryRaw: vi.fn(),
+    $executeRaw: vi.fn(),
   },
 }));
 
@@ -109,6 +111,20 @@ describe('care whatsapp-conversations routes', () => {
       isActive: true,
     });
 
+    mockedPrisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'tpl-1',
+        companyId: 'c-1',
+        createdByUserId: 'u-1',
+        createdByName: 'Operador',
+        name: 'Saudação',
+        text: 'Olá! 😊\nComo posso ajudar?',
+        createdAt: new Date('2026-05-12T10:00:00Z'),
+        updatedAt: new Date('2026-05-12T10:00:00Z'),
+      },
+    ]);
+    mockedPrisma.$executeRaw.mockResolvedValue(1);
+
     sendTextMessageMock.mockResolvedValue({ status: 'success', messageId: 'mid-1' });
     getMediaUrlMock.mockResolvedValue({ url: 'https://cdn/file.jpg' });
   });
@@ -151,6 +167,79 @@ describe('care whatsapp-conversations routes', () => {
     res = await app.inject({ method: 'PUT', url: '/wc/whatsapp/conversations/operators/u-x', payload: {} });
     expect(res.statusCode).toBe(404);
 
+    await app.close();
+  });
+
+  it('lists and creates conversation templates for active operators', async () => {
+    const app = await buildApp();
+
+    let res = await app.inject({ method: 'GET', url: '/wc/whatsapp/conversations/templates' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items[0].text).toContain('😊');
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/wc/whatsapp/conversations/templates',
+      payload: { name: 'Confirmação', text: 'Linha 1\n\nLinha 3  ' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(mockedPrisma.$executeRaw).toHaveBeenCalled();
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/wc/whatsapp/conversations/templates',
+      payload: { name: 'Sem texto', text: '   ' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it('guards conversation templates by company scope and active operator', async () => {
+    const noCompanyApp = await buildApp({ noCompany: true });
+    let res = await noCompanyApp.inject({ method: 'GET', url: '/wc/whatsapp/conversations/templates' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/company/i);
+    await noCompanyApp.close();
+
+    mockedPrisma.whatsAppConversationOperatorConfig.findUnique.mockResolvedValueOnce({
+      userId: 'u-1',
+      isActive: false,
+      maxActiveConversations: 3,
+      flowKeys: [],
+    });
+
+    const inactiveApp = await buildApp();
+    res = await inactiveApp.inject({
+      method: 'POST',
+      url: '/wc/whatsapp/conversations/templates',
+      payload: { name: 'Saudação', text: 'Olá' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toMatch(/operator/i);
+    await inactiveApp.close();
+  });
+
+  it('validates conversation template payload before persisting', async () => {
+    const app = await buildApp();
+
+    let res = await app.inject({
+      method: 'POST',
+      url: '/wc/whatsapp/conversations/templates',
+      payload: { text: 'Texto sem nome' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/name/i);
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/wc/whatsapp/conversations/templates',
+      payload: { name: 'Sem texto', text: null },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/text/i);
+
+    expect(mockedPrisma.$executeRaw).not.toHaveBeenCalled();
     await app.close();
   });
 

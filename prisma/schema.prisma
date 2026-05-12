@@ -62,6 +62,7 @@ model Company {
     module_type              String   @default("padrao") // 'padrao', 'tea', 'apenas-tea'
     additionalBranchesAllowed Int      @default(0)
     branches                 Branch[]
+    whatsappConversationTemplates WhatsAppConversationTemplate[]
 
     @@map("companies")
 }
@@ -1995,6 +1996,21 @@ model WhatsAppConversationSettings {
 
     @@index([branchId])
     @@map("whatsapp_conversation_settings")
+}
+
+model WhatsAppConversationTemplate {
+    id              String   @id @default(uuid())
+    companyId       String
+    company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+    createdByUserId String?
+    createdByName   String?
+    name            String
+    text            String   @db.Text
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    @@index([companyId, name])
+    @@map("whatsapp_conversation_templates")
 }
 
 enum LeadStatus {

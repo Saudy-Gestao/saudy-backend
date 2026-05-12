@@ -858,7 +858,7 @@ describe('care pre-scheduling routes', () => {
     ]);
     mockedPrisma.preSchedulingFlow.update.mockResolvedValueOnce({ id: 'f-1', status: 'DOCUMENTS_RECEIVED', patientSubmittedAt: new Date() });
 
-    res = await app.inject({ method: 'POST', url: `/pre-scheduling/public/${token}/finalize` });
+    res = await app.inject({ method: 'POST', url: `/pre-scheduling/public/${token}/finalize`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json().status).toBe('DOCUMENTS_RECEIVED');
     await app.close();
