@@ -23,13 +23,17 @@ if (!jwtSecret) {
   throw new Error('JWT_SECRET is not set in environment variables');
 }
 
-const corsOrigins = (process.env.CORS_ORIGIN || '')
-  .split(',')
-  .map((o) => o.trim())
-  .filter(Boolean);
+const rawCorsOrigin = process.env.CORS_ORIGIN || '';
+// 'true' = allow all (dev/legacy); comma-separated URLs = explicit allowlist; empty = block all
+const corsOrigin: boolean | string[] =
+  rawCorsOrigin === 'true'
+    ? true
+    : rawCorsOrigin.length > 0
+      ? rawCorsOrigin.split(',').map((o) => o.trim()).filter(Boolean)
+      : false;
 
 app.register(cors, {
-  origin: corsOrigins.length > 0 ? corsOrigins : false,
+  origin: corsOrigin,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With', 'Access-Control-Request-Headers', 'Access-Control-Request-Method'],
   exposedHeaders: ['Access-Control-Allow-Origin', 'Access-Control-Allow-Headers', 'Access-Control-Allow-Methods'],

@@ -150,6 +150,15 @@ describe('app bootstrap config', () => {
     );
   });
 
+  it('allows all origins when CORS_ORIGIN is "true" (legacy/dev)', async () => {
+    const { appMock, corsPlugin } = await loadAppWithEnv({ JWT_SECRET: 'secret', CORS_ORIGIN: 'true' });
+
+    expect(appMock.register).toHaveBeenCalledWith(
+      corsPlugin,
+      expect.objectContaining({ origin: true }),
+    );
+  });
+
   it('disables CORS when CORS_ORIGIN is unset', async () => {
     const { appMock, corsPlugin } = await loadAppWithEnv({ JWT_SECRET: 'secret' });
 
