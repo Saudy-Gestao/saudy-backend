@@ -185,15 +185,13 @@ export default async function userRoutes(app: FastifyInstance) {
       include: userInclude,
     });
 
-    // Envia credenciais de acesso para o e-mail do médico vinculado (fallback: e-mail do usuário).
+    // Envia e-mail de boas-vindas com login (sem senha — usuário define via "Esqueci minha senha").
     try {
-      const plainPassword = String(password || '').trim();
       const recipientEmail = doctorEmailForWelcome || normalizedEmail;
-      if (recipientEmail && plainPassword) {
+      if (recipientEmail) {
         await sendWelcomeEmail({
           to: recipientEmail,
           login: normalizedEmail,
-          password: plainPassword,
           userName: user.name,
         });
       }

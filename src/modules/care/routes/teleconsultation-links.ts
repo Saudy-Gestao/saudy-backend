@@ -986,7 +986,6 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       tags: ['Teleconsultation'],
       querystring: {
         type: 'object',
-        required: ['token'],
         properties: {
           token: { type: 'string' },
           lastEventId: { type: 'number' },
@@ -995,13 +994,15 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       },
     },
   }, async (request, reply) => {
-    const { token, lastEventId, limit } = request.query as {
-      token: string;
+    const { token: queryToken, lastEventId, limit } = request.query as {
+      token?: string;
       lastEventId?: number;
       limit?: number;
     };
+    // Accept token from header (preferred, avoids token in server logs) or query param (legacy)
+    const token = String((request.headers['x-public-token'] as string) || queryToken || '');
 
-    const context = await verifyPublicToken(String(token || ''));
+    const context = await verifyPublicToken(token);
     if ('error' in context) {
       return reply.code(Number(context.statusCode || 400)).send({ error: context.error });
     }
@@ -1022,7 +1023,6 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       tags: ['Teleconsultation'],
       querystring: {
         type: 'object',
-        required: ['token'],
         properties: {
           token: { type: 'string' },
           limit: { type: 'number' },
@@ -1030,12 +1030,14 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       },
     },
   }, async (request, reply) => {
-    const { token, limit } = request.query as {
-      token: string;
+    const { token: queryToken, limit } = request.query as {
+      token?: string;
       limit?: number;
     };
+    // Accept token from header (preferred) or query param (legacy)
+    const token = String((request.headers['x-public-token'] as string) || queryToken || '');
 
-    const context = await verifyPublicToken(String(token || ''));
+    const context = await verifyPublicToken(token);
     if ('error' in context) {
       return reply.code(Number(context.statusCode || 400)).send({ error: context.error });
     }

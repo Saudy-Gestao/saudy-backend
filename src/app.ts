@@ -23,8 +23,13 @@ if (!jwtSecret) {
   throw new Error('JWT_SECRET is not set in environment variables');
 }
 
+const corsOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.register(cors, {
-  origin: process.env.CORS_ORIGIN === 'true' ? true : (process.env.CORS_ORIGIN || true),
+  origin: corsOrigins.length > 0 ? corsOrigins : false,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With', 'Access-Control-Request-Headers', 'Access-Control-Request-Method'],
   exposedHeaders: ['Access-Control-Allow-Origin', 'Access-Control-Allow-Headers', 'Access-Control-Allow-Methods'],
@@ -33,7 +38,7 @@ app.register(cors, {
 
 app.register(jwt, {
   secret: jwtSecret,
-  sign: { expiresIn: '3d' },
+  sign: { expiresIn: '8h' },
 });
 
 app.register(swagger as any, {

@@ -21,7 +21,6 @@ type AdminRegisterMailParams = {
 type WelcomeMailParams = {
   to: string;
   login: string;
-  password: string;
   userName?: string;
 };
 
@@ -232,7 +231,7 @@ export async function sendAdminRegisterCodeEmail({ to, code, userName }: AdminRe
   return true;
 }
 
-function buildWelcomeHtml(login: string, password: string, userName?: string) {
+function buildWelcomeHtml(login: string, userName?: string) {
   const firstName = userName?.trim()?.split(' ')[0] || 'usuário';
 
   return `
@@ -248,16 +247,15 @@ function buildWelcomeHtml(login: string, password: string, userName?: string) {
         <td style="padding:28px;">
           <p style="margin:0 0 16px;font-size:16px;">Olá, ${firstName}.</p>
           <p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:#334155;">
-            O acesso ao Saudy foi criado com sucesso. Use os dados abaixo para entrar no sistema:
+            O acesso ao Saudy foi criado com sucesso. Use o login abaixo para entrar no sistema:
           </p>
 
           <div style="margin:0 0 20px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;">
-            <p style="margin:0 0 8px;font-size:14px;"><strong>Login:</strong> ${login}</p>
-            <p style="margin:0;font-size:14px;"><strong>Senha:</strong> ${password}</p>
+            <p style="margin:0;font-size:14px;"><strong>Login:</strong> ${login}</p>
           </div>
 
-          <p style="margin:0;font-size:13px;color:#475569;">
-            Recomendamos alterar a senha após o primeiro acesso.
+          <p style="margin:0 0 12px;font-size:13px;color:#475569;">
+            Para definir sua senha, clique em <strong>"Esqueci minha senha"</strong> na tela de login e siga as instruções enviadas para este e-mail.
           </p>
         </td>
       </tr>
@@ -271,7 +269,7 @@ function buildWelcomeHtml(login: string, password: string, userName?: string) {
   `;
 }
 
-export async function sendWelcomeEmail({ to, login, password, userName }: WelcomeMailParams) {
+export async function sendWelcomeEmail({ to, login, userName }: WelcomeMailParams) {
   const transporter = getTransporter();
 
   if (!transporter) {
@@ -285,8 +283,8 @@ export async function sendWelcomeEmail({ to, login, password, userName }: Welcom
     from,
     to,
     subject: 'Saudy | Bem-vindo(a) ao sistema',
-    text: `Seu acesso ao Saudy foi criado. Login: ${login}. Senha: ${password}. Recomendamos alterar a senha após o primeiro acesso.`,
-    html: buildWelcomeHtml(login, password, userName),
+    text: `Seu acesso ao Saudy foi criado. Login: ${login}. Para definir sua senha, use a opção "Esqueci minha senha" na tela de login.`,
+    html: buildWelcomeHtml(login, userName),
   });
 
   return true;

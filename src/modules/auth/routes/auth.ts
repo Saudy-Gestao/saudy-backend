@@ -53,26 +53,12 @@ function isEtechdevDomain(email: string) {
   return /@etechdev(?:\.[a-z0-9-]+)*$/i.test(email.trim());
 }
 
-async function validateUserPasswordAndUpgradeIfNeeded(userId: string, storedPassword: string, incomingPassword: string) {
-  if (!storedPassword) {
+async function validateUserPassword(userId: string, storedPassword: string, incomingPassword: string) {
+  if (!storedPassword || !isBcryptHash(storedPassword)) {
     return false;
   }
 
-  if (isBcryptHash(storedPassword)) {
-    return bcrypt.compare(incomingPassword, storedPassword);
-  }
-
-  // Legacy compatibility: allow plaintext-stored passwords and migrate to bcrypt on successful login.
-  if (storedPassword === incomingPassword) {
-    const upgradedHash = await bcrypt.hash(incomingPassword, 10);
-    await prisma.user.update({
-      where: { id: userId },
-      data: { password: upgradedHash },
-    });
-    return true;
-  }
-
-  return false;
+  return bcrypt.compare(incomingPassword, storedPassword);
 }
 
 async function findUsersByIdentifier(identifier: string) {
@@ -471,11 +457,10 @@ export default async function authRoutes(app: FastifyInstance) {
 
       // Enviar e-mail de boas-vindas
       try {
-        if (result.user.email && user.password) {
+        if (result.user.email) {
           await sendWelcomeEmail({
             to: result.user.email,
             login: result.user.email,
-            password: user.password,
             userName: result.user.name,
           });
         }
@@ -500,8 +485,6 @@ export default async function authRoutes(app: FastifyInstance) {
         },
       };
     } catch (error) {
-      console.log('Error during registration:', error);
-
       if ((error as Error).message === 'CNPJ já cadastrado') {
         return reply.code(409).send({ error: 'Duplicate CNPJ', details: 'CNPJ já cadastrado' });
       }
@@ -638,15 +621,13 @@ export default async function authRoutes(app: FastifyInstance) {
         }
       }
 
-      console.log('User fetched for login:', identifier);
-
       if (candidateUsers.length === 0) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
       let authenticatedUser: any = null;
       for (const candidate of candidateUsers) {
-        const isPasswordValid = await validateUserPasswordAndUpgradeIfNeeded(candidate.id, candidate.password, password);
+        const isPasswordValid = await validateUserPassword(candidate.id, candidate.password, password);
         if (isPasswordValid) {
           authenticatedUser = candidate;
           break;

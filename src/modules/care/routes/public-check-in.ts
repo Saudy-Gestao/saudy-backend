@@ -4,6 +4,12 @@ import prisma from '../lib/prisma';
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 
+function maskCpf(cpf: string | null | undefined): string {
+  const digits = String(cpf || '').replace(/\D/g, '');
+  if (digits.length !== 11) return '***.***.***-**';
+  return `***.***.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
 type DoctorQueueLookup = {
   id: string;
   name: string;
@@ -355,7 +361,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
         patient: {
           id: patient.id,
           name: patient.name,
-          cpf: patient.cpf,
+          cpf: maskCpf(patient.cpf),
         },
         appointments: mappedAppointments,
         trust: trust ?? null,
