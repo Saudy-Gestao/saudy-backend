@@ -4,13 +4,13 @@ export interface HsmSyncResult {
   synced: number;
   created: number;
   updated: number;
-  gupshupTemplates: Record<string, { status: string; id: string | null }>;
+  metaTemplates: Record<string, { status: string; id: string | null }>;
 }
 
 const normalizeTemplateBaseName = (value: string) => {
   const normalized = String(value || '')
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
@@ -36,81 +36,100 @@ const extractTemplateBaseName = (value: string) => {
   return normalized;
 };
 
+async function getWabaId(phoneNumberId: string, bearerToken: string): Promise<string> {
+  const res = await fetch(
+    `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
+    { headers: { Authorization: `Bearer ${bearerToken}` } },
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Erro ao buscar WABA ID: ${body}`);
+  }
+  const data = await res.json() as { whatsapp_business_account?: { id: string } };
+  const wabaId = data.whatsapp_business_account?.id;
+  if (!wabaId) throw new Error('WABA ID não encontrado para o Phone Number ID informado.');
+  return wabaId;
+}
+
+async function fetchMetaTemplates(
+  wabaId: string,
+  bearerToken: string,
+): Promise<Array<{ name: string; status: string; id: string }>> {
+  const templates: Array<{ name: string; status: string; id: string }> = [];
+  let url: string | null =
+    `https://graph.facebook.com/v21.0/${wabaId}/message_templates?limit=100&fields=name,status,id`;
+
+  while (url) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${bearerToken}` } });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Erro ao listar templates da Meta: ${body}`);
+    }
+    const data = await res.json() as { data: any[]; paging?: { next?: string } };
+    for (const t of (data.data || [])) {
+      if (t.name && t.status && t.id) {
+        templates.push({ name: String(t.name), status: String(t.status), id: String(t.id) });
+      }
+    }
+    url = data.paging?.next || null;
+  }
+
+  return templates;
+}
+
 export async function syncBranchHsmTemplates(branchId: string): Promise<HsmSyncResult> {
   const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
 
-  const gupshupAppId = whatsappConfig?.appId || '';
-  const apiKey = whatsappConfig?.accountSid || '';
+  const phoneNumberId = whatsappConfig?.appId || '';
+  const bearerToken = whatsappConfig?.accountSid || '';
 
-  if (!gupshupAppId || !apiKey) {
-    throw new Error('Credenciais do WhatsApp não configuradas na filial. Salve API Key e App ID no banco antes de sincronizar.');
+  if (!phoneNumberId || !bearerToken) {
+    throw new Error('Credenciais do WhatsApp não configuradas na filial. Salve Token e Phone Number ID antes de sincronizar.');
   }
 
-  const gupshupRes = await fetch(
-    `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
-    { headers: { apikey: apiKey } },
-  );
+  const wabaId = await getWabaId(phoneNumberId, bearerToken);
+  const rawTemplates = await fetchMetaTemplates(wabaId, bearerToken);
 
-  if (!gupshupRes.ok) {
-    const body = await gupshupRes.text();
-    throw new Error(`Erro ao consultar Meta: ${body}`);
-  }
+  const metaTemplates: Record<string, { status: string; id: string | null }> = {};
+  const metaTemplatesByBaseName: Record<string, Array<{ name: string; status: string; id: string | null }>> = {};
 
-  const gupshupData = await gupshupRes.json() as { status: string; templates: any[] };
-  const gupshupTemplates: Record<string, { status: string; id: string | null }> = {};
-  const gupshupTemplatesByBaseName: Record<string, Array<{ name: string; status: string; id: string | null }>> = {};
+  for (const t of rawTemplates) {
+    const normalizedName = t.name.toLowerCase();
+    const templateInfo = { status: t.status, id: t.id };
+    metaTemplates[normalizedName] = templateInfo;
 
-  for (const t of (gupshupData.templates || [])) {
-    if (!t.elementName) continue;
-    const elementName = String(t.elementName).trim();
-    const templateId =
-      t.id
-      ?? t.templateId
-      ?? t.templateID
-      ?? t.elementId
-      ?? null;
-
-    const normalizedElementName = elementName.toLowerCase();
-    const templateInfo = {
-      status: String(t.status || ''),
-      id: templateId ? String(templateId) : null,
-    };
-    gupshupTemplates[normalizedElementName] = templateInfo;
-
-    const baseName = extractTemplateBaseName(normalizedElementName);
-    if (!gupshupTemplatesByBaseName[baseName]) gupshupTemplatesByBaseName[baseName] = [];
-    gupshupTemplatesByBaseName[baseName].push({
-      name: normalizedElementName,
-      ...templateInfo,
-    });
+    const baseName = extractTemplateBaseName(normalizedName);
+    if (!metaTemplatesByBaseName[baseName]) metaTemplatesByBaseName[baseName] = [];
+    metaTemplatesByBaseName[baseName].push({ name: normalizedName, ...templateInfo });
   }
 
   const localTemplates = await prisma.whatsAppMessageTemplate.findMany({ where: { branchId } });
-  const refreshedLocalTemplates = localTemplates;
   let created = 0;
   let updated = 0;
 
-  for (const tmpl of refreshedLocalTemplates) {
+  for (const tmpl of localTemplates) {
     const localTemplateName = String(tmpl.hsmTemplateName || '').trim().toLowerCase();
     const localTemplateBaseName = normalizeTemplateBaseName(tmpl.name || '');
-    const gupshupTemplate =
+
+    const metaTemplate =
       (tmpl.hsmTemplateId
-        ? Object.values(gupshupTemplates).find((item) => item.id && item.id === tmpl.hsmTemplateId)
+        ? Object.values(metaTemplates).find((item) => item.id && item.id === tmpl.hsmTemplateId)
         : undefined)
-      || (localTemplateName ? gupshupTemplates[localTemplateName] : undefined)
-      || gupshupTemplatesByBaseName[localTemplateBaseName]?.[0];
+      || (localTemplateName ? metaTemplates[localTemplateName] : undefined)
+      || metaTemplatesByBaseName[localTemplateBaseName]?.[0];
 
     const matchedRemoteName =
-      (localTemplateName && gupshupTemplates[localTemplateName] ? localTemplateName : null)
-      || gupshupTemplatesByBaseName[localTemplateBaseName]?.[0]?.name
+      (localTemplateName && metaTemplates[localTemplateName] ? localTemplateName : null)
+      || metaTemplatesByBaseName[localTemplateBaseName]?.[0]?.name
       || null;
 
-    const gupshupStatus = gupshupTemplate?.status || null;
-    const approved = gupshupStatus === 'APPROVED';
-    const hsmTemplateId = gupshupTemplate?.id || null;
+    const metaStatus = metaTemplate?.status || null;
+    const approved = metaStatus === 'APPROVED';
+    const hsmTemplateId = metaTemplate?.id || null;
+
     const shouldUpdate =
       tmpl.hsmTemplateApproved !== approved
-      || (tmpl.hsmTemplateStatus || null) !== gupshupStatus
+      || (tmpl.hsmTemplateStatus || null) !== metaStatus
       || (tmpl.hsmTemplateId || null) !== hsmTemplateId
       || ((tmpl.hsmTemplateName || null) !== (matchedRemoteName || null) && !!matchedRemoteName);
 
@@ -119,7 +138,7 @@ export async function syncBranchHsmTemplates(branchId: string): Promise<HsmSyncR
         where: { id: tmpl.id },
         data: {
           hsmTemplateApproved: approved,
-          hsmTemplateStatus: gupshupStatus,
+          hsmTemplateStatus: metaStatus,
           hsmTemplateId,
           hsmTemplateName: matchedRemoteName || tmpl.hsmTemplateName,
         },
@@ -129,23 +148,17 @@ export async function syncBranchHsmTemplates(branchId: string): Promise<HsmSyncR
   }
 
   return {
-    synced: refreshedLocalTemplates.filter((tmpl: any) => tmpl.hsmTemplateName).length,
+    synced: localTemplates.filter((tmpl: any) => tmpl.hsmTemplateName).length,
     created,
     updated,
-    gupshupTemplates,
+    metaTemplates,
   };
 }
 
 export async function syncAllBranchesHsmTemplates(): Promise<{ branches: number; synced: number; created: number; updated: number }> {
   const configs = await prisma.whatsAppConfig.findMany({
-    where: {
-      isActive: true,
-    },
-    select: {
-      branchId: true,
-      appId: true,
-      accountSid: true,
-    },
+    where: { isActive: true },
+    select: { branchId: true, appId: true, accountSid: true },
   });
 
   let branches = 0;
@@ -155,9 +168,7 @@ export async function syncAllBranchesHsmTemplates(): Promise<{ branches: number;
 
   for (const config of configs) {
     if (!config.branchId) continue;
-    if (!config.appId || !config.accountSid) {
-      continue;
-    }
+    if (!config.appId || !config.accountSid) continue;
 
     try {
       const result = await syncBranchHsmTemplates(config.branchId);

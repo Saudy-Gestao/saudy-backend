@@ -523,92 +523,51 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Template not found' });
     }
 
-    // Se existir vínculo HSM, tentamos remover na Meta apenas quando ele realmente existir lá.
+    // Se existir vínculo HSM, remove na Meta antes de excluir localmente.
     if (template.hsmTemplateId || template.hsmTemplateName) {
-      const gupshupAppId = whatsappConfig?.appId || '';
-      const apiKey = whatsappConfig?.accountSid || '';
+      const phoneNumberId = whatsappConfig?.appId || '';
+      const bearerToken = whatsappConfig?.accountSid || '';
       const hasRemoteSignals = Boolean(
         template.hsmTemplateId
         || template.hsmTemplateStatus
         || template.importedFromGupshupSync,
       );
 
-      if (gupshupAppId && apiKey) {
-        const listRes = await fetch(
-          `https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template`,
-          { headers: { apikey: apiKey } },
-        );
+      if (phoneNumberId && bearerToken) {
+        try {
+          // Buscar WABA ID a partir do Phone Number ID
+          const phoneRes = await fetch(
+            `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
+            { headers: { Authorization: `Bearer ${bearerToken}` } },
+          );
+          const phoneData = await phoneRes.json() as any;
+          const wabaId = phoneData?.whatsapp_business_account?.id;
 
-        if (listRes.ok) {
-          const listData = await listRes.json() as { templates?: any[] };
-          const remoteTemplate = (listData.templates || []).find((item: any) => {
-            const remoteId = String(item?.id ?? item?.templateId ?? item?.templateID ?? item?.elementId ?? '').trim();
-            const remoteName = String(item?.elementName || '').trim().toLowerCase();
-            return (
-              (template.hsmTemplateId && remoteId === template.hsmTemplateId)
-              || (template.hsmTemplateName && remoteName === String(template.hsmTemplateName).trim().toLowerCase())
+          if (wabaId && template.hsmTemplateName) {
+            const deleteRes = await fetch(
+              `https://graph.facebook.com/v21.0/${wabaId}/message_templates?name=${encodeURIComponent(template.hsmTemplateName)}`,
+              { method: 'DELETE', headers: { Authorization: `Bearer ${bearerToken}` } },
             );
-          });
 
-          if (remoteTemplate) {
-            const remoteTemplateId = String(
-              remoteTemplate?.id
-              ?? remoteTemplate?.templateId
-              ?? remoteTemplate?.templateID
-              ?? remoteTemplate?.elementId
-              ?? '',
-            ).trim();
-            const remoteElementName = String(remoteTemplate?.elementName || template.hsmTemplateName || '').trim();
-            const encodedTemplateId = remoteTemplateId ? encodeURIComponent(remoteTemplateId) : null;
-            const encodedElementName = remoteElementName ? encodeURIComponent(remoteElementName) : null;
-            const deleteAttempts: string[] = [];
-            const candidates: string[] = [
-              `https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template?${new URLSearchParams({
-                ...(remoteTemplateId ? { templateId: remoteTemplateId } : {}),
-                ...(remoteElementName ? { elementName: remoteElementName } : {}),
-              }).toString()}`,
-              ...(encodedTemplateId
-                ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedTemplateId}${encodedElementName ? `?elementName=${encodedElementName}` : ''}`]
-                : []),
-              ...(encodedElementName
-                ? [`https://api.gupshup.io/wa/app/${encodeURIComponent(gupshupAppId)}/template/${encodedElementName}`]
-                : []),
-            ];
-
-            let deletedInGupshup = false;
-            for (const url of candidates) {
-              const gupshupRes = await fetch(url, {
-                method: 'DELETE',
-                headers: { apikey: apiKey },
-              });
-
-              const responseBody = await gupshupRes.text();
-              const shortBody = responseBody.length > 600 ? `${responseBody.slice(0, 600)}...` : responseBody;
-              deleteAttempts.push(`[${gupshupRes.status}] ${url} => ${shortBody}`);
-
-              if (gupshupRes.ok || gupshupRes.status === 404) {
-                deletedInGupshup = true;
-                break;
-              }
-            }
-
-            if (!deletedInGupshup) {
+            if (!deleteRes.ok && deleteRes.status !== 404) {
+              const body = await deleteRes.text();
               return reply.code(400).send({
                 error: 'Falha ao excluir template na Meta. O template local não foi removido.',
-                details: deleteAttempts,
+                details: body,
               });
             }
           }
-        } else if (hasRemoteSignals) {
-          const body = await listRes.text();
-          return reply.code(400).send({
-            error: 'Falha ao verificar a existência do template na Meta antes da exclusão.',
-            details: body,
-          });
+        } catch (err: any) {
+          if (hasRemoteSignals) {
+            return reply.code(400).send({
+              error: 'Falha ao verificar a existência do template na Meta antes da exclusão.',
+              details: err?.message,
+            });
+          }
         }
       } else if (hasRemoteSignals) {
         return reply.code(400).send({
-          error: 'Não foi possível confirmar a exclusão na Meta porque a filial não possui App ID/API Key configurados.',
+          error: 'Não foi possível confirmar a exclusão na Meta porque a filial não possui Phone Number ID/Token configurados.',
         });
       }
     }
@@ -665,21 +624,32 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     }
 
     const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
-    const gupshupAppId = whatsappConfig?.appId;
-    const apiKey = whatsappConfig?.accountSid;
+    const phoneNumberId = whatsappConfig?.appId;
+    const bearerToken = whatsappConfig?.accountSid;
 
-    if (!gupshupAppId || !apiKey) {
+    if (!phoneNumberId || !bearerToken) {
       return reply.code(400).send({
-        error: 'Phone Number ID não configurado. Preencha o campo App ID nas configurações de credenciais.',
+        error: 'Phone Number ID ou Token não configurados. Preencha as credenciais nas configurações.',
       });
+    }
+
+    // Buscar WABA ID a partir do Phone Number ID
+    const phoneRes = await fetch(
+      `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
+      { headers: { Authorization: `Bearer ${bearerToken}` } },
+    );
+    const phoneData = await phoneRes.json() as any;
+    const wabaId = phoneData?.whatsapp_business_account?.id;
+    if (!wabaId) {
+      return reply.code(400).send({ error: 'Não foi possível obter o WABA ID a partir do Phone Number ID.' });
     }
 
     // Converter variáveis nomeadas ({{paciente_nome}}) em numeradas ({{1}}, {{2}}, ...)
     let varIndex = 1;
     const numberedContent = template.message.replace(/\{\{[^}]+\}\}/g, () => `{{${varIndex++}}}`);
+    const varCount = varIndex - 1;
 
-    // Mantemos o formato antigo que já funcionava neste projeto ao enviar o template.
-    const exampleMessage = template.message
+    const exampleValues = template.message
       .replace(/\{\{paciente_nome\}\}/gi, 'João Silva')
       .replace(/\{\{paciente_cpf\}\}/gi, '123.456.789-00')
       .replace(/\{\{medico_nome\}\}/gi, 'Dr. Carlos')
@@ -690,67 +660,90 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       .replace(/\{\{data\}\}/gi, '18/03/2026 (Quarta-feira)')
       .replace(/\{\{hora\}\}/gi, '14:00')
       .replace(/\{\{convenio\}\}/gi, 'Plano Saúdy')
-      .replace(/\{\{observacoes\}\}/gi, '-');
+      .replace(/\{\{observacoes\}\}/gi, '-')
+      // Extract remaining example values for numbered params
+      .match(/\{\{[^}]+\}\}/g)?.map((v: string) => v.replace(/\{\{|\}\}/g, '')) || [];
 
-    const body = new URLSearchParams({
-      elementName: template.hsmTemplateName,
-      languageCode: 'pt_BR',
-      content: numberedContent,
-      category: 'UTILITY',
-      templateType: 'TEXT',
-      vertical: 'Healthcare',
-      example: exampleMessage,
-      enableSample: 'true',
-    });
+    const bodyComponent: any = {
+      type: 'BODY',
+      text: numberedContent,
+    };
+    if (varCount > 0) {
+      // Build example values array — fill missing with placeholder
+      const examples = Array.from({ length: varCount }, (_, i) => exampleValues[i] || `exemplo${i + 1}`);
+      bodyComponent.example = { body_text: [examples] };
+    }
+
+    const components: any[] = [bodyComponent];
 
     if (template.type === 'APPOINTMENT_CONFIRMATION') {
-      body.append('buttons', JSON.stringify([
-        { type: 'QUICK_REPLY', text: 'Confirmar' },
-        { type: 'QUICK_REPLY', text: 'Reagendar' },
-      ]));
+      components.push({
+        type: 'BUTTONS',
+        buttons: [
+          { type: 'QUICK_REPLY', text: 'Confirmar' },
+          { type: 'QUICK_REPLY', text: 'Reagendar' },
+        ],
+      });
     }
 
     if (template.type === 'EXAM_REPORT_READY') {
-      body.append('buttons', JSON.stringify([
-        { type: 'QUICK_REPLY', text: 'Agendar retorno' },
-        { type: 'QUICK_REPLY', text: 'Depois' },
-      ]));
+      components.push({
+        type: 'BUTTONS',
+        buttons: [
+          { type: 'QUICK_REPLY', text: 'Agendar retorno' },
+          { type: 'QUICK_REPLY', text: 'Depois' },
+        ],
+      });
     }
 
-    console.log('[push-to-meta] sending body:', body.toString());
+    const payload = {
+      name: template.hsmTemplateName,
+      language: 'pt_BR',
+      category: 'UTILITY',
+      components,
+    };
 
-    const gupshupRes = await fetch(
-      `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
+    console.log('[push-to-meta] payload:', JSON.stringify(payload));
+
+    const metaRes = await fetch(
+      `https://graph.facebook.com/v21.0/${wabaId}/message_templates`,
       {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          apikey: apiKey,
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
         },
-        body: body.toString(),
+        body: JSON.stringify(payload),
       },
     );
 
-    const rawText = await gupshupRes.text();
+    const rawText = await metaRes.text();
     let parsed: any;
     try { parsed = JSON.parse(rawText); } catch { parsed = rawText; }
 
-    if (!gupshupRes.ok) {
-      console.error('[push-to-meta] error response:', gupshupRes.status, parsed);
+    if (!metaRes.ok) {
+      console.error('[push-to-meta] error response:', metaRes.status, parsed);
       const providerMessage =
-        parsed?.message
+        parsed?.error?.message
+        || parsed?.message
         || parsed?.error
-        || parsed?.details
-        || parsed?.detail
         || rawText;
 
       return reply.code(400).send({
-        error: `Erro ao criar template no Gupshup (${gupshupRes.status}): ${providerMessage}`,
+        error: `Erro ao criar template na Meta (${metaRes.status}): ${providerMessage}`,
         detail: parsed,
       });
     }
 
-    return { success: true, gupshupResponse: parsed };
+    // Salvar o ID retornado pela Meta no template local
+    if (parsed?.id) {
+      await prisma.whatsAppMessageTemplate.update({
+        where: { id: template.id },
+        data: { hsmTemplateId: String(parsed.id), hsmTemplateStatus: parsed.status || 'PENDING' },
+      });
+    }
+
+    return { success: true, metaResponse: parsed };
   });
 
   // ===== Notification Config =====
