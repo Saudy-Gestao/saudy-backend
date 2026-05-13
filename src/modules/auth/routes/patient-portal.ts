@@ -351,6 +351,7 @@ const getPatientFromPayload = async (payload: PatientPortalPayload) => {
       isActive: true,
       hasHealthInsurance: true,
       healthInsuranceName: true,
+      healthInsuranceNumber: true,
     },
   });
 };
@@ -1024,6 +1025,9 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         birthDate: formatDateOnly(patient.birthDate),
         email: patient.email,
         cellphone: patient.cellphone || patient.phone || null,
+        hasHealthInsurance: (patient as any).hasHealthInsurance ?? false,
+        healthInsuranceName: (patient as any).healthInsuranceName ?? null,
+        healthInsuranceNumber: (patient as any).healthInsuranceNumber ?? null,
       },
       stats: {
         consultationsCount,
@@ -2861,5 +2865,101 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       branchName: branch?.tradeName || null,
       branchAddress: branch?.address || null,
     });
+  });
+
+  // List insurances registered in the system (for patient to pick when changing)
+  app.get('/patient-portal/scheduling/insurances', {
+    schema: {
+      summary: 'List insurances available in the system for self-scheduling',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const insurances = await prisma.insurance.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    return { insurances };
+  });
+
+  // Check if a patient's insurance covers a procedure and return authorizationDays
+  app.get('/patient-portal/scheduling/insurance-check', {
+    schema: {
+      summary: 'Check if an insurance covers a procedure for self-scheduling',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        required: ['procedureId', 'insuranceName'],
+        properties: {
+          procedureId: { type: 'string' },
+          insuranceName: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const { procedureId, insuranceName } = request.query as { procedureId: string; insuranceName: string };
+
+    const insurance = await prisma.insurance.findFirst({
+      where: { name: { equals: insuranceName, mode: 'insensitive' }, isActive: true },
+      select: { id: true, name: true },
+    });
+
+    if (!insurance) {
+      return { covered: false, authorizationDays: null, insuranceId: null, insuranceName: null };
+    }
+
+    const link = await prisma.insuranceProcedure.findFirst({
+      where: { insuranceId: insurance.id, procedureId, isActive: true },
+      select: { authorizationDays: true },
+    });
+
+    if (!link) {
+      return { covered: false, authorizationDays: null, insuranceId: insurance.id, insuranceName: insurance.name };
+    }
+
+    return { covered: true, authorizationDays: link.authorizationDays ?? null, insuranceId: insurance.id, insuranceName: insurance.name };
+  });
+
+  // Update patient insurance info
+  app.put('/patient-portal/me/insurance', {
+    schema: {
+      summary: 'Update patient insurance information',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        properties: {
+          insuranceName: { type: ['string', 'null'] },
+          insuranceNumber: { type: ['string', 'null'] },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { insuranceName, insuranceNumber } = request.body as any;
+
+    await prisma.patient.update({
+      where: { id: patient.id },
+      data: {
+        hasHealthInsurance: insuranceName ? true : false,
+        healthInsuranceName: insuranceName ?? null,
+        healthInsuranceNumber: insuranceNumber ?? null,
+      },
+    });
+
+    return { ok: true };
   });
 }
