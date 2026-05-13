@@ -42,10 +42,6 @@
         "show_branches": {
           "type": "boolean",
           "__example__": false
-        },
-        "default_branch_id": {
-          "type": "string",
-          "__example__": "branch-1"
         }
       },
       "layout": {
@@ -67,28 +63,11 @@
             "data-source": "${data.services}"
           },
           {
-            "type": "If",
-            "condition": "${data.show_branches}",
-            "then": [
-              {
-                "type": "Dropdown",
-                "name": "branch_id",
-                "label": "Unidade",
-                "required": true,
-                "data-source": "${data.branches}"
-              }
-            ],
-            "else": [
-              {
-                "type": "TextInput",
-                "name": "branch_id",
-                "label": "Unidade",
-                "input-type": "text",
-                "required": true,
-                "init-value": "${data.default_branch_id}",
-                "visible": false
-              }
-            ]
+            "type": "Dropdown",
+            "name": "branch_id",
+            "label": "Unidade",
+            "required": true,
+            "data-source": "${data.branches}"
           },
           {
             "type": "Footer",
