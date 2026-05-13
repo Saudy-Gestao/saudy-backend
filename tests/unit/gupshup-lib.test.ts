@@ -18,7 +18,7 @@ const mockedAxios = axios as any;
 
 const APP_ID = 'app-uuid';
 const BEARER = 'bearer-token';
-const V3_URL = `https://api.gupshup.io/partner/app/${APP_ID}/v3/message`;
+const V3_URL = `https://partner.gupshup.io/partner/app/${APP_ID}/v3/message`;
 
 describe('GupshupV3Service', () => {
   beforeEach(() => {

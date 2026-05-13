@@ -421,8 +421,10 @@ export class GupshupV3Service {
     };
 
     try {
+      const url = `https://partner.gupshup.io/partner/app/${this.appId}/v3/message`;
+      console.log('[gupshup-v3] POST', url, 'to:', destination);
       const res = await axios.post(
-        `https://api.gupshup.io/partner/app/${this.appId}/v3/message`,
+        url,
         new URLSearchParams({ message: JSON.stringify(body) }).toString(),
         {
           headers: {
@@ -558,7 +560,7 @@ export class GupshupV3Service {
     // Gupshup provides a proxy or you fetch directly from Meta Graph API
     try {
       const res = await axios.get(
-        `https://api.gupshup.io/partner/app/${this.appId}/v3/media/${mediaId}`,
+        `https://partner.gupshup.io/partner/app/${this.appId}/v3/media/${mediaId}`,
         {
           headers: { 'Authorization': `Bearer ${this.bearerToken}` },
         },
