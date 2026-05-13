@@ -1012,70 +1012,75 @@ async function recordConversationMessage(params: {
 }
 
 async function listInsuranceOptions(branchId: string, serviceType: 'CONSULTA' | 'EXAME') {
-  const procedures = await prisma.procedure.findMany({
+  // Insurances that have at least one active procedure of the given serviceType linked
+  const linkedInsurances = await prisma.insurance.findMany({
     where: {
-      branchId,
       isActive: true,
-      appointmentType: { equals: serviceType, mode: 'insensitive' },
+      AND: [{ OR: [{ branchId }, { branchId: null }, { branchId: '' }] }],
+      insuranceProcedures: {
+        some: {
+          isActive: true,
+          procedure: { branchId, isActive: true, appointmentType: { equals: serviceType, mode: 'insensitive' } },
+        },
+      },
     },
-    select: {
-      acceptedInsurances: true,
-    },
+    select: { name: true },
+    orderBy: { name: 'asc' },
   });
 
-  const fromProcedures = Array.from(new Set(
-    procedures
-      .flatMap((item: any) => Array.isArray(item?.acceptedInsurances) ? item.acceptedInsurances : [])
-      .map((item: any) => String(item || '').trim())
-      .filter(Boolean),
-  ));
-
-  const insuranceNames = fromProcedures.length > 0
-    ? fromProcedures
+  const insuranceNames = linkedInsurances.length > 0
+    ? linkedInsurances.map((i: any) => String(i.name || '').trim()).filter(Boolean)
     : (await prisma.insurance.findMany({
-      where: { branchId, isActive: true },
+      where: { AND: [{ OR: [{ branchId }, { branchId: null }, { branchId: '' }] }], isActive: true },
       select: { name: true },
       orderBy: { name: 'asc' },
     })).map((item: any) => String(item.name || '').trim()).filter(Boolean);
 
   return insuranceNames
-    .sort((a: string, b: string) => a.localeCompare(b, 'pt-BR'))
     .map((name: string) => ({ value: name, label: name }))
     .concat({ value: '__HANDOFF__', label: 'Não encontrei o meu convênio' });
 }
 
 async function listProcedureOptions(branchId: string, serviceType: 'CONSULTA' | 'EXAME', insurance: string) {
   const normalizedInsurance = normalizeText(insurance);
+
+  if (normalizedInsurance) {
+    // Find procedures linked to the matched insurance
+    const insuranceRecord = await prisma.insurance.findFirst({
+      where: {
+        isActive: true,
+        AND: [{ OR: [{ branchId }, { branchId: null }, { branchId: '' }] }],
+        name: { equals: insurance, mode: 'insensitive' },
+      },
+      select: { id: true },
+    });
+
+    if (insuranceRecord) {
+      const links = await prisma.insuranceProcedure.findMany({
+        where: {
+          insuranceId: insuranceRecord.id,
+          isActive: true,
+          procedure: { branchId, isActive: true, appointmentType: { equals: serviceType, mode: 'insensitive' } },
+        },
+        select: { procedure: { select: { id: true, name: true } } },
+        orderBy: { procedure: { name: 'asc' } },
+      });
+
+      return links
+        .map((l: any) => ({ value: String(l.procedure.id), label: String(l.procedure.name) }))
+        .concat({ value: '__HANDOFF__', label: 'Não encontrei o meu procedimento' });
+    }
+  }
+
+  // Fallback: list all active procedures of the service type
   const procedures = await prisma.procedure.findMany({
-    where: {
-      branchId,
-      isActive: true,
-      appointmentType: { equals: serviceType, mode: 'insensitive' },
-    },
-    select: {
-      id: true,
-      name: true,
-      acceptsInsurance: true,
-      acceptedInsurances: true,
-    },
+    where: { branchId, isActive: true, appointmentType: { equals: serviceType, mode: 'insensitive' } },
+    select: { id: true, name: true },
     orderBy: { name: 'asc' },
   });
 
-  const filtered = procedures.filter((procedure: any) => {
-    if (!normalizedInsurance) return true;
-    const accepted = Array.isArray(procedure?.acceptedInsurances)
-      ? procedure.acceptedInsurances.map((item: any) => normalizeText(item))
-      : [];
-
-    if (accepted.length > 0) return accepted.includes(normalizedInsurance);
-    return Boolean(procedure?.acceptsInsurance);
-  });
-
-  return filtered
-    .map((procedure: any) => ({
-      value: String(procedure.id),
-      label: String(procedure.name),
-    }))
+  return procedures
+    .map((p: any) => ({ value: String(p.id), label: String(p.name) }))
     .concat({ value: '__HANDOFF__', label: 'Não encontrei o meu procedimento' });
 }
 
@@ -1108,7 +1113,7 @@ async function findPrivateProcedureMatch(params: {
       branchId: params.branchId,
       isActive: true,
       appointmentType: { equals: params.serviceType, mode: 'insensitive' },
-      acceptsInsurance: false,
+      insurances: { none: { isActive: true } },
     },
     select: {
       id: true,

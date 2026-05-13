@@ -117,6 +117,15 @@ export default async function insuranceRoutes(app: FastifyInstance) {
           where: { isActive: true },
           orderBy: { name: "asc" },
         },
+        insuranceProcedures: {
+          orderBy: { procedure: { name: "asc" } },
+          include: {
+            procedure: {
+              select: { id: true, name: true, tussCode: true, tussTableCode: true, appointmentType: true },
+            },
+            subInsurance: { select: { id: true, name: true } },
+          },
+        },
       },
     });
     if (!item) return reply.code(404).send({ error: "Insurance not found" });

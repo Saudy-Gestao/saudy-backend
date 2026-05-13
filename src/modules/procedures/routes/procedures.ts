@@ -136,7 +136,6 @@ export default async function procedureRoutes(app: FastifyInstance) {
         type: "object",
         properties: {
           search: { type: "string" },
-          acceptsInsurance: { type: "boolean" },
           isActive: { type: "boolean" },
           doctorId: { type: "string" },
           limit: { type: "number", default: 50 },
@@ -148,10 +147,9 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const branchId = await getLoggedBranchId(request);
     if (!branchId) return (reply as any).code(403).send({ error: "User not associated with a branch" });
 
-    const { search, acceptsInsurance, isActive, doctorId, limit = 50, offset = 0 } = request.query as any;
+    const { search, isActive, doctorId, limit = 50, offset = 0 } = request.query as any;
 
     const where: any = { branchId };
-    if (acceptsInsurance !== undefined) where.acceptsInsurance = acceptsInsurance;
     if (isActive !== undefined) where.isActive = isActive;
     if (doctorId) where.doctors = { some: { doctorId } };
     if (search) {
@@ -255,8 +253,6 @@ export default async function procedureRoutes(app: FastifyInstance) {
           durationMinutes: { type: "number" },
           tussCode: { type: "string" },
           tussTableCode: { type: "string" },
-          acceptsInsurance: { type: "boolean" },
-          acceptedInsurances: { type: "array", items: { type: "string" } },
           modalities: { type: "array", items: { type: "string" } },
           doctorIds: { type: "array", items: { type: "string" } },
           doctors: {
@@ -328,9 +324,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const procedureMaterials = normalizeProcedureMaterials(data) || [];
     const procedureMaterialKits = normalizeProcedureMaterialKits(data) || [];
     const procedureKitBindings = normalizeProcedureKitBindings(data) || [];
-    const acceptedInsurances = normalizeStringArray(data.acceptedInsurances) || [];
     const modalities = normalizeStringArray(data.modalities) || [];
-    const acceptsInsurance = Boolean(data.acceptsInsurance);
     const appointmentType = normalizeProcedureAppointmentType(data.appointmentType);
 
     try {
@@ -346,8 +340,6 @@ export default async function procedureRoutes(app: FastifyInstance) {
             : null,
           tussCode: data.tussCode !== undefined ? normalizeDigitsCode(data.tussCode) : null,
           tussTableCode: data.tussTableCode !== undefined ? normalizeDigitsCode(data.tussTableCode) : null,
-          acceptsInsurance,
-          acceptedInsurances: acceptsInsurance ? acceptedInsurances : [],
           modalities,
           doctors: doctorLinks.length
             ? {
@@ -471,15 +463,10 @@ export default async function procedureRoutes(app: FastifyInstance) {
       if (data.tussTableCode !== undefined) {
         updateData.tussTableCode = normalizeDigitsCode(data.tussTableCode);
       }
-      if (data.acceptsInsurance !== undefined) updateData.acceptsInsurance = Boolean(data.acceptsInsurance);
       if (data.isActive !== undefined) updateData.isActive = Boolean(data.isActive);
 
-      const acceptedInsurances = normalizeStringArray(data.acceptedInsurances);
       const modalities = normalizeStringArray(data.modalities);
-
       if (modalities !== undefined) updateData.modalities = modalities;
-      if (acceptedInsurances !== undefined) updateData.acceptedInsurances = acceptedInsurances;
-      if (data.acceptsInsurance === false) updateData.acceptedInsurances = [];
 
       const actions: any[] = [
         prisma.procedure.update({ where: { id }, data: { ...updateData, branchId } }),

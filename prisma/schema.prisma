@@ -1408,8 +1408,6 @@ model Procedure {
     appointmentType    String            @default("CONSULTA")
     price              Decimal?          @db.Decimal(10, 2)
     durationMinutes    Int?
-    acceptsInsurance   Boolean           @default(false)
-    acceptedInsurances String[]          @default([])
     modalities         String[]          @default([])
     tussCode           String?
     tussTableCode      String?
@@ -1424,6 +1422,7 @@ model Procedure {
     materialKits       ProcedureMaterialKit[]
     kitBindings        ProcedureKitBinding[]
     equipmentLinks     MedicalEquipmentProcedure[]
+    insurances         InsuranceProcedure[]
 
     @@index([branchId])
     @@map("procedures")
@@ -1750,7 +1749,8 @@ model Insurance {
     isActive    Boolean  @default(true)
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt
-    subInsurances SubInsurance[]
+    subInsurances      SubInsurance[]
+    insuranceProcedures InsuranceProcedure[]
 
     @@index([branchId])
     @@map("insurances")
@@ -1766,10 +1766,32 @@ model SubInsurance {
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt
 
+    insuranceProcedures InsuranceProcedure[]
+
     @@unique([insuranceId, name])
     @@index([branchId])
     @@index([insuranceId])
     @@map("sub_insurances")
+}
+
+model InsuranceProcedure {
+    id             String    @id @default(uuid())
+    insuranceId    String
+    subInsuranceId String?
+    procedureId    String
+    price          Decimal?  @db.Decimal(10, 2)
+    isActive       Boolean   @default(true)
+    createdAt      DateTime  @default(now())
+    updatedAt      DateTime  @updatedAt
+
+    insurance    Insurance    @relation(fields: [insuranceId], references: [id], onDelete: Cascade)
+    subInsurance SubInsurance? @relation(fields: [subInsuranceId], references: [id], onDelete: Cascade)
+    procedure    Procedure    @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+
+    @@unique([insuranceId, subInsuranceId, procedureId])
+    @@index([insuranceId])
+    @@index([procedureId])
+    @@map("insurance_procedures")
 }
 
 model FacialLog {

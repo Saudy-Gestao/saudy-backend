@@ -2557,7 +2557,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         where: { branchId, isActive: true, doctors: { some: {} } },
         select: {
           id: true, name: true, description: true, appointmentType: true,
-          durationMinutes: true, acceptsInsurance: true, modalities: true,
+          durationMinutes: true, modalities: true,
         },
         orderBy: { name: 'asc' },
       }),
