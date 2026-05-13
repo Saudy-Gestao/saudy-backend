@@ -1015,10 +1015,10 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     }
 
     const [items, total] = await Promise.all([
-      prisma.appointment.findMany({ 
-        where, 
-        take: limit, 
-        skip: offset, 
+      prisma.appointment.findMany({
+        where,
+        take: limit,
+        skip: offset,
         orderBy: [
           { date: 'asc' },
           { time: 'asc' },

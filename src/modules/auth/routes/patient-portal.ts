@@ -349,6 +349,8 @@ const getPatientFromPayload = async (payload: PatientPortalPayload) => {
       phone: true,
       createdAt: true,
       isActive: true,
+      hasHealthInsurance: true,
+      healthInsuranceName: true,
     },
   });
 };
@@ -2084,6 +2086,149 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     return reply.send(pdf);
   });
 
+  // ── DICOM helper: find worklist item owned by patient ──────────────────────
+  async function getPatientWorklistItem(patient: any, reportId: string) {
+    const report = await prisma.report.findFirst({
+      where: {
+        id: reportId,
+        isActive: true,
+        ...(patient.branchId ? { branchId: patient.branchId } : {}),
+        OR: [
+          { cpf: patient.cpf },
+          { appointment: { is: { patientId: patient.id } } },
+          { appointment: { is: { patientCpf: patient.cpf } } },
+        ],
+      },
+      select: {
+        id: true,
+        status: true,
+        worklistItem: { select: { id: true, dicomStudyUid: true } },
+      },
+    });
+    return report;
+  }
+
+  app.get('/patient-portal/me/reports/:reportId/dicom/series', {
+    schema: {
+      summary: 'List DICOM series for a patient report',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+      params: { type: 'object', properties: { reportId: { type: 'string' } }, required: ['reportId'] },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { reportId } = request.params as { reportId: string };
+    const report = await getPatientWorklistItem(patient, reportId);
+    if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
+    if (!isVisibleToPatientReport(report.status)) return reply.code(403).send({ error: 'Laudo não disponível' });
+    if (!report.worklistItem) return reply.code(404).send({ error: 'Sem imagens DICOM para este laudo' });
+
+    const files = await prisma.dicomFile.findMany({
+      where: { worklistItemId: report.worklistItem.id },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, seriesUid: true, instanceId: true },
+    });
+
+    const bySeries = new Map<string, { seriesUid: string | null; instancesCount: number }>();
+    for (const f of files) {
+      const k = f.seriesUid || '__no_series__';
+      if (!bySeries.has(k)) bySeries.set(k, { seriesUid: f.seriesUid, instancesCount: 0 });
+      bySeries.get(k)!.instancesCount++;
+    }
+
+    return {
+      reportId,
+      worklistItemId: report.worklistItem.id,
+      series: Array.from(bySeries.values()),
+      totalInstances: files.length,
+    };
+  });
+
+  app.get('/patient-portal/me/reports/:reportId/dicom/files', {
+    schema: {
+      summary: 'List DICOM files for a patient report (optionally filtered by series)',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+      params: { type: 'object', properties: { reportId: { type: 'string' } }, required: ['reportId'] },
+      querystring: { type: 'object', properties: { seriesUid: { type: 'string' } } },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { reportId } = request.params as { reportId: string };
+    const { seriesUid } = request.query as { seriesUid?: string };
+    const report = await getPatientWorklistItem(patient, reportId);
+    if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
+    if (!isVisibleToPatientReport(report.status)) return reply.code(403).send({ error: 'Laudo não disponível' });
+    if (!report.worklistItem) return reply.code(404).send({ error: 'Sem imagens DICOM para este laudo' });
+
+    const resolvedSeries = seriesUid === '__NO_SERIES__' ? null : (seriesUid ?? undefined);
+    const where: any = { worklistItemId: report.worklistItem.id };
+    if (resolvedSeries !== undefined) where.seriesUid = resolvedSeries;
+
+    const files = await prisma.dicomFile.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, seriesUid: true, instanceId: true },
+    });
+
+    return {
+      files: files.map((f: any) => ({
+        id: f.id,
+        seriesUid: f.seriesUid,
+        instanceId: f.instanceId,
+        url: `/auth/patient-portal/me/reports/${reportId}/dicom/images/${f.id}`,
+      })),
+    };
+  });
+
+  app.get('/patient-portal/me/reports/:reportId/dicom/images/:fileId', {
+    schema: {
+      summary: 'Stream a DICOM image file for a patient report',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+      params: {
+        type: 'object',
+        properties: { reportId: { type: 'string' }, fileId: { type: 'string' } },
+        required: ['reportId', 'fileId'],
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { reportId, fileId } = request.params as { reportId: string; fileId: string };
+    const report = await getPatientWorklistItem(patient, reportId);
+    if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
+    if (!isVisibleToPatientReport(report.status)) return reply.code(403).send({ error: 'Laudo não disponível' });
+    if (!report.worklistItem) return reply.code(404).send({ error: 'Sem imagens DICOM' });
+
+    const dicomFile = await prisma.dicomFile.findFirst({
+      where: { id: fileId, worklistItemId: report.worklistItem.id },
+    });
+    if (!dicomFile) return reply.code(404).send({ error: 'Arquivo DICOM não encontrado' });
+
+    const { getDicomStreamFromGcs } = await import('../../../modules/dicom/gcs');
+    let stream;
+    try {
+      stream = getDicomStreamFromGcs((dicomFile as any).path);
+    } catch (err: any) {
+      return reply.code(404).send({ error: 'Arquivo não encontrado no armazenamento' });
+    }
+    reply.header('Content-Type', 'application/dicom');
+    reply.header('Cache-Control', 'private, max-age=3600');
+    return reply.send(stream);
+  });
+
   app.get('/patient-portal/me/delivery-requests', {
     schema: {
       summary: 'List patient physical delivery requests',
@@ -2219,6 +2364,502 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         status: delivery.status,
         availableAt: delivery.availableAt,
       },
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Self-scheduling endpoints
+  // ---------------------------------------------------------------------------
+
+  function parseTimeToMinutes(value?: string | null): number | null {
+    const parts = String(value || '').trim().split(':');
+    if (parts.length < 2) return null;
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 60 + m;
+  }
+
+  function minutesToTimeStr(value: number): string {
+    const h = String(Math.floor(value / 60)).padStart(2, '0');
+    const m = String(value % 60).padStart(2, '0');
+    return `${h}:${m}`;
+  }
+
+  function slotRangesOverlap(
+    startA?: string | null, durationA?: number | null,
+    startB?: string | null, durationB?: number | null,
+  ): boolean {
+    const a = parseTimeToMinutes(startA);
+    const b = parseTimeToMinutes(startB);
+    if (a === null || b === null) return false;
+    const da = Number.isFinite(durationA) && Number(durationA) > 0 ? Number(durationA) : 30;
+    const db = Number.isFinite(durationB) && Number(durationB) > 0 ? Number(durationB) : 30;
+    return a < b + db && b < a + da;
+  }
+
+  const SELF_SCHED_BLOCKED_STATUSES = new Set([
+    'CANCELADO', 'CANCELED', 'NAO_COMPARECEU', 'NÃO_COMPARECEU',
+    'NO_SHOW', 'NO-SHOW', 'AUSENTE', 'FALTOU', 'REALIZADO', 'COMPLETED',
+    'FINALIZADO', 'ATENDIDO', 'CONCLUIDO',
+  ]);
+
+  async function getSelfSchedDoctorConflicts(branchId: string, doctorName: string, date: string) {
+    return prisma.appointment.findMany({
+      where: {
+        branchId,
+        doctorName,
+        date,
+        isActive: true,
+        NOT: Array.from(SELF_SCHED_BLOCKED_STATUSES).map((s) => ({ status: s })),
+      },
+      select: { time: true, durationMinutes: true },
+    });
+  }
+
+  async function getSelfSchedPatientConflicts(branchId: string, patientId: string, patientCpf: string, date: string) {
+    return prisma.appointment.findMany({
+      where: {
+        branchId,
+        date,
+        isActive: true,
+        OR: [
+          { patientId },
+          { patientCpf: { contains: normalizeCpf(patientCpf) } },
+        ],
+        NOT: Array.from(SELF_SCHED_BLOCKED_STATUSES).map((s) => ({ status: s })),
+      },
+      select: { time: true, durationMinutes: true },
+    });
+  }
+
+  function generateSlotsForDay(workingHoursStart: string, workingHoursEnd: string, durationMinutes: number): string[] {
+    const start = parseTimeToMinutes(workingHoursStart);
+    const end = parseTimeToMinutes(workingHoursEnd);
+    if (start === null || end === null) return [];
+    const slots: string[] = [];
+    for (let t = start; t + durationMinutes <= end; t += durationMinutes) {
+      slots.push(minutesToTimeStr(t));
+    }
+    return slots;
+  }
+
+  const WEEKDAY_MAP: Record<string, number> = {
+    domingo: 0, sunday: 0,
+    segunda: 1, monday: 1,
+    terca: 2, 'terça': 2, tuesday: 2,
+    quarta: 3, wednesday: 3,
+    quinta: 4, thursday: 4,
+    sexta: 5, friday: 5,
+    sabado: 6, 'sábado': 6, saturday: 6,
+  };
+
+  function doctorWorksOnDate(doctor: any, dateStr: string): boolean {
+    const date = new Date(`${dateStr}T12:00:00Z`);
+    const dayOfWeek = date.getUTCDay();
+
+    // Check workingSchedules JSON first (per-schedule overrides)
+    try {
+      const schedules = JSON.parse(String(doctor.workingSchedules || '[]'));
+      if (Array.isArray(schedules) && schedules.length > 0) {
+        return schedules.some((sched: any) => {
+          const days: string[] = Array.isArray(sched.days) ? sched.days : [];
+          return days.some((d: string) => WEEKDAY_MAP[String(d).toLowerCase()] === dayOfWeek);
+        });
+      }
+    } catch {
+      // fall through to workingDays
+    }
+
+    const workingDays: string[] = Array.isArray(doctor.workingDays) ? doctor.workingDays : [];
+    return workingDays.some((d: string) => WEEKDAY_MAP[String(d).toLowerCase()] === dayOfWeek);
+  }
+
+  app.get('/patient-portal/scheduling/branches', {
+    schema: {
+      summary: 'List branches available for self-scheduling',
+      tags: ['PatientPortal'],
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    // Determine company from the patient's branch (or from any branch associated with this CPF)
+    let companyId: string | null = null;
+    if (patient.branchId) {
+      const branch = await prisma.branch.findUnique({ where: { id: patient.branchId }, select: { companyId: true } });
+      companyId = branch?.companyId || null;
+    }
+
+    // Fallback: find company via patient CPF across any branch
+    if (!companyId) {
+      const anyPatient = await prisma.patient.findFirst({
+        where: { cpf: patient.cpf, branchId: { not: null } },
+        select: { branchId: true },
+      });
+      if (anyPatient?.branchId) {
+        const fallbackBranch = await prisma.branch.findUnique({ where: { id: anyPatient.branchId }, select: { companyId: true } });
+        companyId = fallbackBranch?.companyId || null;
+      }
+    }
+
+    if (!companyId) {
+      return { branches: [], defaultBranchId: null };
+    }
+
+    // Find branch IDs that have at least one active procedure with a doctor linked
+    const proceduresWithDoctors = await prisma.procedure.findMany({
+      where: { isActive: true, branchId: { not: null }, doctors: { some: {} } },
+      select: { branchId: true },
+      distinct: ['branchId'],
+    });
+    const eligibleBranchIds = proceduresWithDoctors.map((p: any) => p.branchId as string);
+
+    const branches = await prisma.branch.findMany({
+      where: { companyId, id: { in: eligibleBranchIds } },
+      select: { id: true, tradeName: true, address: true },
+      orderBy: { tradeName: 'asc' },
+    });
+
+    return {
+      branches,
+      defaultBranchId: patient.branchId || (branches.length === 1 ? branches[0].id : null),
+    };
+  });
+
+  app.get('/patient-portal/scheduling/procedures', {
+    schema: {
+      summary: 'List available procedures for self-scheduling',
+      tags: ['PatientPortal'],
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: { branchId: { type: 'string' } },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { branchId: selectedBranchId } = request.query as { branchId?: string };
+    const branchId = selectedBranchId || patient.branchId;
+    if (!branchId) return reply.code(400).send({ error: 'Paciente sem unidade associada' });
+
+    const [procedures, branch] = await Promise.all([
+      prisma.procedure.findMany({
+        where: { branchId, isActive: true, doctors: { some: {} } },
+        select: {
+          id: true, name: true, description: true, appointmentType: true,
+          durationMinutes: true, acceptsInsurance: true, modalities: true,
+        },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.branch.findUnique({ where: { id: branchId }, select: { tradeName: true, address: true } }),
+    ]);
+
+    return { procedures, branch: branch ? { name: branch.tradeName, address: branch.address } : null };
+  });
+
+  app.get('/patient-portal/scheduling/doctors', {
+    schema: {
+      summary: 'List doctors available for self-scheduling by procedure',
+      tags: ['PatientPortal'],
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: { procedureId: { type: 'string' }, branchId: { type: 'string' } },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { procedureId, branchId: selectedBranchId } = request.query as { procedureId?: string; branchId?: string };
+    const branchId = selectedBranchId || patient.branchId;
+    if (!branchId) return reply.code(400).send({ error: 'Paciente sem unidade associada' });
+
+    const where: any = { branchId, isActive: true };
+    if (procedureId) {
+      const links = await prisma.procedureDoctor.findMany({
+        where: { procedureId },
+        select: { doctorId: true },
+      });
+      const doctorIds = links.map((l: any) => String(l.doctorId));
+      if (doctorIds.length === 0) return { doctors: [] };
+      where.id = { in: doctorIds };
+    }
+
+    const doctors = await prisma.doctor.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        specialty: true,
+        crm: true,
+        crmState: true,
+        workingDays: true,
+        workingHoursStart: true,
+        workingHoursEnd: true,
+        workingSchedules: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return {
+      doctors: doctors.map((d: any) => ({
+        id: d.id,
+        name: d.name,
+        specialty: d.specialty,
+        crm: `${d.crm}-${d.crmState}`,
+      })),
+    };
+  });
+
+  app.get('/patient-portal/scheduling/available-slots', {
+    schema: {
+      summary: 'Get available scheduling slots for a doctor',
+      tags: ['PatientPortal'],
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: {
+          doctorName: { type: 'string' },
+          procedureId: { type: 'string' },
+          branchId: { type: 'string' },
+        },
+        required: ['doctorName'],
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const { doctorName, procedureId, branchId: selectedBranchId } = request.query as {
+      doctorName: string;
+      procedureId?: string;
+      branchId?: string;
+    };
+    const branchId = selectedBranchId || patient.branchId;
+    if (!branchId) return reply.code(400).send({ error: 'Paciente sem unidade associada' });
+
+    // Resolve duration from procedure if provided
+    let slotDurationFromProcedure = 30;
+    if (procedureId) {
+      const proc = await prisma.procedure.findFirst({
+        where: { id: procedureId, branchId, isActive: true },
+        select: { durationMinutes: true },
+      });
+      if (proc?.durationMinutes) slotDurationFromProcedure = proc.durationMinutes;
+    }
+
+    const doctor = await prisma.doctor.findFirst({
+      where: { branchId, isActive: true, name: doctorName },
+      select: {
+        workingDays: true,
+        workingHoursStart: true,
+        workingHoursEnd: true,
+        workingSchedules: true,
+      },
+    });
+
+    if (!doctor) return reply.code(404).send({ error: 'Profissional não encontrado' });
+
+    const slotDuration = slotDurationFromProcedure;
+
+    const workStart = doctor.workingHoursStart || '08:00';
+    const workEnd = doctor.workingHoursEnd || '18:00';
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    type SlotsByDate = { date: string; slots: string[] };
+    const result: SlotsByDate[] = [];
+
+    for (let i = 1; i <= 30 && result.length < 14; i++) {
+      const d = new Date(today);
+      d.setUTCDate(today.getUTCDate() + i);
+      const dateStr = d.toISOString().slice(0, 10);
+
+      if (!doctorWorksOnDate(doctor, dateStr)) continue;
+
+      const allSlots = generateSlotsForDay(workStart, workEnd, slotDuration);
+      if (allSlots.length === 0) continue;
+
+      const [doctorConflicts, patientConflicts] = await Promise.all([
+        getSelfSchedDoctorConflicts(branchId, doctorName, dateStr),
+        getSelfSchedPatientConflicts(branchId, patient.id, patient.cpf, dateStr),
+      ]);
+
+      const available = allSlots.filter((slot) => {
+        const blockedByDoctor = doctorConflicts.some((c: any) =>
+          slotRangesOverlap(slot, slotDuration, c.time, c.durationMinutes),
+        );
+        const blockedByPatient = patientConflicts.some((c: any) =>
+          slotRangesOverlap(slot, slotDuration, c.time, c.durationMinutes),
+        );
+        return !blockedByDoctor && !blockedByPatient;
+      });
+
+      if (available.length > 0) {
+        result.push({ date: dateStr, slots: available });
+      }
+    }
+
+    return { availableSlots: result, slotDurationMinutes: slotDuration };
+  });
+
+  app.post('/patient-portal/scheduling/appointments', {
+    schema: {
+      summary: 'Self-schedule an appointment from the patient portal',
+      tags: ['PatientPortal'],
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        properties: {
+          procedureId: { type: 'string' },
+          doctorName: { type: 'string' },
+          date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+          time: { type: 'string', pattern: '^\\d{2}:\\d{2}$' },
+          modalidadeAtendimento: { type: 'string', enum: ['Presencial', 'Teleconsulta'] },
+          observations: { type: 'string' },
+          branchId: { type: 'string' },
+        },
+        required: ['procedureId', 'doctorName', 'date', 'time'],
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    const body = request.body as {
+      procedureId: string;
+      doctorName: string;
+      date: string;
+      time: string;
+      modalidadeAtendimento?: 'Presencial' | 'Teleconsulta';
+      observations?: string;
+      branchId?: string;
+    };
+
+    const branchId = body.branchId || patient.branchId;
+    if (!branchId) return reply.code(400).send({ error: 'Paciente sem unidade associada' });
+
+    const procedure = await prisma.procedure.findFirst({
+      where: { id: body.procedureId, branchId, isActive: true },
+      select: { id: true, name: true, appointmentType: true, durationMinutes: true },
+    });
+    if (!procedure) return reply.code(404).send({ error: 'Procedimento não encontrado' });
+
+    const normalizedDate = normalizeDateInput(body.date);
+    if (!normalizedDate) return reply.code(400).send({ error: 'Data inválida' });
+
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const appointmentDate = new Date(`${normalizedDate}T00:00:00Z`);
+    if (appointmentDate <= today) {
+      return reply.code(400).send({ error: 'A data do agendamento deve ser futura' });
+    }
+
+    const slotDuration = procedure.durationMinutes || 30;
+
+    // Re-validate slot availability at creation time
+    const [doctorConflicts, patientConflicts] = await Promise.all([
+      getSelfSchedDoctorConflicts(branchId, body.doctorName, normalizedDate),
+      getSelfSchedPatientConflicts(branchId, patient.id, patient.cpf, normalizedDate),
+    ]);
+
+    const doctorBlocked = doctorConflicts.some((c: any) =>
+      slotRangesOverlap(body.time, slotDuration, c.time, c.durationMinutes),
+    );
+    if (doctorBlocked) {
+      return reply.code(409).send({
+        error: 'Scheduling conflict',
+        conflictType: 'DOCTOR',
+        message: 'O profissional já possui outro agendamento nesse horário. Por favor, escolha outro horário.',
+      });
+    }
+
+    const patientBlocked = patientConflicts.some((c: any) =>
+      slotRangesOverlap(body.time, slotDuration, c.time, c.durationMinutes),
+    );
+    if (patientBlocked) {
+      return reply.code(409).send({
+        error: 'Scheduling conflict',
+        conflictType: 'PATIENT',
+        message: 'Você já possui outro agendamento nesse horário. Por favor, escolha outro horário.',
+      });
+    }
+
+    const convenio = (patient as any).hasHealthInsurance ? ((patient as any).healthInsuranceName || null) : null;
+
+    // Build observations: prepend teleconsultation marker if needed (same pattern used by main scheduling module)
+    const TELE_MARKER = '[MODALIDADE: TELECONSULTA]';
+    let observations: string | null = null;
+    if (body.modalidadeAtendimento === 'Teleconsulta') {
+      observations = body.observations ? `${TELE_MARKER}\n${body.observations}` : TELE_MARKER;
+    } else {
+      observations = body.observations || null;
+    }
+
+    const branch = await prisma.branch.findUnique({ where: { id: branchId }, select: { tradeName: true, address: true } });
+
+    const created = await prisma.appointment.create({
+      data: {
+        branchId,
+        patientId: patient.id,
+        patientName: patient.name,
+        patientCpf: patient.cpf,
+        doctorName: body.doctorName,
+        specialty: procedure.name,
+        sourceProcedureId: procedure.id,
+        date: normalizedDate,
+        time: body.time,
+        durationMinutes: slotDuration,
+        type: procedure.appointmentType || 'CONSULTA',
+        status: 'CONFIRMADO',
+        convenio,
+        observations,
+        authorizationStatus: 'PENDING',
+        accessionNumber: `PP-${Date.now()}`,
+      },
+    });
+
+    // Send WhatsApp notification
+    try {
+      const { publishAppointmentCreatedEvent } = await import('../../care/lib/appointment-whatsapp-events');
+      publishAppointmentCreatedEvent({ branchId, appointmentId: created.id });
+    } catch (err) {
+      request.log.warn({ err }, 'Failed to publish WhatsApp appointment event');
+    }
+
+    return reply.code(201).send({
+      id: created.id,
+      date: created.date,
+      time: created.time,
+      specialty: created.specialty,
+      doctorName: created.doctorName,
+      status: created.status,
+      type: created.type,
+      durationMinutes: created.durationMinutes,
+      createdAt: created.createdAt,
+      branchName: branch?.tradeName || null,
+      branchAddress: branch?.address || null,
     });
   });
 }
