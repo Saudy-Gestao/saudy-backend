@@ -112,11 +112,11 @@ export default async function accessRoutes(app: FastifyInstance) {
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object' },
-      response: { 
-        200: { type: 'object' }, 
+      response: {
+        200: { type: 'object' },
         400: { type: 'object', properties: { error: { type: 'string' } } },
         403: { type: 'object' },
-        404: { type: 'object' } 
+        404: { type: 'object' }
       },
     },
   }, async (request, reply) => {
@@ -125,6 +125,13 @@ export default async function accessRoutes(app: FastifyInstance) {
       description?: string;
       moduleIds?: string[];
     };
+
+    const existingAccess = await prisma.access.findUnique({ where: { id } });
+    if (existingAccess?.isTemplate) {
+      reply.code(403).send({ error: 'Default access templates cannot be modified' });
+      return;
+    }
+
     const moduleType = await getRequestCompanyModuleType((request.user as any).id as string);
 
     // Validation: If moduleIds is provided, must not be empty
@@ -185,10 +192,17 @@ export default async function accessRoutes(app: FastifyInstance) {
       tags: ['Accesses'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
+
+    const existingAccess = await prisma.access.findUnique({ where: { id } });
+    if (existingAccess?.isTemplate) {
+      reply.code(403).send({ error: 'Default access templates cannot be deleted' });
+      return;
+    }
+
     try {
       await prisma.access.delete({
         where: { id },
