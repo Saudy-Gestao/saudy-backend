@@ -76,6 +76,7 @@ export default async function insuranceProcedureRoutes(app: FastifyInstance) {
           procedureId: { type: "string" },
           subInsuranceId: { type: "string" },
           price: { type: ["number", "string", "null"] },
+          authorizationDays: { type: ["number", "null"] },
           isActive: { type: "boolean" },
         },
       },
@@ -99,6 +100,7 @@ export default async function insuranceProcedureRoutes(app: FastifyInstance) {
           procedureId: data.procedureId,
           subInsuranceId: data.subInsuranceId || null,
           price: data.price != null ? data.price : null,
+          authorizationDays: data.authorizationDays != null ? Number(data.authorizationDays) : null,
           isActive: data.isActive ?? true,
         },
         include: {
@@ -146,6 +148,7 @@ export default async function insuranceProcedureRoutes(app: FastifyInstance) {
 
     const updateData: any = {};
     if (data.price !== undefined) updateData.price = data.price != null ? data.price : null;
+    if (data.authorizationDays !== undefined) updateData.authorizationDays = data.authorizationDays != null ? Number(data.authorizationDays) : null;
     if (data.isActive !== undefined) updateData.isActive = Boolean(data.isActive);
     if (data.subInsuranceId !== undefined) updateData.subInsuranceId = data.subInsuranceId || null;
 

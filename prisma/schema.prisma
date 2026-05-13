@@ -1779,8 +1779,9 @@ model InsuranceProcedure {
     insuranceId    String
     subInsuranceId String?
     procedureId    String
-    price          Decimal?  @db.Decimal(10, 2)
-    isActive       Boolean   @default(true)
+    price              Decimal?  @db.Decimal(10, 2)
+    authorizationDays  Int?
+    isActive           Boolean   @default(true)
     createdAt      DateTime  @default(now())
     updatedAt      DateTime  @updatedAt
 
