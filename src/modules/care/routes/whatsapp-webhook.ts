@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
-import { createMessagingService } from '../lib/gupshup';
+import { createMessagingService } from '../lib/messaging';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 

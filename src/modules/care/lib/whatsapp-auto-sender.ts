@@ -1,6 +1,6 @@
 ﻿import { randomBytes } from 'crypto';
 import prisma from './prisma';
-import { createMessagingService } from './gupshup';
+import { createMessagingService } from './messaging';
 import WhatsAppMessageBuilder, { AppointmentData } from './whatsapp-message-builder';
 import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 

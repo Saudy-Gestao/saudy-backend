@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import prisma from './prisma';
 import WhatsAppAutoSender from './whatsapp-auto-sender';
-import { createMessagingService } from './gupshup';
+import { createMessagingService } from './messaging';
 import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-import { createMessagingService, SendMessageResponse } from '../lib/gupshup';
+import { createMessagingService, SendMessageResponse } from '../lib/messaging';
 import WhatsAppMessageBuilder, { AppointmentData } from '../lib/whatsapp-message-builder';
 import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 

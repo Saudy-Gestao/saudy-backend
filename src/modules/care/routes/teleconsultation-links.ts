@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-import { createMessagingService } from '../lib/gupshup';
+import { createMessagingService } from '../lib/messaging';
 import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
 import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 

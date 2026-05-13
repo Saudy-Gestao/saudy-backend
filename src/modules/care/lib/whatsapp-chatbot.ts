@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
-import { GupshupV3Service } from './gupshup';
+import { GupshupV3Service } from './messaging';
 import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 

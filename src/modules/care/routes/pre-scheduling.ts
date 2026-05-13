@@ -3,7 +3,7 @@ import { FastifyInstance } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { getAnexosStorage } from '../../../lib/storage';
-import { createMessagingService } from '../lib/gupshup';
+import { createMessagingService } from '../lib/messaging';
 import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);

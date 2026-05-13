@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import prisma from '../lib/prisma';
-import { createMessagingService } from '../lib/gupshup';
+import { createMessagingService } from '../lib/messaging';
 import { HUMAN_FLOWS } from '../lib/whatsapp-chatbot';
 
 const normalizeOptionalString = (value: unknown) => {
