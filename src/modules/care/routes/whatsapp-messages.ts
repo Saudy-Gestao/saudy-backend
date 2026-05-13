@@ -180,8 +180,8 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         },
       });
 
-      // Enviar mensagem via Gupshup
-      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber, appId: resolvedMessagingConfig?.appId });
+      // Enviar mensagem via Meta Cloud API
+      const messaging = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber, appId: resolvedMessagingConfig?.appId });
 
       // Tenta HSM template se configurado (funciona sem sessão ativa)
       // Se HSM falhar, cai para session text message
@@ -217,7 +217,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
           professional: appointment.doctorName || '',
           documentsLink: '',
         });
-        result = await gupshup.sendTemplateMessage({
+        result = await messaging.sendTemplateMessage({
           to: patientPhone,
           templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
           params: hsmParams,
@@ -228,7 +228,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       }
 
       if ((!result || result.status === 'error') && !data.customMessage && data.messageType === 'APPOINTMENT_CONFIRMATION') {
-        result = await gupshup.sendQuickReplyMessage({
+        result = await messaging.sendQuickReplyMessage({
           to: patientPhone,
           body: message,
           msgId: messageLog.id,
@@ -244,7 +244,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       }
 
       if (!result || result.status === 'error') {
-        result = await gupshup.sendTextMessage({ to: patientPhone, message });
+        result = await messaging.sendTextMessage({ to: patientPhone, message });
       }
 
       // Atualizar log com resultado
@@ -450,7 +450,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
 
       if (!apiKey || !appName || !fromNumber) {
         return reply.code(400).send({
-          error: 'Gupshup não configurado. Configure em Configurações > WhatsApp (filial ou empresa).',
+          error: 'Meta Cloud API não configurada. Configure em Configurações > WhatsApp (filial ou empresa).',
         });
       }
 
@@ -458,9 +458,9 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'WhatsApp está desativado para esta filial' });
       }
 
-      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber, appId: resolvedMessagingConfig?.appId });
+      const messaging = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber, appId: resolvedMessagingConfig?.appId });
 
-      const result = await gupshup.sendTextMessage({
+      const result = await messaging.sendTextMessage({
         to: data.phone,
         message: data.message,
       });
@@ -478,7 +478,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         if (result.error?.includes('401')) {
           hint = ' | Dica: Verifique se a API Key está correta.';
         } else if (result.error?.includes('403') || result.error?.includes('Invalid source')) {
-          hint = ' | Dica: Verifique se o número de origem está aprovado no Gupshup.';
+          hint = ' | Dica: Verifique se o número de origem está aprovado na Meta.';
         } else if (result.error?.includes('Invalid destination') || result.error?.includes('phone number')) {
           hint = ' | Dica: Verifique o formato do número de telefone.';
         } else if (result.error?.includes('RATE_LIMIT')) {
@@ -487,7 +487,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         
         return reply.code(400).send({
           error: errorMessage + hint,
-          gupshupError: result.error,
+          metaError: result.error,
           config: {
             fromNumber: fromNumber ? '***' + fromNumber.slice(-4) : null,
             apiKey: apiKey ? '***' + apiKey.slice(-4) : null,

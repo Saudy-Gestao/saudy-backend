@@ -93,7 +93,7 @@ export class WhatsAppSchedulerJob {
           const branchConfig = await this.getBranchMessagingConfig(conversation.branchId);
           if (!branchConfig) continue;
 
-          const gupshup = createMessagingService({
+          const messaging = createMessagingService({
             accountSid: branchConfig.apiKey,
             authToken: branchConfig.appName,
             fromNumber: branchConfig.sourceNumber,
@@ -102,7 +102,7 @@ export class WhatsAppSchedulerJob {
 
           if (!conversation.humanIdleWarningSentAt && (now - lastOperatorAt.getTime()) >= idleMs) {
             const warningMessage = `Como não tivemos retorno nos últimos ${idleMinutes} minutos, este atendimento será encerrado automaticamente em ${warningMinutes} minutos caso não haja nova mensagem.`;
-            const result = await gupshup.sendTextMessage({
+            const result = await messaging.sendTextMessage({
               to: conversation.phone,
               message: warningMessage,
             });
@@ -137,7 +137,7 @@ export class WhatsAppSchedulerJob {
 
           if (conversation.humanIdleWarningSentAt && (now - conversation.humanIdleWarningSentAt.getTime()) >= warningMs) {
             const closingMessage = 'Seu atendimento foi encerrado automaticamente por inatividade. Se precisar de algo mais, envie uma nova mensagem e o fluxo será iniciado novamente.';
-            const result = await gupshup.sendTextMessage({
+            const result = await messaging.sendTextMessage({
               to: conversation.phone,
               message: closingMessage,
             });

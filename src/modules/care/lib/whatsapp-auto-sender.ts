@@ -413,8 +413,8 @@ export class WhatsAppAutoSender {
         },
       });
 
-      // Enviar mensagem via Gupshup
-      const gupshup = createMessagingService({
+      // Enviar mensagem via Meta Cloud API
+      const messaging = createMessagingService({
         accountSid: apiKey,
         authToken: appName,
         fromNumber: sourceNumber,
@@ -428,7 +428,7 @@ export class WhatsAppAutoSender {
         && (templateRecord?.hsmTemplateId || templateRecord?.hsmTemplateName)
       ) {
         const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, appointmentData);
-        result = await gupshup.sendTemplateMessage({
+        result = await messaging.sendTemplateMessage({
           to: patientPhone,
           templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
           params: hsmParams,
@@ -457,7 +457,7 @@ export class WhatsAppAutoSender {
         && quickReplyOptions
         && !params.requireApprovedTemplate
       ) {
-        result = await gupshup.sendQuickReplyMessage({
+        result = await messaging.sendQuickReplyMessage({
           to: patientPhone,
           body: message,
           msgId: messageLog.id,
@@ -470,7 +470,7 @@ export class WhatsAppAutoSender {
       }
 
       if ((!result || result.status === 'error') && !params.requireApprovedTemplate) {
-        result = await gupshup.sendTextMessage({
+        result = await messaging.sendTextMessage({
           to: patientPhone,
           message,
         });

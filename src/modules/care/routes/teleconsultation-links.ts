@@ -194,7 +194,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   notes?: string;
 }) => {
   const config = await resolveBranchWhatsAppConfig(params.branchId);
-  const gupshup = createMessagingService({ accountSid: config.apiKey, authToken: config.appName, fromNumber: config.sourceNumber, appId: config.appId });
+  const messaging = createMessagingService({ accountSid: config.apiKey, authToken: config.appName, fromNumber: config.sourceNumber, appId: config.appId });
 
   const text = [
     `Olá ${params.patientName}!`,
@@ -234,7 +234,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   }
 
   if (!templateRecord.hsmTemplateApproved || !(templateRecord.hsmTemplateId || templateRecord.hsmTemplateName)) {
-    throw new Error('Template "Link de Teleconsulta" ainda não está aprovado/sincronizado na Gupshup.');
+    throw new Error('Template "Link de Teleconsulta" ainda não está aprovado/sincronizado na Meta.');
   }
 
   const hsmParams = WhatsAppMessageBuilder.extractTemplateParams(templateRecord.message, {
@@ -264,7 +264,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
     },
   });
 
-  const result = await gupshup.sendTemplateMessage({
+  const result = await messaging.sendTemplateMessage({
     to: targetPhone,
     templateId: templateRecord.hsmTemplateId || templateRecord.hsmTemplateName!,
     params: hsmParams,
@@ -291,7 +291,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   });
 
   return {
-    provider: 'gupshup' as const,
+    provider: 'meta' as const,
     mode: 'HSM_TEMPLATE' as const,
     templateName: templateRecord.hsmTemplateName || null,
     templateId: templateRecord.hsmTemplateId || null,
@@ -725,7 +725,7 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       } catch (error: any) {
         whatsappSendError = String(error?.message || 'Não foi possível enviar o link da teleconsulta via WhatsApp.');
         whatsapp = {
-          provider: 'gupshup',
+          provider: 'meta',
           status: 'error',
           error: whatsappSendError,
           to: normalizePhoneForWhatsApp(patientPhone),
@@ -848,7 +848,7 @@ export default async function teleconsultationLinksRoutes(app: FastifyInstance) 
       } catch (error: any) {
         whatsappSendError = String(error?.message || 'Não foi possível enviar o link da teleconsulta via WhatsApp.');
         whatsapp = {
-          provider: 'gupshup',
+          provider: 'meta',
           status: 'error',
           error: whatsappSendError,
           to: normalizePhoneForWhatsApp(patientPhone),

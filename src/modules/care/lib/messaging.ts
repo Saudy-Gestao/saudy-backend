@@ -51,10 +51,10 @@ export interface SendMessageResponse {
 }
 
 /**
- * Gupshup WhatsApp API Integration
+ * Legacy Gupshup WhatsApp API (v1, kept for compatibility)
  * Docs: https://docs.gupshup.io/docs/whatsapp-api-documentation
  */
-export interface GupshupV3Config {
+export interface MetaMessagingConfig {
   bearerToken: string;   // Meta System User access token (EAAxxxx)
   appId: string;         // Meta Phone Number ID (numeric string from Business Manager)
   sourceNumber: string;  // actual WhatsApp number (for reference only)
@@ -390,15 +390,15 @@ export class GupshupService {
 }
 
 /**
- * GupshupV3Service — Meta Cloud API passthrough via Gupshup v3 endpoint.
+ * MetaMessagingService — Meta Cloud API passthrough using Meta Cloud API directly.
  * In v3 mode:
  *   - accountSid = Bearer token (partner token)
- *   - authToken  = Gupshup App ID (UUID)
+ *   - authToken  = unused (legacy)
  */
-export class GupshupV3Service {
+export class MetaMessagingService {
   private bearerToken: string;
   private appId: string;
-  constructor(config: GupshupV3Config) {
+  constructor(config: MetaMessagingConfig) {
     this.bearerToken = config.bearerToken;
     this.appId = config.appId;
   }
@@ -574,9 +574,9 @@ export class GupshupV3Service {
 }
 
 /**
- * Creates a GupshupV3Service from the shape stored in WhatsAppConfig:
- *   accountSid  = Bearer token (Gupshup partner token)
- *   authToken   = Gupshup App ID
+ * Creates a MetaMessagingService from the shape stored in WhatsAppConfig:
+ *   accountSid  = Bearer token (Meta System User Token)
+ *   authToken   = unused (legacy)
  *   fromNumber  = source WhatsApp number (kept for compat, not used in v3 API calls)
  */
 export function createMessagingService(config: {
@@ -584,12 +584,12 @@ export function createMessagingService(config: {
   authToken?: string;
   fromNumber?: string;
   appId?: string | null;
-}): GupshupV3Service {
-  return new GupshupV3Service({
+}): MetaMessagingService {
+  return new MetaMessagingService({
     bearerToken: config.accountSid,
     appId: config.appId || config.authToken || '',
     sourceNumber: config.fromNumber || '',
   });
 }
 
-export default GupshupV3Service;
+export default MetaMessagingService;

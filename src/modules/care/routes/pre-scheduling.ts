@@ -512,8 +512,8 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         },
       });
 
-      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber: sourceNumber, appId: resolvedMessagingConfig?.appId });
-      const sendResult = await gupshup.sendTextMessage({
+      const messaging = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber: sourceNumber, appId: resolvedMessagingConfig?.appId });
+      const sendResult = await messaging.sendTextMessage({
         to: flow.patientPhone,
         message: mockMessage,
       });
@@ -538,7 +538,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
       }
 
       whatsappResult = {
-        provider: 'gupshup',
+        provider: 'meta',
         to: flow.patientPhone,
         message: mockMessage,
         status: sendResult.status,

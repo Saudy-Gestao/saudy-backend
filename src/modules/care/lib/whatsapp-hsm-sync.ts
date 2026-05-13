@@ -53,7 +53,7 @@ export async function syncBranchHsmTemplates(branchId: string): Promise<HsmSyncR
 
   if (!gupshupRes.ok) {
     const body = await gupshupRes.text();
-    throw new Error(`Erro ao consultar Gupshup: ${body}`);
+    throw new Error(`Erro ao consultar Meta: ${body}`);
   }
 
   const gupshupData = await gupshupRes.json() as { status: string; templates: any[] };

@@ -296,10 +296,10 @@ const extractInboundMedia = (payload: any): {
   summary: string;
   metadata?: Record<string, unknown>;
 } => {
-  // Try to find media in the standard Gupshup structure first: payload.payload for inbound media
+  // Try to find media in the standard Meta webhook structure first: payload.payload for inbound media
   let source = null;
 
-  // Gupshup inbound media comes in payload.payload structure
+  // Meta inbound media comes in payload.payload structure
   if (payload?.payload?.url) {
     source = payload.payload;
   } else {
@@ -378,7 +378,7 @@ async function sendDecisionLockedGuidance(params: {
 
   if (!canUseBranchConfig) return;
 
-  const gupshup = createMessagingService({
+  const messaging = createMessagingService({
     accountSid: apiKey,
     authToken: appName,
     fromNumber: sourceNumber,
@@ -386,12 +386,12 @@ async function sendDecisionLockedGuidance(params: {
   });
 
   try {
-    await gupshup.sendTextMessage({
+    await messaging.sendTextMessage({
       to: normalizedPhone,
       message: params.message,
     });
   } catch {
-    console.log('Failed to send guidance message via Gupshup');
+    console.log('Failed to send guidance message via Meta');
   }
 }
 
@@ -718,7 +718,7 @@ const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED'
 
 /**
  * Normalize a Meta v3 (Cloud API passthrough) webhook body into the same
- * shape as Gupshup v2 so the rest of the handler can treat them identically.
+ * shape as Meta v2 so the rest of the handler can treat them identically.
  *
  * v3 body:
  * { object: "whatsapp_business_account", entry: [{ changes: [{ value: { messages: [...], statuses: [...] } }] }] }
@@ -885,13 +885,13 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
               select: { accountSid: true, authToken: true, fromNumber: true, appId: true, isActive: true },
             });
             if (waCfg?.isActive && waCfg.accountSid) {
-              const gupshup = createMessagingService({
+              const messaging = createMessagingService({
                 accountSid: waCfg.accountSid,
                 authToken: waCfg.authToken || undefined,
                 fromNumber: waCfg.fromNumber || undefined,
                 appId: waCfg.appId,
               });
-              await gupshup.sendTextMessage({ to: from, message: confirmMsg }).catch(() => null);
+              await messaging.sendTextMessage({ to: from, message: confirmMsg }).catch(() => null);
             }
 
             // Mark conversation as completed
@@ -917,7 +917,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const messageEvent = parseWebhookMessageEvent(body, inboundPayload);
 
     request.log.info({
-      gupshupEventType: body?.type || inboundPayload?.type || null,
+      metaEventType: body?.type || inboundPayload?.type || null,
       source: inboundPayload?.source || inboundPayload?.sender?.phone || null,
       contextGsId: inboundPayload?.context?.gsId || null,
       contextId: inboundPayload?.context?.id || null,

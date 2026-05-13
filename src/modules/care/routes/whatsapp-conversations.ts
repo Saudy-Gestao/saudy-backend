@@ -777,7 +777,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'WhatsApp configuration not found for this branch' });
     }
 
-    const gupshup = createMessagingService(messagingConfig);
+    const messaging = createMessagingService(messagingConfig);
     const now = new Date();
     const previousOperatorName = conversation.humanAssignedUserName || null;
     const takeover = conversation.humanStatus === 'ASSIGNED' && conversation.humanAssignedUserId && conversation.humanAssignedUserId !== scope.currentUser.id;
@@ -788,7 +788,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       ? `[Fila humana] Conversa transferida para ${scope.currentUser.name}.`
       : `[Fila humana] Conversa assumida por ${scope.currentUser.name}.`;
 
-    const sendResult = await gupshup.sendTextMessage({
+    const sendResult = await messaging.sendTextMessage({
       to: conversation.phone,
       message: greetingMessage,
     });
@@ -874,9 +874,9 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'WhatsApp configuration not found for this branch' });
     }
 
-    const gupshup = createMessagingService(messagingConfig);
+    const messaging = createMessagingService(messagingConfig);
     const formattedMessage = buildOperatorSignature(message, scope.currentUser.name);
-    const sendResult = await gupshup.sendTextMessage({
+    const sendResult = await messaging.sendTextMessage({
       to: conversation.phone,
       message: formattedMessage,
     });
@@ -938,8 +938,8 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
 
     const closingMessage = 'Seu atendimento via WhatsApp foi encerrado. Se precisar de algo mais, envie uma nova mensagem e o fluxo será iniciado novamente.';
 
-    const gupshup = createMessagingService(messagingConfig);
-    await gupshup.sendTextMessage({
+    const messaging = createMessagingService(messagingConfig);
+    await messaging.sendTextMessage({
       to: conversation.phone,
       message: closingMessage,
     });
@@ -993,7 +993,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     preHandler: async (request) => { await request.jwtVerify(); },
     schema: {
       summary: 'Get WhatsApp media URL',
-      description: 'Fetches the media URL from Gupshup using the mediaId',
+      description: 'Fetches the media URL from Meta using the mediaId',
       tags: ['WhatsApp'],
       params: {
         type: 'object',
@@ -1032,9 +1032,9 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     }
 
     try {
-      const gupshup = createMessagingService(branchMessaging);
+      const messaging = createMessagingService(branchMessaging);
 
-      const mediaData = await gupshup.getMediaUrl(mediaId);
+      const mediaData = await messaging.getMediaUrl(mediaId);
       
       if (!mediaData?.url) {
         return reply.code(404).send({ error: 'Media URL not found' });

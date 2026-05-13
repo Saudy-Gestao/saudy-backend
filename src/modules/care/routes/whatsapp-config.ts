@@ -87,8 +87,8 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     const config = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
     
-    // Não retornar authToken (App Name Gupshup) completo por segurança
-    // Nota: accountSid = API Key, authToken = App Name, fromNumber = Source Number (Gupshup)
+    // Não retornar authToken (App Name Meta) completo por segurança
+    // Nota: accountSid = Meta System User Token, appId = Phone Number ID, fromNumber = Source Number
     if (config) {
       return {
         ...config,
@@ -107,10 +107,10 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         type: 'object',
         required: ['accountSid', 'fromNumber'],
         properties: {
-          accountSid: { type: 'string', description: 'Gupshup API Key' },
-          authToken: { type: 'string', description: 'Gupshup App Name' },
-          fromNumber: { type: 'string', description: 'Gupshup Source Number (ex: 5511999999999)' },
-          appId: { type: 'string', description: 'Gupshup App ID (UUID) — necessário para sincronizar status de templates HSM' },
+          accountSid: { type: 'string', description: 'Meta System User Token' },
+          authToken: { type: 'string', description: 'Meta App Name' },
+          fromNumber: { type: 'string', description: 'Source Number (ex: 5511999999999)' },
+          appId: { type: 'string', description: 'Phone Number ID — necessário para chamadas à API Meta' },
           flowId: { type: 'string', description: 'WhatsApp Flow ID (Meta) — quando configurado, abre Flow nativo em vez do chatbot de texto' },
           isActive: { type: 'boolean' },
         },
@@ -132,7 +132,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       where: { branchId },
     });
 
-    // Se authToken (App Name Gupshup) não foi enviado e já existe config, manter o anterior
+    // Se authToken (App Name Meta) não foi enviado e já existe config, manter o anterior
     const authTokenToUse = data.authToken || existingConfig?.authToken;
 
     if (!authTokenToUse) {
@@ -236,7 +236,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
           },
           name: { type: 'string' },
           message: { type: 'string' },
-          hsmTemplateName: { type: 'string', description: 'Nome do template HSM aprovado no Gupshup (ex: confirmacao_agendamento)' },
+          hsmTemplateName: { type: 'string', description: 'Nome do template HSM aprovado na Meta (ex: confirmacao_agendamento)' },
           isActive: { type: 'boolean' },
         },
       },
@@ -523,7 +523,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Template not found' });
     }
 
-    // Se existir vínculo HSM, tentamos remover no Gupshup apenas quando ele realmente existir lá.
+    // Se existir vínculo HSM, tentamos remover na Meta apenas quando ele realmente existir lá.
     if (template.hsmTemplateId || template.hsmTemplateName) {
       const gupshupAppId = whatsappConfig?.appId || '';
       const apiKey = whatsappConfig?.accountSid || '';
@@ -594,7 +594,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
             if (!deletedInGupshup) {
               return reply.code(400).send({
-                error: 'Falha ao excluir template no Gupshup. O template local não foi removido.',
+                error: 'Falha ao excluir template na Meta. O template local não foi removido.',
                 details: deleteAttempts,
               });
             }
@@ -602,13 +602,13 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         } else if (hasRemoteSignals) {
           const body = await listRes.text();
           return reply.code(400).send({
-            error: 'Falha ao verificar a existência do template no Gupshup antes da exclusão.',
+            error: 'Falha ao verificar a existência do template na Meta antes da exclusão.',
             details: body,
           });
         }
       } else if (hasRemoteSignals) {
         return reply.code(400).send({
-          error: 'Não foi possível confirmar a exclusão no Gupshup porque a filial não possui App ID/API Key configurados.',
+          error: 'Não foi possível confirmar a exclusão na Meta porque a filial não possui App ID/API Key configurados.',
         });
       }
     }
@@ -618,11 +618,11 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     return { success: true };
   });
 
-  // ===== Enviar template para o Gupshup =====
+  // ===== Enviar template para a Meta =====
 
-  app.post('/whatsapp/templates/:id/push-to-gupshup', {
+  app.post('/whatsapp/templates/:id/push-to-meta', {
     schema: {
-      summary: 'Create HSM template in Gupshup via API',
+      summary: 'Create HSM template in Meta via API',
       tags: ['WhatsApp'],
       params: {
         type: 'object',
@@ -660,7 +660,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     if (!template.hsmTemplateName) {
       return reply.code(400).send({
-        error: 'O nome interno do template HSM não foi gerado corretamente. Salve o template novamente antes de enviar para o Gupshup.',
+        error: 'O nome interno do template HSM não foi gerado corretamente. Salve o template novamente antes de enviar para a Meta.',
       });
     }
 
@@ -670,7 +670,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
     if (!gupshupAppId || !apiKey) {
       return reply.code(400).send({
-        error: 'App ID do Gupshup não configurado. Preencha o campo App ID nas configurações de credenciais.',
+        error: 'Phone Number ID não configurado. Preencha o campo App ID nas configurações de credenciais.',
       });
     }
 
@@ -717,7 +717,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       ]));
     }
 
-    console.log('[push-to-gupshup] sending body:', body.toString());
+    console.log('[push-to-meta] sending body:', body.toString());
 
     const gupshupRes = await fetch(
       `https://api.gupshup.io/wa/app/${gupshupAppId}/template`,
@@ -736,7 +736,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     try { parsed = JSON.parse(rawText); } catch { parsed = rawText; }
 
     if (!gupshupRes.ok) {
-      console.error('[push-to-gupshup] error response:', gupshupRes.status, parsed);
+      console.error('[push-to-meta] error response:', gupshupRes.status, parsed);
       const providerMessage =
         parsed?.message
         || parsed?.error
@@ -852,11 +852,11 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
     return WhatsAppMessageBuilder.getAvailableVariables();
   });
 
-  // ===== Sincronizar status de templates HSM com Gupshup =====
+  // ===== Sincronizar status de templates HSM com Meta =====
 
   app.post('/whatsapp/templates/sync-hsm', {
     schema: {
-      summary: 'Sync HSM template approval status from Gupshup',
+      summary: 'Sync HSM template approval status from Meta',
       tags: ['WhatsApp'],
       response: {
         200: { type: 'object', additionalProperties: true },

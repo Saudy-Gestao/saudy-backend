@@ -275,8 +275,7 @@ PENDING → SENT → DELIVERED → READ
 5. Cada conversa tem um número de protocolo gerado automaticamente
 
 ### Credenciais necessárias para WhatsApp
-- Twilio: Account SID, Auth Token, número From
-- Gupshup: App ID, API Key (para templates HSM aprovados pela Meta)
+- Meta Cloud API: System User Token (EAAxxxx), Phone Number ID, número From
 
 ---
 
@@ -626,7 +625,7 @@ Sim. O Saudy possui auditoria completa de acessos, controle granular de permiss�
 Sim. O Saudy suporta múltiplas filiais em uma única conta, com dados isolados por unidade e visão consolidada para o gestor.
 
 **Como funciona a integração com o WhatsApp?**
-O Saudy usa a API oficial do WhatsApp Business (Gupshup, parceira Meta). As mensagens são enviadas por um número oficial da clínica com templates aprovados pela Meta.
+O Saudy usa a API oficial do WhatsApp Business (Meta Cloud API). As mensagens são enviadas por um número oficial da clínica com templates aprovados pela Meta.
 
 **O sistema integra com equipamentos de imagem?**
 Sim. O Saudy tem integração DICOM nativa, compatível com equipamentos de ultrassom, raio-x e outras modalidades, usando o padrão MWL (Modality Worklist).

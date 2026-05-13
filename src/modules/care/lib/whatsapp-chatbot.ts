@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
-import { GupshupV3Service } from './messaging';
+import { MetaMessagingService } from './messaging';
 import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
@@ -624,14 +624,14 @@ async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig 
 
 
 async function sendResponse(branchConfig: BranchConfig, phone: string, response: ChatbotResponse) {
-  const gupshup = new GupshupV3Service({
+  const messaging = new MetaMessagingService({
     bearerToken: branchConfig.apiKey,
     appId: branchConfig.appId || branchConfig.appName,
     sourceNumber: branchConfig.sourceNumber,
   });
 
   if (response.binaryOptions) {
-    return gupshup.sendQuickReplyMessage({
+    return messaging.sendQuickReplyMessage({
       to: phone,
       body: response.text,
       options: [
@@ -642,7 +642,7 @@ async function sendResponse(branchConfig: BranchConfig, phone: string, response:
   }
 
   if (response.listOptions) {
-    return gupshup.sendListMessage({
+    return messaging.sendListMessage({
       to: phone,
       body: response.text,
       buttonTitle: response.listOptions.buttonTitle,
@@ -651,7 +651,7 @@ async function sendResponse(branchConfig: BranchConfig, phone: string, response:
     });
   }
 
-  return gupshup.sendTextMessage({ to: phone, message: response.text });
+  return messaging.sendTextMessage({ to: phone, message: response.text });
 }
 
 async function lookupPatient(branchId: string, phone: string): Promise<PatientLookup | null> {
@@ -2935,13 +2935,13 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
       if (isNewOrMenu && !isHumanActive) {
         const convRecord = await upsertConversation({ branchId: branchConfig.branchId, phone, patient: await lookupPatient(branchConfig.branchId, phone) });
         const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone, conversationId: convRecord.id })).toString('base64');
-        const v3 = new GupshupV3Service({
+        const messaging = new MetaMessagingService({
           bearerToken: branchConfig.apiKey,
           appId: branchConfig.appId || branchConfig.appName,
           sourceNumber: branchConfig.sourceNumber,
         });
 
-        await v3.sendFlowMessage({
+        await messaging.sendFlowMessage({
           to: phone,
           flowId: branchConfig.flowId,
           flowToken,
