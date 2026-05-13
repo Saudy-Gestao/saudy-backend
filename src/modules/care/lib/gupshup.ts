@@ -581,12 +581,13 @@ export class GupshupV3Service {
  */
 export function createMessagingService(config: {
   accountSid: string;
-  authToken: string;
+  authToken?: string;
   fromNumber?: string;
+  appId?: string | null;
 }): GupshupV3Service {
   return new GupshupV3Service({
     bearerToken: config.accountSid,
-    appId: config.authToken,
+    appId: config.appId || config.authToken || '',
     sourceNumber: config.fromNumber || '',
   });
 }

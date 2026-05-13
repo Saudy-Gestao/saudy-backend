@@ -367,6 +367,7 @@ async function sendDecisionLockedGuidance(params: {
       authToken: true,
       fromNumber: true,
       isActive: true,
+      appId: true,
     },
   });
 
@@ -381,6 +382,7 @@ async function sendDecisionLockedGuidance(params: {
     accountSid: apiKey,
     authToken: appName,
     fromNumber: sourceNumber,
+    appId: whatsappConfig?.appId,
   });
 
   try {

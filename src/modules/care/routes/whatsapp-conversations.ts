@@ -193,6 +193,7 @@ async function getBranchMessagingConfig(branchId: string) {
       accountSid: whatsappConfig.accountSid,
       authToken: whatsappConfig.authToken,
       fromNumber: whatsappConfig.fromNumber,
+      appId: whatsappConfig.appId || null,
     };
   }
 

@@ -97,6 +97,7 @@ export class WhatsAppSchedulerJob {
             accountSid: branchConfig.apiKey,
             authToken: branchConfig.appName,
             fromNumber: branchConfig.sourceNumber,
+            appId: branchConfig.appId,
           });
 
           if (!conversation.humanIdleWarningSentAt && (now - lastOperatorAt.getTime()) >= idleMs) {
@@ -202,6 +203,7 @@ export class WhatsAppSchedulerJob {
       apiKey: config.accountSid,
       appName: config.authToken,
       sourceNumber: config.fromNumber,
+      appId: config.appId || null,
     };
   }
 

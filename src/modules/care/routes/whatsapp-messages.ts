@@ -181,7 +181,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       });
 
       // Enviar mensagem via Gupshup
-      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber });
+      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber, appId: resolvedMessagingConfig?.appId });
 
       // Tenta HSM template se configurado (funciona sem sessão ativa)
       // Se HSM falhar, cai para session text message
@@ -458,7 +458,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'WhatsApp está desativado para esta filial' });
       }
 
-      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber });
+      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber, appId: resolvedMessagingConfig?.appId });
 
       const result = await gupshup.sendTextMessage({
         to: data.phone,
