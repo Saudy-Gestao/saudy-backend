@@ -797,7 +797,14 @@ function normalizeV3WebhookBody(v3Body: any): { normalizedBody: any; normalizedP
 }
 
 export default async function whatsappWebhookRoutes(app: FastifyInstance) {
-  app.get('/whatsapp/webhook/gupshup', async () => ({ ok: true }));
+  app.get('/whatsapp/webhook/gupshup', async (request, reply) => {
+    const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = request.query as Record<string, string>;
+    const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'saudy-webhook-token';
+    if (mode === 'subscribe' && token === verifyToken) {
+      return reply.send(challenge);
+    }
+    return reply.status(403).send({ ok: false });
+  });
 
   app.post('/whatsapp/webhook/gupshup', {
     schema: {
