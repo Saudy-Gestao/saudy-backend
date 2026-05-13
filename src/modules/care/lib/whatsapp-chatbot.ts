@@ -81,6 +81,7 @@ type BranchConfig = {
   branchName: string | null;
   apiKey: string;
   appName: string;
+  appId: string | null;
   sourceNumber: string;
   flowId: string | null;
 };
@@ -576,12 +577,14 @@ function configToBranchConfig(branchId: string, branchName: string | null, confi
   authToken: string;
   fromNumber: string;
   flowId: string | null;
+  appId?: string | null;
 }): BranchConfig {
   return {
     branchId,
     branchName,
     apiKey: config.accountSid,
     appName: config.authToken,
+    appId: config.appId || null,
     sourceNumber: config.fromNumber,
     flowId: config.flowId,
   };
@@ -623,7 +626,7 @@ async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig 
 async function sendResponse(branchConfig: BranchConfig, phone: string, response: ChatbotResponse) {
   const gupshup = new GupshupV3Service({
     bearerToken: branchConfig.apiKey,
-    appId: branchConfig.appName,
+    appId: branchConfig.appId || branchConfig.appName,
     sourceNumber: branchConfig.sourceNumber,
   });
 
@@ -2933,7 +2936,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
         const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone })).toString('base64');
         const v3 = new GupshupV3Service({
           bearerToken: branchConfig.apiKey,
-          appId: branchConfig.appName,
+          appId: branchConfig.appId || branchConfig.appName,
           sourceNumber: branchConfig.sourceNumber,
         });
 

@@ -418,6 +418,7 @@ export class WhatsAppAutoSender {
         accountSid: apiKey,
         authToken: appName,
         fromNumber: sourceNumber,
+        appId: resolvedMessagingConfig?.appId,
       });
 
       let result;

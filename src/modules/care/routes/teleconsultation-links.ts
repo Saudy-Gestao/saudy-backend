@@ -173,6 +173,7 @@ const resolveBranchWhatsAppConfig = async (branchId: string) => {
   return {
     apiKey: config.accountSid,
     appName: config.authToken,
+    appId: config.appId || null,
     sourceNumber: config.fromNumber,
     sourceBranchId: config.sourceBranchId,
   };
@@ -193,7 +194,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   notes?: string;
 }) => {
   const config = await resolveBranchWhatsAppConfig(params.branchId);
-  const gupshup = createMessagingService({ accountSid: config.apiKey, authToken: config.appName, fromNumber: config.sourceNumber });
+  const gupshup = createMessagingService({ accountSid: config.apiKey, authToken: config.appName, fromNumber: config.sourceNumber, appId: config.appId });
 
   const text = [
     `Olá ${params.patientName}!`,

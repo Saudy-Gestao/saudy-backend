@@ -512,7 +512,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         },
       });
 
-      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber: sourceNumber });
+      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber: sourceNumber, appId: resolvedMessagingConfig?.appId });
       const sendResult = await gupshup.sendTextMessage({
         to: flow.patientPhone,
         message: mockMessage,
