@@ -9,6 +9,12 @@ vi.mock('../../src/modules/care/lib/gupshup', () => ({
   default: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
   })),
+  createMessagingService: vi.fn().mockImplementation(() => ({
+    sendTextMessage: sendTextMessageMock,
+  })),
+  GupshupV3Service: vi.fn().mockImplementation(() => ({
+    sendTextMessage: sendTextMessageMock,
+  })),
 }));
 
 vi.mock('../../src/modules/care/lib/whatsapp-auto-sender', () => ({

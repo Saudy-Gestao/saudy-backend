@@ -111,6 +111,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
           authToken: { type: 'string', description: 'Gupshup App Name' },
           fromNumber: { type: 'string', description: 'Gupshup Source Number (ex: 5511999999999)' },
           appId: { type: 'string', description: 'Gupshup App ID (UUID) — necessário para sincronizar status de templates HSM' },
+          flowId: { type: 'string', description: 'WhatsApp Flow ID (Meta) — quando configurado, abre Flow nativo em vez do chatbot de texto' },
           isActive: { type: 'boolean' },
         },
       },
@@ -146,6 +147,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         authToken: authTokenToUse,
         fromNumber: data.fromNumber,
         appId: data.appId || null,
+        flowId: data.flowId || null,
         isActive: data.isActive ?? true,
       },
       update: {
@@ -153,6 +155,7 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
         authToken: authTokenToUse,
         fromNumber: data.fromNumber,
         appId: data.appId !== undefined ? (data.appId || null) : undefined,
+        flowId: data.flowId !== undefined ? (data.flowId || null) : undefined,
         isActive: data.isActive,
       },
     });

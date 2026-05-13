@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import prisma from '../lib/prisma';
-import GupshupService from '../lib/gupshup';
+import { createMessagingService } from '../lib/gupshup';
 import { HUMAN_FLOWS } from '../lib/whatsapp-chatbot';
 
 const normalizeOptionalString = (value: unknown) => {
@@ -190,9 +190,9 @@ async function getBranchMessagingConfig(branchId: string) {
   const whatsappConfig = await prisma.whatsAppConfig.findUnique({ where: { branchId } });
   if (whatsappConfig?.isActive) {
     return {
-      apiKey: whatsappConfig.accountSid,
-      appName: whatsappConfig.authToken,
-      sourceNumber: whatsappConfig.fromNumber,
+      accountSid: whatsappConfig.accountSid,
+      authToken: whatsappConfig.authToken,
+      fromNumber: whatsappConfig.fromNumber,
     };
   }
 
@@ -776,7 +776,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'WhatsApp configuration not found for this branch' });
     }
 
-    const gupshup = new GupshupService(messagingConfig);
+    const gupshup = createMessagingService(messagingConfig);
     const now = new Date();
     const previousOperatorName = conversation.humanAssignedUserName || null;
     const takeover = conversation.humanStatus === 'ASSIGNED' && conversation.humanAssignedUserId && conversation.humanAssignedUserId !== scope.currentUser.id;
@@ -873,7 +873,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'WhatsApp configuration not found for this branch' });
     }
 
-    const gupshup = new GupshupService(messagingConfig);
+    const gupshup = createMessagingService(messagingConfig);
     const formattedMessage = buildOperatorSignature(message, scope.currentUser.name);
     const sendResult = await gupshup.sendTextMessage({
       to: conversation.phone,
@@ -937,7 +937,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
 
     const closingMessage = 'Seu atendimento via WhatsApp foi encerrado. Se precisar de algo mais, envie uma nova mensagem e o fluxo será iniciado novamente.';
 
-    const gupshup = new GupshupService(messagingConfig);
+    const gupshup = createMessagingService(messagingConfig);
     await gupshup.sendTextMessage({
       to: conversation.phone,
       message: closingMessage,
@@ -1031,11 +1031,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     }
 
     try {
-      const gupshup = new GupshupService({
-        apiKey: branchMessaging.apiKey,
-        appName: branchMessaging.appName,
-        sourceNumber: branchMessaging.sourceNumber,
-      });
+      const gupshup = createMessagingService(branchMessaging);
 
       const mediaData = await gupshup.getMediaUrl(mediaId);
       

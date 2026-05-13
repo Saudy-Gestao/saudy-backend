@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import preSchedulingRoutes from '../../src/modules/care/routes/pre-scheduling';
 import prisma from '../../src/modules/care/lib/prisma';
 import { getAnexosStorage } from '../../src/lib/storage';
-import GupshupService from '../../src/modules/care/lib/gupshup';
+import GupshupService, { createMessagingService } from '../../src/modules/care/lib/gupshup';
 
 const mockedGupshupCtor = GupshupService as unknown as Mock;
+const mockedCreateMessagingService = createMessagingService as unknown as Mock;
 
 vi.mock('../../src/lib/storage', () => ({
   getAnexosStorage: vi.fn(() => ({
@@ -17,6 +18,12 @@ vi.mock('../../src/lib/storage', () => ({
 
 vi.mock('../../src/modules/care/lib/gupshup', () => ({
   default: vi.fn().mockImplementation(() => ({
+    sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
+  })),
+  createMessagingService: vi.fn().mockImplementation(() => ({
+    sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
+  })),
+  GupshupV3Service: vi.fn().mockImplementation(() => ({
     sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
   })),
 }));
@@ -55,6 +62,9 @@ describe('care pre-scheduling routes', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockedGupshupCtor.mockImplementation(() => ({
+      sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
+    }));
+    mockedCreateMessagingService.mockImplementation(() => ({
       sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
     }));
     process.env.PUBLIC_APP_URL = 'https://app.example.com';

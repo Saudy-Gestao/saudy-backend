@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-import GupshupService from '../lib/gupshup';
+import { createMessagingService } from '../lib/gupshup';
 import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
 import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
@@ -193,7 +193,7 @@ const sendTeleconsultationWhatsAppMessage = async (params: {
   notes?: string;
 }) => {
   const config = await resolveBranchWhatsAppConfig(params.branchId);
-  const gupshup = new GupshupService(config);
+  const gupshup = createMessagingService({ accountSid: config.apiKey, authToken: config.appName, fromNumber: config.sourceNumber });
 
   const text = [
     `Olá ${params.patientName}!`,

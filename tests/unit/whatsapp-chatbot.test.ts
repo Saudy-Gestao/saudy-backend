@@ -6,11 +6,19 @@ const sendTextMessageMock = vi.fn();
 const sendQuickReplyMessageMock = vi.fn();
 const sendListMessageMock = vi.fn();
 
+const sendFlowMessageMock = vi.fn();
+
 vi.mock('../../src/modules/care/lib/gupshup', () => ({
   default: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
     sendQuickReplyMessage: sendQuickReplyMessageMock,
     sendListMessage: sendListMessageMock,
+  })),
+  GupshupV3Service: vi.fn().mockImplementation(() => ({
+    sendTextMessage: sendTextMessageMock,
+    sendQuickReplyMessage: sendQuickReplyMessageMock,
+    sendListMessage: sendListMessageMock,
+    sendFlowMessage: sendFlowMessageMock,
   })),
 }));
 
@@ -163,6 +171,7 @@ describe('handleWhatsAppChatbot', () => {
     sendTextMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-1' });
     sendQuickReplyMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-2' });
     sendListMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-3' });
+    sendFlowMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-4' });
   });
 
   it('returns handled false when text is empty', async () => {
