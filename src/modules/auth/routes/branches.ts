@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { createDefaultSectorsForBranch } from '../lib/default-sectors';
 
 export default async function branchRoutes(app: FastifyInstance) {
   // List all branches
@@ -97,7 +98,7 @@ export default async function branchRoutes(app: FastifyInstance) {
         });
       }
 
-      return tx.branch.create({
+      const created = await tx.branch.create({
         data: {
           companyId,
           tradeName,
@@ -114,6 +115,10 @@ export default async function branchRoutes(app: FastifyInstance) {
           isMatriz: true,
         },
       });
+
+      await createDefaultSectorsForBranch(created.id, tx);
+
+      return created;
     });
     return branch;
   });
@@ -257,5 +262,33 @@ export default async function branchRoutes(app: FastifyInstance) {
     } catch (error) {
       return reply.code(404).send({ error: 'Branch not found' });
     }
+  });
+
+  // Create default sectors for an existing branch
+  app.post('/branches/:id/default-sectors', {
+    preHandler: async (request, reply) => { await request.jwtVerify(); },
+    schema: {
+      summary: 'Create default sectors for a branch',
+      tags: ['Branches'],
+      security: [{ bearerAuth: [] }],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      response: {
+        200: { type: 'object', properties: { message: { type: 'string' } } },
+        404: { type: 'object', properties: { error: { type: 'string' } } },
+      },
+    },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const branch = await prisma.branch.findUnique({ where: { id } });
+    if (!branch) {
+      return reply.code(404).send({ error: 'Branch not found' });
+    }
+
+    await prisma.$transaction(async (tx: any) => {
+      await createDefaultSectorsForBranch(id, tx);
+    });
+
+    return { message: 'Setores padrão criados com sucesso' };
   });
 }

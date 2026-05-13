@@ -185,6 +185,57 @@ const modules = [
   }
 ];
 
+const defaultAccessTemplates = [
+  {
+    description: 'Administrador Clínico',
+    moduleNames: [
+      'pre-atendimento', 'agendamento', 'pre-agendamento',
+      'consulta', 'execucao-exames', 'laudo', 'autorizacao-convenio',
+      'entrega', 'estoque', 'financeiro', 'faturamento', 'bi-gestao', 'whatsapp-config', 'conversas',
+      'cadastro-medico', 'cadastro-procedimento', 'cadastro-convenio', 'cadastro-paciente',
+      'cadastro-sala', 'cadastro-equipamento', 'cadastro-anamnese', 'cadastro-enfermagem',
+    ],
+  },
+  {
+    description: 'Recepcionista',
+    moduleNames: [
+      'agendamento', 'pre-agendamento', 'pre-atendimento',
+      'cadastro-paciente', 'conversas',
+    ],
+  },
+  {
+    description: 'Médico / Profissional de Saúde',
+    moduleNames: [
+      'consulta', 'laudo', 'autorizacao-convenio',
+      'cadastro-paciente', 'cadastro-anamnese',
+    ],
+  },
+  {
+    description: 'Técnico / Executante de Exames',
+    moduleNames: [
+      'execucao-exames', 'laudo', 'cadastro-paciente',
+    ],
+  },
+  {
+    description: 'Financeiro',
+    moduleNames: [
+      'financeiro', 'faturamento', 'bi-gestao', 'estoque', 'cadastro-convenio',
+    ],
+  },
+  {
+    description: 'Atendente / Suporte',
+    moduleNames: [
+      'conversas', 'whatsapp-config', 'cadastro-paciente', 'agendamento',
+    ],
+  },
+  {
+    description: 'Auxiliar Administrativo',
+    moduleNames: [
+      'estoque', 'entrega', 'cadastro-procedimento', 'cadastro-sala', 'cadastro-equipamento',
+    ],
+  },
+];
+
 async function runSeed({ client = prisma, logger = console } = {}) {
   logger.log('🌱 Starting seed...');
 
@@ -209,6 +260,36 @@ async function runSeed({ client = prisma, logger = console } = {}) {
   });
   if (removedCount.count > 0) {
     logger.log(`  ✓ ${removedCount.count} módulo(s) descontinuado(s) removido(s) do catálogo`);
+  }
+
+  // Create default access templates
+  logger.log('🔐 Creating default access templates...');
+  for (const template of defaultAccessTemplates) {
+    const moduleRecords = await client.module.findMany({
+      where: { name: { in: template.moduleNames } },
+    });
+
+    const existing = await client.access.findFirst({
+      where: { description: template.description, isTemplate: true },
+    });
+
+    if (existing) {
+      await client.access.update({
+        where: { id: existing.id },
+        data: {
+          modules: { set: moduleRecords.map((m) => ({ id: m.id })) },
+        },
+      });
+    } else {
+      await client.access.create({
+        data: {
+          description: template.description,
+          isTemplate: true,
+          modules: { connect: moduleRecords.map((m) => ({ id: m.id })) },
+        },
+      });
+    }
+    logger.log(`  ✓ ${template.description}`);
   }
 
   logger.log('✅ Seed completed!');

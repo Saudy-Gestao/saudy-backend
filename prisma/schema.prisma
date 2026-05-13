@@ -180,6 +180,7 @@ model Sector {
 model Access {
     id          String   @id @default(uuid())
     description String
+    isTemplate  Boolean  @default(false)
     modules     Module[]
     users       User[]
 

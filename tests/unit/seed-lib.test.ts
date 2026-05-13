@@ -4,6 +4,12 @@ const mockPrismaInstance = {
   module: {
     upsert: vi.fn(),
     deleteMany: vi.fn(),
+    findMany: vi.fn(),
+  },
+  access: {
+    findFirst: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
   },
   $disconnect: vi.fn(),
 };
@@ -26,6 +32,10 @@ describe('seed lib', () => {
     vi.resetModules();
     mockPrismaInstance.module.upsert.mockResolvedValue({});
     mockPrismaInstance.module.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrismaInstance.module.findMany.mockResolvedValue([]);
+    mockPrismaInstance.access.findFirst.mockResolvedValue(null);
+    mockPrismaInstance.access.create.mockResolvedValue({});
+    mockPrismaInstance.access.update.mockResolvedValue({});
     mockPrismaInstance.$disconnect.mockResolvedValue(undefined);
   });
 
