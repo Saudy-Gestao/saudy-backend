@@ -2933,7 +2933,8 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
         || existingConversation?.humanStatus === 'ASSIGNED';
 
       if (isNewOrMenu && !isHumanActive) {
-        const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone })).toString('base64');
+        const convRecord = await upsertConversation({ branchId: branchConfig.branchId, phone, patient: await lookupPatient(branchConfig.branchId, phone) });
+        const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone, conversationId: convRecord.id })).toString('base64');
         const v3 = new GupshupV3Service({
           bearerToken: branchConfig.apiKey,
           appId: branchConfig.appId || branchConfig.appName,

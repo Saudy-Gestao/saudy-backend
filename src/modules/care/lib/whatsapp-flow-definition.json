@@ -1,0 +1,395 @@
+{
+  "version": "6.2",
+  "data_api_version": "3.0",
+  "routing_model": {
+    "INTRO": ["INSURANCE"],
+    "INSURANCE": ["PROCEDURE"],
+    "PROCEDURE": ["DATE_PREF"],
+    "DATE_PREF": ["PATIENT_DATA"],
+    "PATIENT_DATA": ["CONFIRM"],
+    "CONFIRM": ["SUCCESS"]
+  },
+  "screens": [
+    {
+      "id": "INTRO",
+      "title": "Agendar",
+      "data": {
+        "services": {
+          "type": "array",
+          "__example__": [
+            { "id": "CONSULTA", "title": "Consulta" },
+            { "id": "EXAME", "title": "Exame" }
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" }
+            }
+          }
+        },
+        "branches": {
+          "type": "array",
+          "__example__": [{ "id": "branch-1", "title": "Unidade Centro" }],
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" }
+            }
+          }
+        },
+        "show_branches": {
+          "type": "boolean",
+          "__example__": false
+        },
+        "default_branch_id": {
+          "type": "string",
+          "__example__": "branch-1"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Agendar atendimento"
+          },
+          {
+            "type": "TextBody",
+            "text": "Preencha as informações abaixo para solicitar seu agendamento."
+          },
+          {
+            "type": "Dropdown",
+            "name": "service_id",
+            "label": "Tipo de atendimento",
+            "required": true,
+            "data-source": "${data.services}"
+          },
+          {
+            "type": "If",
+            "condition": "${data.show_branches}",
+            "then": [
+              {
+                "type": "Dropdown",
+                "name": "branch_id",
+                "label": "Unidade",
+                "required": true,
+                "data-source": "${data.branches}"
+              }
+            ],
+            "else": [
+              {
+                "type": "TextInput",
+                "name": "branch_id",
+                "label": "Unidade",
+                "input-type": "text",
+                "required": true,
+                "init-value": "${data.default_branch_id}",
+                "visible": false
+              }
+            ]
+          },
+          {
+            "type": "Footer",
+            "label": "Próximo",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "service_id": "${form.service_id}",
+                "branch_id": "${form.branch_id}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "INSURANCE",
+      "title": "Convênio",
+      "data": {
+        "insurances": {
+          "type": "array",
+          "__example__": [
+            { "id": "Unimed", "title": "Unimed" },
+            { "id": "Bradesco Saúde", "title": "Bradesco Saúde" }
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" }
+            }
+          }
+        },
+        "service_id": { "type": "string", "__example__": "CONSULTA" },
+        "branch_id": { "type": "string", "__example__": "branch-1" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Qual é o seu convênio?"
+          },
+          {
+            "type": "Dropdown",
+            "name": "insurance_id",
+            "label": "Convênio",
+            "required": true,
+            "data-source": "${data.insurances}"
+          },
+          {
+            "type": "Footer",
+            "label": "Próximo",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "service_id": "${data.service_id}",
+                "branch_id": "${data.branch_id}",
+                "insurance_id": "${form.insurance_id}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PROCEDURE",
+      "title": "Procedimento",
+      "data": {
+        "procedures": {
+          "type": "array",
+          "__example__": [
+            { "id": "proc-1", "title": "Clínica Geral" }
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" }
+            }
+          }
+        },
+        "service_id": { "type": "string", "__example__": "CONSULTA" },
+        "branch_id": { "type": "string", "__example__": "branch-1" },
+        "insurance_id": { "type": "string", "__example__": "Unimed" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Qual procedimento você precisa?"
+          },
+          {
+            "type": "Dropdown",
+            "name": "procedure_id",
+            "label": "Procedimento",
+            "required": true,
+            "data-source": "${data.procedures}"
+          },
+          {
+            "type": "Footer",
+            "label": "Próximo",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "service_id": "${data.service_id}",
+                "branch_id": "${data.branch_id}",
+                "insurance_id": "${data.insurance_id}",
+                "procedure_id": "${form.procedure_id}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "DATE_PREF",
+      "title": "Data preferida",
+      "data": {
+        "min_date": { "type": "string", "__example__": "2025-05-14" },
+        "max_date": { "type": "string", "__example__": "2025-08-14" },
+        "service_id": { "type": "string", "__example__": "CONSULTA" },
+        "branch_id": { "type": "string", "__example__": "branch-1" },
+        "insurance_id": { "type": "string", "__example__": "Unimed" },
+        "procedure_id": { "type": "string", "__example__": "proc-1" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Quando você prefere ser atendido?"
+          },
+          {
+            "type": "TextBody",
+            "text": "Vamos tentar encaixar você o mais próximo possível da data escolhida."
+          },
+          {
+            "type": "DatePicker",
+            "name": "preferred_date",
+            "label": "Data preferida",
+            "min-date": "${data.min_date}",
+            "max-date": "${data.max_date}",
+            "required": false
+          },
+          {
+            "type": "Footer",
+            "label": "Próximo",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "service_id": "${data.service_id}",
+                "branch_id": "${data.branch_id}",
+                "insurance_id": "${data.insurance_id}",
+                "procedure_id": "${data.procedure_id}",
+                "preferred_date": "${form.preferred_date}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "PATIENT_DATA",
+      "title": "Seus dados",
+      "data": {
+        "prefill_cpf": { "type": "string", "__example__": "" },
+        "prefill_name": { "type": "string", "__example__": "" },
+        "prefill_birthdate": { "type": "string", "__example__": "" },
+        "is_known_patient": { "type": "boolean", "__example__": false },
+        "service_id": { "type": "string", "__example__": "CONSULTA" },
+        "branch_id": { "type": "string", "__example__": "branch-1" },
+        "insurance_id": { "type": "string", "__example__": "Unimed" },
+        "procedure_id": { "type": "string", "__example__": "proc-1" },
+        "preferred_date": { "type": "string", "__example__": "" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Confirme seus dados"
+          },
+          {
+            "type": "TextInput",
+            "name": "patient_name",
+            "label": "Nome completo",
+            "input-type": "text",
+            "required": true,
+            "init-value": "${data.prefill_name}"
+          },
+          {
+            "type": "TextInput",
+            "name": "patient_cpf",
+            "label": "CPF",
+            "input-type": "text",
+            "helper-text": "Somente números",
+            "required": true,
+            "init-value": "${data.prefill_cpf}"
+          },
+          {
+            "type": "DatePicker",
+            "name": "patient_birthdate",
+            "label": "Data de nascimento",
+            "required": true,
+            "init-value": "${data.prefill_birthdate}"
+          },
+          {
+            "type": "Footer",
+            "label": "Próximo",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "service_id": "${data.service_id}",
+                "branch_id": "${data.branch_id}",
+                "insurance_id": "${data.insurance_id}",
+                "procedure_id": "${data.procedure_id}",
+                "preferred_date": "${data.preferred_date}",
+                "patient_name": "${form.patient_name}",
+                "patient_cpf": "${form.patient_cpf}",
+                "patient_birthdate": "${form.patient_birthdate}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "CONFIRM",
+      "title": "Confirmar agendamento",
+      "data": {
+        "summary": { "type": "string", "__example__": "Serviço: Consulta\nUnidade: Centro\nConvênio: Unimed\nProcedimento: Clínica Geral\nHorário: 15/05/2025 às 09:00\nPaciente: João Silva" },
+        "service_id": { "type": "string", "__example__": "CONSULTA" },
+        "branch_id": { "type": "string", "__example__": "branch-1" },
+        "insurance_id": { "type": "string", "__example__": "Unimed" },
+        "procedure_id": { "type": "string", "__example__": "proc-1" },
+        "preferred_date": { "type": "string", "__example__": "" },
+        "patient_name": { "type": "string", "__example__": "João Silva" },
+        "patient_cpf": { "type": "string", "__example__": "12345678900" },
+        "patient_birthdate": { "type": "string", "__example__": "1990-01-01" },
+        "slot_date": { "type": "string", "__example__": "2025-05-15" },
+        "slot_time": { "type": "string", "__example__": "09:00" },
+        "slot_doctor_id": { "type": "string", "__example__": "" },
+        "slot_doctor_name": { "type": "string", "__example__": "Dr. Carlos" },
+        "slot_duration": { "type": "string", "__example__": "30" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Tudo certo! Confirme seu agendamento"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.summary}"
+          },
+          {
+            "type": "Footer",
+            "label": "Confirmar agendamento",
+            "on-click-action": {
+              "name": "data_exchange",
+              "payload": {
+                "service_id": "${data.service_id}",
+                "branch_id": "${data.branch_id}",
+                "insurance_id": "${data.insurance_id}",
+                "procedure_id": "${data.procedure_id}",
+                "preferred_date": "${data.preferred_date}",
+                "patient_name": "${data.patient_name}",
+                "patient_cpf": "${data.patient_cpf}",
+                "patient_birthdate": "${data.patient_birthdate}",
+                "slot_date": "${data.slot_date}",
+                "slot_time": "${data.slot_time}",
+                "slot_doctor_id": "${data.slot_doctor_id}",
+                "slot_doctor_name": "${data.slot_doctor_name}",
+                "slot_duration": "${data.slot_duration}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "SUCCESS",
+      "title": "Agendamento solicitado",
+      "terminal": true,
+      "data": {},
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Agendamento solicitado com sucesso!"
+          },
+          {
+            "type": "TextBody",
+            "text": "Sua solicitação foi registrada e já está na fila de pré-atendimento da clínica. Em breve você receberá uma confirmação."
+          }
+        ]
+      }
+    }
+  ]
+}

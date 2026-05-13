@@ -839,7 +839,9 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       inboundPayload = body?.payload || {};
     }
 
-    // Handle v3 Flow completion (nfm_reply) — save as chatbot conversation message and return
+    // Handle v3 Flow completion (nfm_reply)
+    // The appointment was already created by the /whatsapp/flow/exchange endpoint.
+    // Here we just send a confirmation message and close the conversation.
     if (isV3Flow) {
       const message = rawBody?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
       const nfmReply = message?.interactive?.nfm_reply;
@@ -849,21 +851,57 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         flowData = JSON.parse(nfmReply?.response_json || '{}') as Record<string, unknown>;
       } catch { /* ignore */ }
 
+      request.log.info({ from, flowAction: flowData?.flow_action, flowData }, 'WhatsApp Flow nfm_reply received');
+
       if (from) {
         const chatbotBranchHint = await resolveBranchHintFromPayload(rawBody, from);
         if (chatbotBranchHint) {
-          const summary = [
-            flowData.service_id && `Serviço: ${flowData.service_id}`,
-            flowData.procedure_id && `Procedimento: ${flowData.procedure_id}`,
-            flowData.date_id && `Data preferida: ${flowData.date_id}`,
-          ].filter(Boolean).join(', ');
+          const flowAction = String((flowData as any)?.extension_message_response?.params?.flow_action || flowData?.flow_action || '');
 
-          await handleWhatsAppChatbot({
-            phone: from,
-            text: `[FLOW_COMPLETE] ${summary}`,
-            metadata: { flowData, source: 'whatsapp_flow' },
-            branchIdHint: chatbotBranchHint,
-          });
+          if (flowAction === 'handoff') {
+            // User selected "Não encontrei meu convênio/procedimento" — route to human
+            const reason = String((flowData as any)?.extension_message_response?.params?.reason || 'HANDOFF');
+            await handleWhatsAppChatbot({
+              phone: from,
+              text: `[FLOW_HANDOFF] ${reason}`,
+              metadata: { flowData, source: 'whatsapp_flow' },
+              branchIdHint: chatbotBranchHint,
+            });
+          } else if (flowAction === 'appointment_created') {
+            // Appointment was already created by the exchange endpoint — just confirm to user
+            const patientName = String((flowData as any)?.extension_message_response?.params?.patient_name || '');
+            const procedureName = String((flowData as any)?.extension_message_response?.params?.procedure_name || '');
+            const slotLabel = String((flowData as any)?.extension_message_response?.params?.slot_label || '');
+            const greeting = patientName ? `Olá, ${patientName.split(' ')[0]}!` : 'Olá!';
+            const confirmMsg = [
+              `${greeting} ✅ Seu agendamento foi solicitado com sucesso!`,
+              procedureName ? `Procedimento: ${procedureName}` : '',
+              slotLabel ? `Horário sugerido: ${slotLabel}` : '',
+              'A clínica confirmará em breve. Qualquer dúvida, é só nos chamar aqui!',
+            ].filter(Boolean).join('\n');
+
+            const waCfg = await prisma.whatsAppConfig.findUnique({
+              where: { branchId: chatbotBranchHint },
+              select: { accountSid: true, authToken: true, fromNumber: true, appId: true, isActive: true },
+            });
+            if (waCfg?.isActive && waCfg.accountSid) {
+              const gupshup = createMessagingService({
+                accountSid: waCfg.accountSid,
+                authToken: waCfg.authToken || undefined,
+                fromNumber: waCfg.fromNumber || undefined,
+                appId: waCfg.appId,
+              });
+              await gupshup.sendTextMessage({ to: from, message: confirmMsg }).catch(() => null);
+            }
+
+            // Mark conversation as completed
+            await handleWhatsAppChatbot({
+              phone: from,
+              text: '[FLOW_COMPLETE] appointment_created',
+              metadata: { flowData, source: 'whatsapp_flow' },
+              branchIdHint: chatbotBranchHint,
+            });
+          }
         }
       }
 
