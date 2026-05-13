@@ -1,6 +1,6 @@
 ﻿import { randomBytes } from 'crypto';
 import prisma from './prisma';
-import GupshupService from './gupshup';
+import { createMessagingService } from './gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from './whatsapp-message-builder';
 import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 
@@ -414,10 +414,10 @@ export class WhatsAppAutoSender {
       });
 
       // Enviar mensagem via Gupshup
-      const gupshup = new GupshupService({
-        apiKey,
-        appName,
-        sourceNumber,
+      const gupshup = createMessagingService({
+        accountSid: apiKey,
+        authToken: appName,
+        fromNumber: sourceNumber,
       });
 
       let result;

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
-import GupshupService, { SendMessageResponse } from '../lib/gupshup';
+import { createMessagingService, SendMessageResponse } from '../lib/gupshup';
 import WhatsAppMessageBuilder, { AppointmentData } from '../lib/whatsapp-message-builder';
 import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
@@ -181,11 +181,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
       });
 
       // Enviar mensagem via Gupshup
-      const gupshup = new GupshupService({
-        apiKey: apiKey,
-        appName: appName,
-        sourceNumber: fromNumber,
-      });
+      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber });
 
       // Tenta HSM template se configurado (funciona sem sessão ativa)
       // Se HSM falhar, cai para session text message
@@ -462,7 +458,7 @@ export default async function whatsappMessagesRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'WhatsApp está desativado para esta filial' });
       }
 
-      const gupshup = new GupshupService({ apiKey, appName, sourceNumber: fromNumber });
+      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber });
 
       const result = await gupshup.sendTextMessage({
         to: data.phone,

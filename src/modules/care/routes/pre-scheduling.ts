@@ -3,7 +3,7 @@ import { FastifyInstance } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { getAnexosStorage } from '../../../lib/storage';
-import GupshupService from '../lib/gupshup';
+import { createMessagingService } from '../lib/gupshup';
 import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
@@ -512,11 +512,7 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
         },
       });
 
-      const gupshup = new GupshupService({
-        apiKey,
-        appName,
-        sourceNumber,
-      });
+      const gupshup = createMessagingService({ accountSid: apiKey, authToken: appName, fromNumber: sourceNumber });
       const sendResult = await gupshup.sendTextMessage({
         to: flow.patientPhone,
         message: mockMessage,

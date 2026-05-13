@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import prisma from './prisma';
 import WhatsAppAutoSender from './whatsapp-auto-sender';
-import GupshupService from './gupshup';
+import { createMessagingService } from './gupshup';
 import { resolveWhatsAppConfigForBranch } from './whatsapp-config-resolver';
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
@@ -93,7 +93,11 @@ export class WhatsAppSchedulerJob {
           const branchConfig = await this.getBranchMessagingConfig(conversation.branchId);
           if (!branchConfig) continue;
 
-          const gupshup = new GupshupService(branchConfig);
+          const gupshup = createMessagingService({
+            accountSid: branchConfig.apiKey,
+            authToken: branchConfig.appName,
+            fromNumber: branchConfig.sourceNumber,
+          });
 
           if (!conversation.humanIdleWarningSentAt && (now - lastOperatorAt.getTime()) >= idleMs) {
             const warningMessage = `Como não tivemos retorno nos últimos ${idleMinutes} minutos, este atendimento será encerrado automaticamente em ${warningMinutes} minutos caso não haja nova mensagem.`;

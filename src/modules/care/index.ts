@@ -19,6 +19,7 @@ import whatsappMessagesRoutes from './routes/whatsapp-messages';
 import whatsappJobsRoutes from './routes/whatsapp-jobs';
 import whatsappConversationRoutes from './routes/whatsapp-conversations';
 import whatsappWebhookRoutes from './routes/whatsapp-webhook';
+import whatsappFlowRoutes from './routes/whatsapp-flow';
 import publicCheckInRoutes from './routes/public-check-in';
 import mwlRoutes from './routes/mwl';
 import preSchedulingRoutes from './routes/pre-scheduling';
@@ -53,6 +54,7 @@ export default async function careModule(app: FastifyInstance) {
   app.register(whatsappMessagesRoutes, { prefix: '/' });
   app.register(whatsappConversationRoutes, { prefix: '/' });
   app.register(whatsappWebhookRoutes, { prefix: '/' });
+  app.register(whatsappFlowRoutes, { prefix: '/' });
   app.register(spellCheckRoutes, { prefix: '/spell-check' });
   app.register(aiQuestionnaireRoutes, { prefix: '/ai-questionnaire' });
   app.register(ticketRoutes, { prefix: '/tickets' });

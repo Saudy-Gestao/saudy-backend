@@ -54,6 +54,12 @@ export interface SendMessageResponse {
  * Gupshup WhatsApp API Integration
  * Docs: https://docs.gupshup.io/docs/whatsapp-api-documentation
  */
+export interface GupshupV3Config {
+  bearerToken: string; // Gupshup partner token for v3
+  appId: string;       // Gupshup app UUID
+  sourceNumber: string;
+}
+
 export class GupshupService {
   private client: AxiosInstance;
   private appName: string;
@@ -62,7 +68,7 @@ export class GupshupService {
   constructor(config: GupshupConfig) {
     this.appName = config.appName;
     this.sourceNumber = this.normalizePhoneNumber(config.sourceNumber);
-    
+
     this.client = axios.create({
       baseURL: 'https://api.gupshup.io/wa/api/v1',
       headers: {
@@ -383,4 +389,206 @@ export class GupshupService {
   }
 }
 
-export default GupshupService;
+/**
+ * GupshupV3Service — Meta Cloud API passthrough via Gupshup v3 endpoint.
+ * In v3 mode:
+ *   - accountSid = Bearer token (partner token)
+ *   - authToken  = Gupshup App ID (UUID)
+ */
+export class GupshupV3Service {
+  private bearerToken: string;
+  private appId: string;
+  constructor(config: GupshupV3Config) {
+    this.bearerToken = config.bearerToken;
+    this.appId = config.appId;
+  }
+
+  private normalizePhone(phone: string): string {
+    const digits = phone.replace(/\D/g, '');
+    if (!digits.startsWith('55') && (digits.length === 11 || digits.length === 10)) {
+      return `55${digits}`;
+    }
+    return digits;
+  }
+
+  private async sendV3(to: string, message: Record<string, unknown>): Promise<SendMessageResponse> {
+    const destination = this.normalizePhone(to);
+    const body = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: destination,
+      ...message,
+    };
+
+    try {
+      const res = await axios.post(
+        `https://api.gupshup.io/partner/app/${this.appId}/v3/message`,
+        new URLSearchParams({ message: JSON.stringify(body) }).toString(),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Bearer ${this.bearerToken}`,
+          },
+        },
+      );
+
+      console.log('[gupshup-v3] response', res.status, JSON.stringify(res.data));
+
+      if (res.data?.messages?.[0]?.id || res.data?.status === 'submitted' || res.data?.status === 'success') {
+        return {
+          status: 'success',
+          messageId: res.data?.messages?.[0]?.id || res.data?.messageId,
+        };
+      }
+
+      return { status: 'error', error: JSON.stringify(res.data) };
+    } catch (error: any) {
+      const rawData = error.response?.data;
+      console.error('[gupshup-v3] error', error.response?.status, JSON.stringify(rawData));
+      return {
+        status: 'error',
+        error: rawData?.error?.message || rawData?.message || JSON.stringify(rawData) || error.message,
+      };
+    }
+  }
+
+  async sendTextMessage(params: SendMessageParams): Promise<SendMessageResponse> {
+    return this.sendV3(params.to, {
+      type: 'text',
+      text: { body: params.message },
+    });
+  }
+
+  async sendTemplateMessage(params: SendTemplateParams): Promise<SendMessageResponse> {
+    // Build components array from ordered params
+    const components = params.params.length > 0
+      ? [{
+          type: 'body',
+          parameters: params.params.map((text) => ({ type: 'text', text })),
+        }]
+      : [];
+
+    return this.sendV3(params.to, {
+      type: 'template',
+      template: {
+        name: params.templateId,
+        language: { code: 'pt_BR' },
+        components,
+      },
+    });
+  }
+
+  async sendQuickReplyMessage(params: SendQuickReplyParams): Promise<SendMessageResponse> {
+    return this.sendV3(params.to, {
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: params.body },
+        ...(params.footer ? { footer: { text: params.footer } } : {}),
+        action: {
+          buttons: params.options.slice(0, 3).map((opt, i) => ({
+            type: 'reply',
+            reply: {
+              id: opt.postbackText || String(i + 1),
+              title: opt.title.slice(0, 20),
+            },
+          })),
+        },
+      },
+    });
+  }
+
+  async sendListMessage(params: SendListMessageParams): Promise<SendMessageResponse> {
+    return this.sendV3(params.to, {
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: params.body },
+        action: {
+          button: params.buttonTitle || 'Ver opções',
+          sections: [
+            {
+              title: params.sectionTitle || 'Opções',
+              rows: params.options.slice(0, 10).map((opt, i) => ({
+                id: opt.postbackText || String(i + 1),
+                title: opt.title.slice(0, 24),
+                description: (opt.description || '').slice(0, 72),
+              })),
+            },
+          ],
+        },
+      },
+    });
+  }
+
+  async sendFlowMessage(params: {
+    to: string;
+    flowId: string;
+    flowToken: string;
+    bodyText: string;
+    ctaText: string;
+    screenId?: string;
+    data?: Record<string, unknown>;
+  }): Promise<SendMessageResponse> {
+    return this.sendV3(params.to, {
+      type: 'interactive',
+      interactive: {
+        type: 'flow',
+        body: { text: params.bodyText },
+        action: {
+          name: 'flow',
+          parameters: {
+            flow_message_version: '3',
+            flow_token: params.flowToken,
+            flow_id: params.flowId,
+            flow_cta: params.ctaText,
+            flow_action: 'navigate',
+            flow_action_payload: {
+              screen: params.screenId || 'INTRO',
+              data: params.data || {},
+            },
+          },
+        },
+      },
+    });
+  }
+
+  async getMediaUrl(mediaId: string): Promise<{ url: string } | null> {
+    // In v3 / Meta Cloud API, media is fetched from Meta's endpoint using the media ID
+    // Gupshup provides a proxy or you fetch directly from Meta Graph API
+    try {
+      const res = await axios.get(
+        `https://api.gupshup.io/partner/app/${this.appId}/v3/media/${mediaId}`,
+        {
+          headers: { 'Authorization': `Bearer ${this.bearerToken}` },
+        },
+      );
+      const url = res.data?.url || res.data?.media?.url || null;
+      if (url) return { url };
+      return null;
+    } catch (error: any) {
+      console.error('[gupshup-v3] getMediaUrl error', error.response?.status, JSON.stringify(error.response?.data));
+      return null;
+    }
+  }
+}
+
+/**
+ * Creates a GupshupV3Service from the shape stored in WhatsAppConfig:
+ *   accountSid  = Bearer token (Gupshup partner token)
+ *   authToken   = Gupshup App ID
+ *   fromNumber  = source WhatsApp number (kept for compat, not used in v3 API calls)
+ */
+export function createMessagingService(config: {
+  accountSid: string;
+  authToken: string;
+  fromNumber?: string;
+}): GupshupV3Service {
+  return new GupshupV3Service({
+    bearerToken: config.accountSid,
+    appId: config.authToken,
+    sourceNumber: config.fromNumber || '',
+  });
+}
+
+export default GupshupV3Service;

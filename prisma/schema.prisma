@@ -1793,6 +1793,7 @@ model WhatsAppConfig {
     authToken   String
     fromNumber  String
     appId       String?  // Gupshup App ID (UUID) — usado para sincronizar status de templates HSM
+    flowId      String?  // WhatsApp Flow ID (Meta) — quando configurado, abre Flow nativo em vez do chatbot de texto
     isActive    Boolean  @default(true)
     createdAt   DateTime @default(now())
     updatedAt   DateTime @updatedAt

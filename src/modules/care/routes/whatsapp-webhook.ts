@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
-import GupshupService from '../lib/gupshup';
+import { createMessagingService } from '../lib/gupshup';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -377,10 +377,10 @@ async function sendDecisionLockedGuidance(params: {
 
   if (!canUseBranchConfig) return;
 
-  const gupshup = new GupshupService({
-    apiKey,
-    appName,
-    sourceNumber,
+  const gupshup = createMessagingService({
+    accountSid: apiKey,
+    authToken: appName,
+    fromNumber: sourceNumber,
   });
 
   try {
@@ -536,6 +536,7 @@ const extractInboundMessageText = (payload: any): string => {
     payload?.payload?.title,
     payload?.payload?.postbackText,
     payload?.payload?.reply,
+    payload?.text?.body,
     payload?.text,
     payload?.message?.text,
     payload?.message?.content?.text,
@@ -544,6 +545,7 @@ const extractInboundMessageText = (payload: any): string => {
     payload?.interactive?.button_reply?.id,
     payload?.interactive?.list_reply?.title,
     payload?.interactive?.list_reply?.id,
+    payload?.interactive?.nfm_reply?.body,
     payload?.button?.text,
   ];
 
@@ -712,6 +714,86 @@ const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED'
   return null;
 };
 
+/**
+ * Normalize a Meta v3 (Cloud API passthrough) webhook body into the same
+ * shape as Gupshup v2 so the rest of the handler can treat them identically.
+ *
+ * v3 body:
+ * { object: "whatsapp_business_account", entry: [{ changes: [{ value: { messages: [...], statuses: [...] } }] }] }
+ */
+function normalizeV3WebhookBody(v3Body: any): { normalizedBody: any; normalizedPayload: any; isV3Flow: boolean } {
+  const value = v3Body?.entry?.[0]?.changes?.[0]?.value || {};
+  const message = value?.messages?.[0] || null;
+  const status = value?.statuses?.[0] || null;
+  const contact = value?.contacts?.[0] || null;
+
+  // Check if this is a Flow nfm_reply completion
+  const isV3Flow = message?.interactive?.type === 'nfm_reply';
+
+  if (status && !message) {
+    // Delivery status event
+    const normalizedPayload = {
+      source: status.recipient_id || '',
+      status: status.status, // sent / delivered / read / failed
+      gsId: status.id,
+      id: status.id,
+      errors: status.errors || [],
+    };
+    return { normalizedBody: { type: `message_${status.status}` }, normalizedPayload, isV3Flow: false };
+  }
+
+  if (!message) {
+    return { normalizedBody: v3Body, normalizedPayload: {}, isV3Flow: false };
+  }
+
+  const from = message.from || '';
+  const msgId = message.id || '';
+  const type = message.type || 'text';
+
+  let textContent = '';
+  let interactivePayload: Record<string, unknown> = {};
+  let mediaPayload: Record<string, unknown> = {};
+
+  if (type === 'text') {
+    textContent = message.text?.body || '';
+  } else if (type === 'interactive') {
+    const interactive = message.interactive || {};
+    const iType = interactive.type || '';
+    if (iType === 'list_reply') {
+      textContent = interactive.list_reply?.id || interactive.list_reply?.title || '';
+    } else if (iType === 'button_reply') {
+      textContent = interactive.button_reply?.id || interactive.button_reply?.title || '';
+    } else if (iType === 'nfm_reply') {
+      textContent = interactive.nfm_reply?.body || '';
+    }
+    interactivePayload = interactive;
+  } else if (['image', 'video', 'audio', 'document'].includes(type)) {
+    const mediaObj = message[type] || {};
+    mediaPayload = {
+      type,
+      url: mediaObj.link || mediaObj.url || '',
+      mimeType: mediaObj.mime_type || '',
+      fileName: mediaObj.filename || mediaObj.caption || '',
+      mediaId: mediaObj.id || '',
+    };
+  }
+
+  const normalizedPayload = {
+    source: from,
+    gsId: msgId,
+    id: msgId,
+    type: type === 'text' ? 'text' : type,
+    payload: {
+      text: textContent,
+      ...(Object.keys(mediaPayload).length > 0 ? mediaPayload : {}),
+    },
+    interactive: Object.keys(interactivePayload).length > 0 ? interactivePayload : undefined,
+    sender: { phone: from, name: contact?.profile?.name || '' },
+  };
+
+  return { normalizedBody: { type: 'message' }, normalizedPayload, isV3Flow };
+}
+
 export default async function whatsappWebhookRoutes(app: FastifyInstance) {
   app.get('/whatsapp/webhook/gupshup', async () => ({ ok: true }));
 
@@ -731,8 +813,54 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
       },
     },
   }, async (request) => {
-    const body = request.body as any;
-    const inboundPayload = body?.payload || {};
+    const rawBody = request.body as any;
+
+    // Detect and normalize Meta v3 (Cloud API passthrough) format
+    const isV3 = rawBody?.object === 'whatsapp_business_account';
+    let body = rawBody;
+    let inboundPayload: any;
+    let isV3Flow = false;
+
+    if (isV3) {
+      const normalized = normalizeV3WebhookBody(rawBody);
+      body = normalized.normalizedBody;
+      inboundPayload = normalized.normalizedPayload;
+      isV3Flow = normalized.isV3Flow;
+    } else {
+      inboundPayload = body?.payload || {};
+    }
+
+    // Handle v3 Flow completion (nfm_reply) — save as chatbot conversation message and return
+    if (isV3Flow) {
+      const message = rawBody?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+      const nfmReply = message?.interactive?.nfm_reply;
+      const from = normalizePhoneForConversation(message?.from || '');
+      let flowData: Record<string, unknown> = {};
+      try {
+        flowData = JSON.parse(nfmReply?.response_json || '{}') as Record<string, unknown>;
+      } catch { /* ignore */ }
+
+      if (from) {
+        const chatbotBranchHint = await resolveBranchHintFromPayload(rawBody, from);
+        if (chatbotBranchHint) {
+          const summary = [
+            flowData.service_id && `Serviço: ${flowData.service_id}`,
+            flowData.procedure_id && `Procedimento: ${flowData.procedure_id}`,
+            flowData.date_id && `Data preferida: ${flowData.date_id}`,
+          ].filter(Boolean).join(', ');
+
+          await handleWhatsAppChatbot({
+            phone: from,
+            text: `[FLOW_COMPLETE] ${summary}`,
+            metadata: { flowData, source: 'whatsapp_flow' },
+            branchIdHint: chatbotBranchHint,
+          });
+        }
+      }
+
+      return { success: true, flow: true };
+    }
+
     const inboundMedia = extractInboundMedia(inboundPayload);
     const inboundText = extractInboundMessageText(inboundPayload);
     const confirmationAction = parseConfirmationAction(inboundPayload);

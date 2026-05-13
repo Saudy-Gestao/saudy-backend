@@ -22,6 +22,16 @@ vi.mock('../../src/modules/care/lib/gupshup', () => ({
     sendQuickReplyMessage: sendQuickReplyMessageMock,
     sendTextMessage: sendTextMessageMock,
   })),
+  createMessagingService: vi.fn().mockImplementation(() => ({
+    sendTemplateMessage: sendTemplateMessageMock,
+    sendQuickReplyMessage: sendQuickReplyMessageMock,
+    sendTextMessage: sendTextMessageMock,
+  })),
+  GupshupV3Service: vi.fn().mockImplementation(() => ({
+    sendTemplateMessage: sendTemplateMessageMock,
+    sendQuickReplyMessage: sendQuickReplyMessageMock,
+    sendTextMessage: sendTextMessageMock,
+  })),
 }));
 
 vi.mock('../../src/modules/care/lib/whatsapp-message-builder', () => ({

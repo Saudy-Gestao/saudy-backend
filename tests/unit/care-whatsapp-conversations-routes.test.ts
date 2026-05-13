@@ -11,6 +11,14 @@ vi.mock('../../src/modules/care/lib/gupshup', () => ({
     sendTextMessage: sendTextMessageMock,
     getMediaUrl: getMediaUrlMock,
   })),
+  createMessagingService: vi.fn().mockImplementation(() => ({
+    sendTextMessage: sendTextMessageMock,
+    getMediaUrl: getMediaUrlMock,
+  })),
+  GupshupV3Service: vi.fn().mockImplementation(() => ({
+    sendTextMessage: sendTextMessageMock,
+    getMediaUrl: getMediaUrlMock,
+  })),
 }));
 
 vi.mock('../../src/modules/care/lib/prisma', () => ({

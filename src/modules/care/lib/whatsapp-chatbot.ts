@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
-import GupshupService from './gupshup';
+import { GupshupV3Service } from './gupshup';
 import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
@@ -82,6 +82,7 @@ type BranchConfig = {
   apiKey: string;
   appName: string;
   sourceNumber: string;
+  flowId: string | null;
 };
 
 type PatientLookup = {
@@ -570,19 +571,29 @@ const resolveOptionSelection = (
   }) || null;
 };
 
+function configToBranchConfig(branchId: string, branchName: string | null, config: {
+  accountSid: string;
+  authToken: string;
+  fromNumber: string;
+  flowId: string | null;
+}): BranchConfig {
+  return {
+    branchId,
+    branchName,
+    apiKey: config.accountSid,
+    appName: config.authToken,
+    sourceNumber: config.fromNumber,
+    flowId: config.flowId,
+  };
+}
+
 async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig | null> {
   const preferredBranchId = String(branchIdHint || '').trim();
   if (preferredBranchId) {
     const branch = await prisma.branch.findUnique({ where: { id: preferredBranchId } });
     const config = await prisma.whatsAppConfig.findUnique({ where: { branchId: preferredBranchId } });
     if (config?.isActive) {
-      return {
-        branchId: preferredBranchId,
-        branchName: branch?.tradeName || null,
-        apiKey: config.accountSid,
-        appName: config.authToken,
-        sourceNumber: config.fromNumber,
-      };
+      return configToBranchConfig(preferredBranchId, branch?.tradeName || null, config);
     }
   }
 
@@ -590,13 +601,7 @@ async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig 
     const branch = await prisma.branch.findUnique({ where: { id: CHATBOT_BRANCH_ID } });
     const config = await prisma.whatsAppConfig.findUnique({ where: { branchId: CHATBOT_BRANCH_ID } });
     if (config?.isActive) {
-      return {
-        branchId: CHATBOT_BRANCH_ID,
-        branchName: branch?.tradeName || null,
-        apiKey: config.accountSid,
-        appName: config.authToken,
-        sourceNumber: config.fromNumber,
-      };
+      return configToBranchConfig(CHATBOT_BRANCH_ID, branch?.tradeName || null, config);
     }
   }
 
@@ -608,22 +613,17 @@ async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig 
 
   if (activeConfigs.length === 1) {
     const branch = await prisma.branch.findUnique({ where: { id: activeConfigs[0].branchId } });
-    return {
-      branchId: activeConfigs[0].branchId,
-      branchName: branch?.tradeName || null,
-      apiKey: activeConfigs[0].accountSid,
-      appName: activeConfigs[0].authToken,
-      sourceNumber: activeConfigs[0].fromNumber,
-    };
+    return configToBranchConfig(activeConfigs[0].branchId, branch?.tradeName || null, activeConfigs[0]);
   }
 
   return null;
 }
 
+
 async function sendResponse(branchConfig: BranchConfig, phone: string, response: ChatbotResponse) {
-  const gupshup = new GupshupService({
-    apiKey: branchConfig.apiKey,
-    appName: branchConfig.appName,
+  const gupshup = new GupshupV3Service({
+    bearerToken: branchConfig.apiKey,
+    appId: branchConfig.appName,
     sourceNumber: branchConfig.sourceNumber,
   });
 
@@ -648,10 +648,7 @@ async function sendResponse(branchConfig: BranchConfig, phone: string, response:
     });
   }
 
-  return gupshup.sendTextMessage({
-    to: phone,
-    message: response.text,
-  });
+  return gupshup.sendTextMessage({ to: phone, message: response.text });
 }
 
 async function lookupPatient(branchId: string, phone: string): Promise<PatientLookup | null> {
@@ -2918,6 +2915,41 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
 
   const branchConfig = await resolveBranchConfig(input.branchIdHint);
   if (!branchConfig?.branchId) return { handled: false };
+
+  // v3 + Flow mode: send a WhatsApp Flow when user sends initial message in a fresh conversation
+  if (branchConfig.flowId) {
+    const isFlowComplete = text.startsWith('[FLOW_COMPLETE]');
+    if (!isFlowComplete) {
+      const existingConversation = await prisma.whatsAppConversation.findUnique({
+        where: { branchId_phone: { branchId: branchConfig.branchId, phone } },
+        select: { state: true, humanStatus: true },
+      });
+
+      const isNewOrMenu = !existingConversation || existingConversation.state === 'MENU';
+      const isHumanActive = existingConversation?.humanStatus === 'QUEUED'
+        || existingConversation?.humanStatus === 'ASSIGNED';
+
+      if (isNewOrMenu && !isHumanActive) {
+        const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone })).toString('base64');
+        const v3 = new GupshupV3Service({
+          bearerToken: branchConfig.apiKey,
+          appId: branchConfig.appName,
+          sourceNumber: branchConfig.sourceNumber,
+        });
+
+        await v3.sendFlowMessage({
+          to: phone,
+          flowId: branchConfig.flowId,
+          flowToken,
+          bodyText: 'Olá! Para agendar uma consulta ou exame, preencha o formulário abaixo.',
+          ctaText: 'Agendar',
+          screenId: 'INTRO',
+        });
+
+        return { handled: true };
+      }
+    }
+  }
 
   let patient = await lookupPatient(branchConfig.branchId, phone);
   let conversation = await upsertConversation({
