@@ -63,9 +63,12 @@ type ChatbotInput = {
   branchIdHint?: string;
 };
 
+type ListOption = { title: string; postbackText: string; description?: string };
+
 type ChatbotResponse = {
   text: string;
   binaryOptions?: boolean;
+  listOptions?: { buttonTitle?: string; sectionTitle?: string; options: ListOption[] };
 };
 
 type ChatbotResult = {
@@ -98,7 +101,8 @@ type SlotSuggestion = {
 
 type ConversationHistoryEntry = {
   state: string;
-  prompt: string;
+  prompt: string; // kept for backward-compat with persisted JSON; use savedResponse when present
+  savedResponse?: ChatbotResponse;
   context: Omit<ConversationContext, 'history'>;
 };
 
@@ -153,12 +157,38 @@ const serializeOptions = (options: Array<{ value: string; label: string }>) => o
   .map((option, index) => `${index + 1}. ${option.label}`)
   .join('\n');
 
-const buildMenuMessage = (patientName?: string | null) => {
+// Converts a named options array into listOptions for interactive list messages.
+// postbackText uses the 1-based index so existing resolveOptionSelection() keeps working.
+const toListOptions = (
+  options: Array<{ value: string; label: string }>,
+  buttonTitle?: string,
+  sectionTitle?: string,
+): ChatbotResponse['listOptions'] => ({
+  buttonTitle: buttonTitle || 'Ver opções',
+  sectionTitle,
+  options: options.map((opt, i) => ({ title: opt.label, postbackText: String(i + 1) })),
+});
+
+const MENU_LIST_OPTIONS: ChatbotResponse['listOptions'] = {
+  buttonTitle: 'Ver opções',
+  sectionTitle: 'O que você precisa?',
+  options: [
+    { title: 'Marcação de consulta', postbackText: '1' },
+    { title: 'Marcação de exame', postbackText: '2' },
+    { title: 'Dúvidas', postbackText: '3' },
+    { title: 'Próximas consultas/exames', postbackText: '4' },
+  ],
+};
+
+const buildMenuMessage = (patientName?: string | null): ChatbotResponse => {
   const greeting = patientName
     ? `Olá, ${patientName}. Como posso te ajudar hoje?`
     : 'Olá. Como posso te ajudar hoje?';
 
-  return `${greeting}\n\n1. Marcação de consulta\n2. Marcação de exame\n3. Dúvidas\n4. Próximas consultas/exames\n\nSe quiser voltar, escreva VOLTAR.\nSe quiser encerrar e recomeçar, escreva SAIR.`;
+  return {
+    text: greeting,
+    listOptions: MENU_LIST_OPTIONS,
+  };
 };
 
 const buildYesNoMessage = (body: string): ChatbotResponse => ({
@@ -304,18 +334,24 @@ const stripHistoryFromContext = (context: ConversationContext): Omit<Conversatio
 const pushHistoryEntry = (
   context: ConversationContext,
   state: string,
-  prompt: string,
-): ConversationContext => ({
-  ...context,
-  history: [
-    ...((context.history || []).slice(-9)),
-    {
-      state,
-      prompt,
-      context: stripHistoryFromContext(context),
-    },
-  ],
-});
+  promptOrResponse: string | ChatbotResponse,
+): ConversationContext => {
+  const savedResponse: ChatbotResponse = typeof promptOrResponse === 'string'
+    ? { text: promptOrResponse }
+    : promptOrResponse;
+  return {
+    ...context,
+    history: [
+      ...((context.history || []).slice(-9)),
+      {
+        state,
+        prompt: savedResponse.text,
+        savedResponse,
+        context: stripHistoryFromContext(context),
+      },
+    ],
+  };
+};
 
 const restorePreviousStep = (context: ConversationContext): {
   state: string;
@@ -333,7 +369,7 @@ const restorePreviousStep = (context: ConversationContext): {
       lastPrompt: previous.prompt,
       history: history.slice(0, -1),
     },
-    response: {
+    response: previous.savedResponse || {
       text: previous.prompt,
       binaryOptions: BINARY_RESPONSE_STATES.has(previous.state),
     },
@@ -599,6 +635,16 @@ async function sendResponse(branchConfig: BranchConfig, phone: string, response:
         { title: 'Sim', postbackText: 'SIM' },
         { title: 'Não', postbackText: 'NAO' },
       ],
+    });
+  }
+
+  if (response.listOptions) {
+    return gupshup.sendListMessage({
+      to: phone,
+      body: response.text,
+      buttonTitle: response.listOptions.buttonTitle,
+      sectionTitle: response.listOptions.sectionTitle,
+      options: response.listOptions.options,
     });
   }
 
@@ -931,7 +977,7 @@ async function recordConversationMessage(params: {
     : baseMetadata;
   const hasMetadata = Object.keys(mergedMetadata).length > 0;
 
-  return prisma.whatsAppConversationMessage.create({
+  const savedMessage = await prisma.whatsAppConversationMessage.create({
     data: {
       conversationId: params.conversationId,
       branchId: params.branchId,
@@ -945,6 +991,24 @@ async function recordConversationMessage(params: {
       message: normalizedMessage,
     },
   });
+
+  if (params.authorType === 'PATIENT' && params.metadata?.mediaType) {
+    await prisma.whatsAppConversationMedia.create({
+      data: {
+        conversationId: params.conversationId,
+        branchId: params.branchId,
+        phone: formatPhoneForLookup(params.phone),
+        mediaType: String(params.metadata.mediaType),
+        mediaUrl: params.metadata.mediaUrl ? String(params.metadata.mediaUrl) : null,
+        fileName: params.metadata.fileName ? String(params.metadata.fileName) : null,
+        mimeType: params.metadata.mimeType ? String(params.metadata.mimeType) : null,
+        mediaId: params.metadata.mediaId ? String(params.metadata.mediaId) : null,
+        providerMessageId: params.providerMessageId || null,
+      },
+    });
+  }
+
+  return savedMessage;
 }
 
 async function listInsuranceOptions(branchId: string, serviceType: 'CONSULTA' | 'EXAME') {
@@ -1270,6 +1334,7 @@ async function openHumanHandoffConversation(params: {
 
 async function reserveAppointment(params: {
   branchId: string;
+  conversationId: string;
   patient: PatientLookup | null;
   patientName: string | null;
   phone: string;
@@ -1297,7 +1362,7 @@ async function reserveAppointment(params: {
 
   const publicToken = randomBytes(24).toString('hex');
 
-  return prisma.$transaction(async (tx: any) => {
+  const created = await prisma.$transaction(async (tx: any) => {
     const appointment = await tx.appointment.create({
       data: {
         branchId: params.branchId,
@@ -1333,6 +1398,13 @@ async function reserveAppointment(params: {
 
     return appointment;
   });
+
+  await prisma.whatsAppConversationMedia.updateMany({
+    where: { conversationId: params.conversationId, appointmentId: null },
+    data: { appointmentId: created.id },
+  });
+
+  return created;
 }
 
 async function ensurePatientForConversation(params: {
@@ -1450,7 +1522,7 @@ async function processFlow(params: {
     && conversation.state !== 'HANDED_OFF'
   ) {
     const restored = restorePreviousStep(context);
-    const response = restored?.response || { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
+    const response = restored?.response || buildMenuMessage(patient?.name || conversation.patientName || null);
     await saveConversation(conversation.id, {
       state: restored?.state || 'AWAITING_SERVICE',
       selectedService: restored?.state === 'AWAITING_SERVICE' ? null : conversation.selectedService,
@@ -1470,7 +1542,7 @@ async function processFlow(params: {
     || conversation.state === 'COMPLETED'
     || conversation.state === 'HANDED_OFF'
   ) {
-    const response = { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
+    const response = buildMenuMessage(patient?.name || conversation.patientName || null);
     await saveConversation(conversation.id, {
       state: 'AWAITING_SERVICE',
       selectedService: null,
@@ -1487,7 +1559,7 @@ async function processFlow(params: {
     case 'AWAITING_SERVICE': {
       const selected = parseServiceType(text);
       if (!selected) {
-        const response = { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
+        const response = buildMenuMessage(patient?.name || conversation.patientName || null);
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
           lastOutboundMessage: response.text,
@@ -1575,7 +1647,10 @@ async function processFlow(params: {
         buildMenuMessage(patient?.name || conversation.patientName || null),
       );
       const unitOptions = await listUnitOptions(branchConfig.branchId);
-      const response = { text: `Qual unidade você deseja?\n${serializeOptions(unitOptions)}` };
+      const response: ChatbotResponse = {
+        text: 'Qual unidade você deseja?',
+        listOptions: toListOptions(unitOptions, 'Ver unidades', 'Unidades disponíveis'),
+      };
       context.options = unitOptions;
       context.lastPrompt = response.text;
       await saveConversation(conversation.id, {
@@ -1612,7 +1687,10 @@ async function processFlow(params: {
       if (patientAtSelectedUnit?.healthInsuranceName) {
         context.selectedInsurance = patientAtSelectedUnit.healthInsuranceName;
         const procedureOptions = await listProcedureOptions(selected.value, context.serviceType || 'CONSULTA', patientAtSelectedUnit.healthInsuranceName);
-        const response = { text: `Certo. Na unidade ${selected.label}, encontrei o convênio ${patientAtSelectedUnit.healthInsuranceName} no seu cadastro.\n\nQual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
+        const response: ChatbotResponse = {
+          text: `Certo. Na unidade ${selected.label}, encontrei o convênio ${patientAtSelectedUnit.healthInsuranceName} no seu cadastro.\n\nQual procedimento você deseja?`,
+          listOptions: toListOptions(procedureOptions, 'Ver procedimentos', 'Procedimentos disponíveis'),
+        };
         context.options = procedureOptions;
         context.lastPrompt = response.text;
         await saveConversation(conversation.id, {
@@ -1627,7 +1705,10 @@ async function processFlow(params: {
       }
 
       const insuranceOptions = await listInsuranceOptions(selected.value, context.serviceType || 'CONSULTA');
-      const response = { text: `Qual é o seu convênio na unidade ${selected.label}?\n${serializeOptions(insuranceOptions)}` };
+      const response: ChatbotResponse = {
+        text: `Qual é o seu convênio na unidade ${selected.label}?`,
+        listOptions: toListOptions(insuranceOptions, 'Ver convênios', 'Convênios disponíveis'),
+      };
       context.options = insuranceOptions;
       context.lastPrompt = response.text;
       await saveConversation(conversation.id, {
@@ -1686,7 +1767,10 @@ async function processFlow(params: {
       );
       context.selectedInsurance = selected.label;
       const procedureOptions = await listProcedureOptions(getTargetBranchId(), context.serviceType || 'CONSULTA', selected.label);
-      const response = { text: `Qual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
+      const response: ChatbotResponse = {
+        text: 'Qual procedimento você deseja?',
+        listOptions: toListOptions(procedureOptions, 'Ver procedimentos', 'Procedimentos disponíveis'),
+      };
       context.options = procedureOptions;
       context.lastPrompt = response.text;
 
@@ -1716,8 +1800,15 @@ async function processFlow(params: {
           'AWAITING_PROCEDURE',
           context.lastPrompt || 'Qual procedimento você deseja?',
         );
-        const response = {
-          text: 'Tudo bem. O que você deseja fazer agora?\n\n1. Falar com atendente\n2. Desejo consultar no particular',
+        const response: ChatbotResponse = {
+          text: 'Tudo bem. O que você deseja fazer agora?',
+          listOptions: {
+            buttonTitle: 'Ver opções',
+            options: [
+              { title: 'Falar com atendente', postbackText: '1' },
+              { title: 'Consultar no particular', postbackText: '2' },
+            ],
+          },
         };
         await saveConversation(conversation.id, {
           state: 'AWAITING_PROCEDURE_NOT_FOUND_ACTION',
@@ -1816,7 +1907,16 @@ async function processFlow(params: {
     case 'AWAITING_PROCEDURE_NOT_FOUND_ACTION': {
       const action = parseProcedureNotFoundAction(text);
       if (!action) {
-        const response = { text: context.lastPrompt || '1. Falar com atendente\n2. Desejo consultar no particular' };
+        const response: ChatbotResponse = {
+          text: context.lastPrompt || 'O que você deseja fazer agora?',
+          listOptions: {
+            buttonTitle: 'Ver opções',
+            options: [
+              { title: 'Falar com atendente', postbackText: '1' },
+              { title: 'Consultar no particular', postbackText: '2' },
+            ],
+          },
+        };
         await saveConversation(conversation.id, {
           lastInboundMessage: text,
           lastOutboundMessage: response.text,
@@ -2554,6 +2654,7 @@ async function processFlow(params: {
 
       const appointment = await reserveAppointment({
         branchId: getTargetBranchId(),
+        conversationId: conversation.id,
         patient: resolvedPatient,
         patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
         phone: input.phone,
@@ -2597,7 +2698,7 @@ async function processFlow(params: {
       }
 
       if (selectedStep === 'SERVICE') {
-        const response = { text: buildMenuMessage(patient?.name || conversation.patientName || context.nameCandidate || null) };
+        const response = buildMenuMessage(patient?.name || conversation.patientName || context.nameCandidate || null);
         await saveConversation(conversation.id, {
           state: 'AWAITING_SERVICE',
           selectedService: null,
@@ -2610,7 +2711,10 @@ async function processFlow(params: {
 
       if (selectedStep === 'UNIT') {
         const unitOptions = await listUnitOptions(branchConfig.branchId);
-        const response = { text: `Qual unidade você deseja?\n${serializeOptions(unitOptions)}` };
+        const response: ChatbotResponse = {
+          text: 'Qual unidade você deseja?',
+          listOptions: toListOptions(unitOptions, 'Ver unidades', 'Unidades disponíveis'),
+        };
         await saveConversation(conversation.id, {
           state: 'AWAITING_UNIT',
           patientId: null,
@@ -2639,7 +2743,10 @@ async function processFlow(params: {
 
       if (selectedStep === 'INSURANCE') {
         const insuranceOptions = await listInsuranceOptions(getTargetBranchId(), context.serviceType || 'CONSULTA');
-        const response = { text: `Qual é o seu convênio?\n${serializeOptions(insuranceOptions)}` };
+        const response: ChatbotResponse = {
+          text: 'Qual é o seu convênio?',
+          listOptions: toListOptions(insuranceOptions, 'Ver convênios', 'Convênios disponíveis'),
+        };
         await saveConversation(conversation.id, {
           state: 'AWAITING_INSURANCE',
           context: {
@@ -2695,7 +2802,10 @@ async function processFlow(params: {
           context.serviceType || 'CONSULTA',
           context.selectedInsurance || patient?.healthInsuranceName || '',
         );
-        const response = { text: `Qual procedimento você deseja?\n${serializeOptions(procedureOptions)}` };
+        const response: ChatbotResponse = {
+          text: 'Qual procedimento você deseja?',
+          listOptions: toListOptions(procedureOptions, 'Ver procedimentos', 'Procedimentos disponíveis'),
+        };
         await saveConversation(conversation.id, {
           state: 'AWAITING_PROCEDURE',
           context: {
@@ -2788,7 +2898,7 @@ async function processFlow(params: {
     }
 
     default: {
-      const response = { text: buildMenuMessage(patient?.name || conversation.patientName || null) };
+      const response = buildMenuMessage(patient?.name || conversation.patientName || null);
       await saveConversation(conversation.id, {
         state: 'AWAITING_SERVICE',
         selectedService: null,

@@ -1926,6 +1926,7 @@ model WhatsAppConversation {
     createdAt             DateTime                  @default(now())
     updatedAt             DateTime                  @updatedAt
     messages              WhatsAppConversationMessage[]
+    media                 WhatsAppConversationMedia[]
 
     @@unique([branchId, phone])
     @@index([branchId])
@@ -1973,6 +1974,26 @@ model WhatsAppConversationMessage {
     @@map("whatsapp_conversation_messages")
 }
 
+model WhatsAppConversationMedia {
+    id                String                @id @default(uuid())
+    conversationId    String
+    conversation      WhatsAppConversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+    branchId          String
+    phone             String
+    appointmentId     String?
+    mediaType         String
+    mediaUrl          String?               @db.Text
+    fileName          String?
+    mimeType          String?
+    mediaId           String?
+    providerMessageId String?
+    createdAt         DateTime              @default(now())
+
+    @@index([conversationId, createdAt])
+    @@index([appointmentId])
+    @@map("whatsapp_conversation_media")
+}
+
 model WhatsAppConversationOperatorConfig {
     id                     String   @id @default(uuid())
     userId                 String   @unique
@@ -2011,6 +2032,20 @@ model WhatsAppConversationTemplate {
 
     @@index([companyId, name])
     @@map("whatsapp_conversation_templates")
+}
+
+model WhatsAppTemplateShortcut {
+    id         String   @id @default(uuid())
+    userId     String
+    templateId String
+    shortcut   String
+    createdAt  DateTime @default(now())
+    updatedAt  DateTime @updatedAt
+
+    @@unique([userId, templateId])
+    @@unique([userId, shortcut])
+    @@index([userId])
+    @@map("whatsapp_template_shortcuts")
 }
 
 enum LeadStatus {

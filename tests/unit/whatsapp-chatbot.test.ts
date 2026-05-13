@@ -4,11 +4,13 @@ import prisma from '../../src/modules/care/lib/prisma';
 
 const sendTextMessageMock = vi.fn();
 const sendQuickReplyMessageMock = vi.fn();
+const sendListMessageMock = vi.fn();
 
 vi.mock('../../src/modules/care/lib/gupshup', () => ({
   default: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
     sendQuickReplyMessage: sendQuickReplyMessageMock,
+    sendListMessage: sendListMessageMock,
   })),
 }));
 
@@ -39,6 +41,10 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     },
     whatsAppConversationMessage: {
       create: vi.fn(),
+    },
+    whatsAppConversationMedia: {
+      create: vi.fn(),
+      updateMany: vi.fn(),
     },
     appointment: {
       findMany: vi.fn(),
@@ -135,6 +141,8 @@ describe('handleWhatsAppChatbot', () => {
       lastInteractionAt: new Date(),
     }));
     mockedPrisma.whatsAppConversationMessage.create.mockResolvedValue({ id: 'msg-1' });
+    mockedPrisma.whatsAppConversationMedia.create.mockResolvedValue({ id: 'media-1' });
+    mockedPrisma.whatsAppConversationMedia.updateMany.mockResolvedValue({ count: 0 });
     mockedPrisma.appointment.findMany.mockResolvedValue([]);
     mockedPrisma.appointment.findFirst.mockResolvedValue(null);
     mockedPrisma.appointment.create.mockResolvedValue({ id: 'a-1' });
@@ -154,6 +162,7 @@ describe('handleWhatsAppChatbot', () => {
     }));
     sendTextMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-1' });
     sendQuickReplyMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-2' });
+    sendListMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-3' });
   });
 
   it('returns handled false when text is empty', async () => {
@@ -207,7 +216,7 @@ describe('handleWhatsAppChatbot', () => {
     });
 
     expect(result.handled).toBe(true);
-    expect(sendTextMessageMock).toHaveBeenCalled();
+    expect(sendListMessageMock).toHaveBeenCalled();
     expect(mockedPrisma.whatsAppConversation.update).toHaveBeenCalled();
   });
 
@@ -324,7 +333,7 @@ describe('handleWhatsAppChatbot', () => {
     });
 
     expect(result.handled).toBe(true);
-    expect(sendTextMessageMock).toHaveBeenCalled();
+    expect(sendListMessageMock).toHaveBeenCalled();
     expect(mockedPrisma.whatsAppConversation.update).toHaveBeenNthCalledWith(1, expect.objectContaining({
       where: { id: 'conv-1' },
       data: expect.objectContaining({
@@ -378,8 +387,8 @@ describe('handleWhatsAppChatbot', () => {
     });
 
     expect(result.handled).toBe(true);
-    expect(result.response?.text).toContain('Olá, Maria. Como posso te ajudar hoje?');
-    expect(result.response?.text).toContain('1. Marcação de consulta');
+    expect(result.response?.text).toContain('Como posso te ajudar');
+    expect(result.response?.listOptions?.options.length).toBeGreaterThan(0);
   });
 
   it('goes back to previous prompt when user sends VOLTAR', async () => {

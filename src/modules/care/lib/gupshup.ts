@@ -30,6 +30,20 @@ export interface SendQuickReplyParams {
   options: QuickReplyOption[];
 }
 
+export interface ListMessageOption {
+  title: string;
+  description?: string;
+  postbackText?: string;
+}
+
+export interface SendListMessageParams {
+  to: string;
+  body: string;
+  buttonTitle?: string; // texto do botão que abre a lista (default: "Ver opções")
+  sectionTitle?: string;
+  options: ListMessageOption[];
+}
+
 export interface SendMessageResponse {
   status: 'success' | 'error';
   messageId?: string;
@@ -159,6 +173,59 @@ export class GupshupService {
     } catch (error: any) {
       const rawData = error.response?.data;
       console.error('[gupshup] quick-reply error', error.response?.status, JSON.stringify(rawData));
+      return {
+        status: 'error',
+        error: rawData?.message || rawData?.error || JSON.stringify(rawData) || error.message,
+      };
+    }
+  }
+
+  async sendListMessage(params: SendListMessageParams): Promise<SendMessageResponse> {
+    try {
+      const destinationNumber = this.normalizePhoneNumber(params.to);
+
+      const message = {
+        type: 'list',
+        title: params.body,
+        body: params.body,
+        globalButtons: [{ type: 'text', title: params.buttonTitle || 'Ver opções' }],
+        items: [
+          {
+            title: params.sectionTitle || 'Opções',
+            subtitle: '',
+            options: params.options.map((opt) => ({
+              type: 'text',
+              title: opt.title,
+              description: opt.description || '',
+              ...(opt.postbackText ? { postbackText: opt.postbackText } : {}),
+            })),
+          },
+        ],
+      };
+
+      const data = new URLSearchParams({
+        channel: 'whatsapp',
+        source: this.sourceNumber,
+        destination: destinationNumber,
+        'src.name': this.appName,
+        message: JSON.stringify(message),
+      });
+
+      const response = await this.client.post('/msg', data.toString());
+
+      console.log('[gupshup] list-message response', response.status, JSON.stringify(response.data));
+
+      if (response.data.status === 'submitted' || response.data.status === 'success') {
+        return { status: 'success', messageId: response.data.messageId };
+      }
+
+      return {
+        status: 'error',
+        error: response.data.message || JSON.stringify(response.data) || 'Erro desconhecido ao enviar list message',
+      };
+    } catch (error: any) {
+      const rawData = error.response?.data;
+      console.error('[gupshup] list-message error', error.response?.status, JSON.stringify(rawData));
       return {
         status: 'error',
         error: rawData?.message || rawData?.error || JSON.stringify(rawData) || error.message,

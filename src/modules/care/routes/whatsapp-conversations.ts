@@ -275,21 +275,20 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
     if (!access) return;
 
     const items = await prisma.$queryRaw<WhatsAppConversationTemplateRow[]>`
-      SELECT
-        "id",
-        "companyId",
-        "createdByUserId",
-        "createdByName",
-        "name",
-        "text",
-        "createdAt",
-        "updatedAt"
+      SELECT "id", "companyId", "createdByUserId", "createdByName", "name", "text", "createdAt", "updatedAt"
       FROM "whatsapp_conversation_templates"
       WHERE "companyId" = ${access.scope.companyId}
       ORDER BY lower("name") ASC, "createdAt" DESC
     `;
 
-    return { items };
+    const shortcuts = await prisma.$queryRaw<{ templateId: string; shortcut: string }[]>`
+      SELECT "templateId", "shortcut"
+      FROM "whatsapp_template_shortcuts"
+      WHERE "userId" = ${access.scope.currentUser.id}
+    `;
+    const shortcutMap = Object.fromEntries(shortcuts.map((s: { templateId: string; shortcut: string }) => [s.templateId, s.shortcut]));
+
+    return { items: items.map((t: WhatsAppConversationTemplateRow) => ({ ...t, shortcut: shortcutMap[t.id] ?? null })) };
   });
 
   app.post('/whatsapp/conversations/templates', {
@@ -310,42 +309,121 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
 
     await prisma.$executeRaw`
       INSERT INTO "whatsapp_conversation_templates" (
-        "id",
-        "companyId",
-        "createdByUserId",
-        "createdByName",
-        "name",
-        "text",
-        "createdAt",
-        "updatedAt"
+        "id", "companyId", "createdByUserId", "createdByName", "name", "text", "createdAt", "updatedAt"
       ) VALUES (
-        ${id},
-        ${access.scope.companyId},
-        ${access.scope.currentUser.id},
-        ${access.scope.currentUser.name},
-        ${name},
-        ${text},
-        ${now},
-        ${now}
+        ${id}, ${access.scope.companyId}, ${access.scope.currentUser.id},
+        ${access.scope.currentUser.name}, ${name}, ${text}, ${now}, ${now}
       )
     `;
 
     const created = await prisma.$queryRaw<WhatsAppConversationTemplateRow[]>`
-      SELECT
-        "id",
-        "companyId",
-        "createdByUserId",
-        "createdByName",
-        "name",
-        "text",
-        "createdAt",
-        "updatedAt"
+      SELECT "id", "companyId", "createdByUserId", "createdByName", "name", "text", "createdAt", "updatedAt"
       FROM "whatsapp_conversation_templates"
       WHERE "id" = ${id}
       LIMIT 1
     `;
 
-    return reply.code(201).send(created[0]);
+    return reply.code(201).send({ ...created[0], shortcut: null });
+  });
+
+  app.put('/whatsapp/conversations/templates/:id', {
+    preHandler: async (request) => { await request.jwtVerify(); },
+  }, async (request, reply) => {
+    const access = await requireActiveOperator(request, reply);
+    if (!access) return;
+
+    const { id } = request.params as { id: string };
+    const body = request.body as { name?: string; text?: string };
+    const name = normalizeOptionalString(body?.name);
+    const text = typeof body?.text === 'string' ? body.text : undefined;
+
+    const existing = await prisma.$queryRaw<WhatsAppConversationTemplateRow[]>`
+      SELECT "id" FROM "whatsapp_conversation_templates"
+      WHERE "id" = ${id} AND "companyId" = ${access.scope.companyId}
+      LIMIT 1
+    `;
+    if (!existing[0]) return reply.code(404).send({ error: 'Template not found' });
+
+    if (name !== undefined && !name) return reply.code(400).send({ error: 'Template name cannot be empty' });
+    if (text !== undefined && !text.trim()) return reply.code(400).send({ error: 'Template text cannot be empty' });
+
+    const now = new Date();
+    if (name !== undefined) {
+      await prisma.$executeRaw`UPDATE "whatsapp_conversation_templates" SET "name" = ${name}, "updatedAt" = ${now} WHERE "id" = ${id}`;
+    }
+    if (text !== undefined) {
+      await prisma.$executeRaw`UPDATE "whatsapp_conversation_templates" SET "text" = ${text}, "updatedAt" = ${now} WHERE "id" = ${id}`;
+    }
+
+    const updated = await prisma.$queryRaw<WhatsAppConversationTemplateRow[]>`
+      SELECT "id", "companyId", "createdByUserId", "createdByName", "name", "text", "createdAt", "updatedAt"
+      FROM "whatsapp_conversation_templates"
+      WHERE "id" = ${id}
+      LIMIT 1
+    `;
+
+    const shortcutRow = await prisma.$queryRaw<{ shortcut: string }[]>`
+      SELECT "shortcut" FROM "whatsapp_template_shortcuts"
+      WHERE "userId" = ${access.scope.currentUser.id} AND "templateId" = ${id}
+      LIMIT 1
+    `;
+    return { ...updated[0], shortcut: shortcutRow[0]?.shortcut ?? null };
+  });
+
+  app.delete('/whatsapp/conversations/templates/:id', {
+    preHandler: async (request) => { await request.jwtVerify(); },
+  }, async (request, reply) => {
+    const access = await requireActiveOperator(request, reply);
+    if (!access) return;
+
+    const { id } = request.params as { id: string };
+
+    const existing = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "whatsapp_conversation_templates"
+      WHERE "id" = ${id} AND "companyId" = ${access.scope.companyId}
+      LIMIT 1
+    `;
+    if (!existing[0]) return reply.code(404).send({ error: 'Template not found' });
+
+    await prisma.$executeRaw`DELETE FROM "whatsapp_conversation_templates" WHERE "id" = ${id}`;
+
+    return reply.code(204).send();
+  });
+
+  // Per-user shortcut for a template
+  app.put('/whatsapp/conversations/templates/:id/shortcut', {
+    preHandler: async (request) => { await request.jwtVerify(); },
+  }, async (request, reply) => {
+    const access = await requireActiveOperator(request, reply);
+    if (!access) return;
+
+    const { id } = request.params as { id: string };
+    const body = request.body as { shortcut?: string | null };
+    const shortcut = normalizeOptionalString(body?.shortcut) ?? null;
+
+    const existing = await prisma.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "whatsapp_conversation_templates"
+      WHERE "id" = ${id} AND "companyId" = ${access.scope.companyId}
+      LIMIT 1
+    `;
+    if (!existing[0]) return reply.code(404).send({ error: 'Template not found' });
+
+    const userId = access.scope.currentUser.id;
+
+    if (!shortcut) {
+      await prisma.$executeRaw`
+        DELETE FROM "whatsapp_template_shortcuts" WHERE "userId" = ${userId} AND "templateId" = ${id}
+      `;
+      return { shortcut: null };
+    }
+
+    await prisma.$executeRaw`
+      INSERT INTO "whatsapp_template_shortcuts" ("id", "userId", "templateId", "shortcut", "createdAt", "updatedAt")
+      VALUES (${randomUUID()}, ${userId}, ${id}, ${shortcut}, NOW(), NOW())
+      ON CONFLICT ("userId", "templateId") DO UPDATE SET "shortcut" = ${shortcut}, "updatedAt" = NOW()
+    `;
+
+    return { shortcut };
   });
 
   app.put('/whatsapp/conversations/settings', {
@@ -588,6 +666,11 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
       .reverse()
       .slice(0, 3);
 
+    const mediaItems = await prisma.whatsAppConversationMedia.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: 'asc' },
+    });
+
     return {
       conversation,
       patient: patientDetails,
@@ -596,6 +679,7 @@ export default async function whatsappConversationRoutes(app: FastifyInstance) {
         recent: recentAppointments,
       },
       items: scopedItems,
+      media: mediaItems,
     };
   });
 

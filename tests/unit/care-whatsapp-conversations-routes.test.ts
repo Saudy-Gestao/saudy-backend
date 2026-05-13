@@ -21,6 +21,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     whatsAppConversationSettings: { findUnique: vi.fn(), create: vi.fn(), upsert: vi.fn() },
     whatsAppConversation: { groupBy: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), count: vi.fn(), update: vi.fn() },
     whatsAppConversationMessage: { findMany: vi.fn(), create: vi.fn() },
+    whatsAppConversationMedia: { findMany: vi.fn() },
     patient: { findFirst: vi.fn() },
     appointment: { findMany: vi.fn() },
     whatsAppConfig: { findUnique: vi.fn() },
@@ -94,6 +95,7 @@ describe('care whatsapp-conversations routes', () => {
     mockedPrisma.whatsAppConversation.count.mockResolvedValue(0);
     mockedPrisma.whatsAppConversation.update.mockResolvedValue({ id: 'conv-1', humanStatus: 'ASSIGNED' });
 
+    mockedPrisma.whatsAppConversationMedia.findMany.mockResolvedValue([]);
     mockedPrisma.whatsAppConversationMessage.findMany.mockResolvedValue([
       { id: 'm-1', message: '[Protocolo WA-20260413-AAA] início', metadata: { protocolNumber: 'WA-20260413-AAA' }, createdAt: new Date('2026-04-10T10:00:00Z') },
       { id: 'm-2', message: 'Atendimento encerrado', metadata: { protocolNumber: 'WA-20260413-AAA' }, createdAt: new Date('2026-04-10T10:05:00Z') },
