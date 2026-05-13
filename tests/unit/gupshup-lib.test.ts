@@ -18,7 +18,7 @@ const mockedAxios = axios as any;
 
 const APP_ID = 'app-uuid';
 const BEARER = 'bearer-token';
-const V3_URL = `https://partner.gupshup.io/partner/app/${APP_ID}/v3/message`;
+const V3_URL = `https://graph.facebook.com/v21.0/${APP_ID}/messages`;
 
 describe('GupshupV3Service', () => {
   beforeEach(() => {
@@ -32,7 +32,7 @@ describe('GupshupV3Service', () => {
     const res = await service.sendTextMessage({ to: '11988887777', message: 'Oi' });
     expect(res).toEqual({ status: 'success', messageId: 'm1' });
     expect(mockedAxios.post).toHaveBeenCalledWith(V3_URL, expect.any(Object), expect.objectContaining({
-      headers: expect.objectContaining({ token: BEARER }),
+      headers: expect.objectContaining({ Authorization: `Bearer ${BEARER}` }),
     }));
   });
 
@@ -55,12 +55,13 @@ describe('GupshupV3Service', () => {
     expect(body.to).not.toBe('555511988887777');
   });
 
-  it('accepts status submitted as success', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: { status: 'submitted', messageId: 'x1' } });
+  it('returns success when meta response has messages array', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: { messages: [{ id: 'x1' }], messaging_product: 'whatsapp' } });
     const service = new GupshupV3Service({ bearerToken: BEARER, appId: APP_ID, sourceNumber: '5511999990000' });
 
     const res = await service.sendTextMessage({ to: '5511988887777', message: 'Oi' });
     expect(res.status).toBe('success');
+    expect(res.messageId).toBe('x1');
   });
 
   it('returns error when response has no message id or submitted status', async () => {

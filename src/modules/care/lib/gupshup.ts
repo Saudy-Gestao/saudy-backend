@@ -55,9 +55,9 @@ export interface SendMessageResponse {
  * Docs: https://docs.gupshup.io/docs/whatsapp-api-documentation
  */
 export interface GupshupV3Config {
-  bearerToken: string; // Gupshup partner token for v3
-  appId: string;       // Gupshup app UUID
-  sourceNumber: string;
+  bearerToken: string;   // Meta System User access token (EAAxxxx)
+  appId: string;         // Meta Phone Number ID (numeric string from Business Manager)
+  sourceNumber: string;  // actual WhatsApp number (for reference only)
 }
 
 export class GupshupService {
@@ -421,32 +421,32 @@ export class GupshupV3Service {
     };
 
     try {
-      const url = `https://partner.gupshup.io/partner/app/${this.appId}/v3/message`;
-      console.log('[gupshup-v3] POST', url, 'to:', destination);
+      const url = `https://graph.facebook.com/v21.0/${this.appId}/messages`;
+      console.log('[meta-api] POST', url, 'to:', destination);
       const res = await axios.post(
         url,
         body,
         {
           headers: {
             'Content-Type': 'application/json',
-            'token': this.bearerToken,
+            'Authorization': `Bearer ${this.bearerToken}`,
           },
         },
       );
 
-      console.log('[gupshup-v3] response', res.status, JSON.stringify(res.data));
+      console.log('[meta-api] response', res.status, JSON.stringify(res.data));
 
-      if (res.data?.messages?.[0]?.id || res.data?.status === 'submitted' || res.data?.status === 'success') {
+      if (res.data?.messages?.[0]?.id) {
         return {
           status: 'success',
-          messageId: res.data?.messages?.[0]?.id || res.data?.messageId,
+          messageId: res.data.messages[0].id,
         };
       }
 
       return { status: 'error', error: JSON.stringify(res.data) };
     } catch (error: any) {
       const rawData = error.response?.data;
-      console.error('[gupshup-v3] error', error.response?.status, JSON.stringify(rawData));
+      console.error('[meta-api] error', error.response?.status, JSON.stringify(rawData));
       return {
         status: 'error',
         error: rawData?.error?.message || rawData?.message || JSON.stringify(rawData) || error.message,
@@ -556,20 +556,18 @@ export class GupshupV3Service {
   }
 
   async getMediaUrl(mediaId: string): Promise<{ url: string } | null> {
-    // In v3 / Meta Cloud API, media is fetched from Meta's endpoint using the media ID
-    // Gupshup provides a proxy or you fetch directly from Meta Graph API
     try {
       const res = await axios.get(
-        `https://partner.gupshup.io/partner/app/${this.appId}/v3/media/${mediaId}`,
+        `https://graph.facebook.com/v21.0/${mediaId}`,
         {
-          headers: { 'token': this.bearerToken },
+          headers: { 'Authorization': `Bearer ${this.bearerToken}` },
         },
       );
-      const url = res.data?.url || res.data?.media?.url || null;
+      const url = res.data?.url || null;
       if (url) return { url };
       return null;
     } catch (error: any) {
-      console.error('[gupshup-v3] getMediaUrl error', error.response?.status, JSON.stringify(error.response?.data));
+      console.error('[meta-api] getMediaUrl error', error.response?.status, JSON.stringify(error.response?.data));
       return null;
     }
   }
