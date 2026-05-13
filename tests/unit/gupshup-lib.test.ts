@@ -31,8 +31,8 @@ describe('GupshupV3Service', () => {
 
     const res = await service.sendTextMessage({ to: '11988887777', message: 'Oi' });
     expect(res).toEqual({ status: 'success', messageId: 'm1' });
-    expect(mockedAxios.post).toHaveBeenCalledWith(V3_URL, expect.any(String), expect.objectContaining({
-      headers: expect.objectContaining({ Authorization: `Bearer ${BEARER}` }),
+    expect(mockedAxios.post).toHaveBeenCalledWith(V3_URL, expect.any(Object), expect.objectContaining({
+      headers: expect.objectContaining({ token: BEARER }),
     }));
   });
 
@@ -41,7 +41,7 @@ describe('GupshupV3Service', () => {
     const service = new GupshupV3Service({ bearerToken: BEARER, appId: APP_ID, sourceNumber: '5511999990000' });
 
     await service.sendTextMessage({ to: '1188887777', message: 'Oi' });
-    const body = JSON.parse(new URLSearchParams(mockedAxios.post.mock.calls[0][1]).get('message')!);
+    const body = mockedAxios.post.mock.calls[0][1];
     expect(body.to).toBe('551188887777');
   });
 
@@ -50,7 +50,7 @@ describe('GupshupV3Service', () => {
     const service = new GupshupV3Service({ bearerToken: BEARER, appId: APP_ID, sourceNumber: '5511999990000' });
 
     await service.sendTextMessage({ to: '5511988887777', message: 'Oi' });
-    const body = JSON.parse(new URLSearchParams(mockedAxios.post.mock.calls[0][1]).get('message')!);
+    const body = mockedAxios.post.mock.calls[0][1];
     expect(body.to).toBe('5511988887777');
     expect(body.to).not.toBe('555511988887777');
   });
@@ -90,7 +90,7 @@ describe('GupshupV3Service', () => {
       options: [{ title: 'Sim', postbackText: 'SIM' }, { title: 'Não', postbackText: 'NAO' }],
     });
     expect(res.status).toBe('success');
-    const body = JSON.parse(new URLSearchParams(mockedAxios.post.mock.calls[0][1]).get('message')!);
+    const body = mockedAxios.post.mock.calls[0][1];
     expect(body.type).toBe('interactive');
     expect(body.interactive.type).toBe('button');
   });
@@ -105,7 +105,7 @@ describe('GupshupV3Service', () => {
       options: [{ title: 'Opção 1', postbackText: '1' }, { title: 'Opção 2', postbackText: '2' }],
     });
     expect(res.status).toBe('success');
-    const body = JSON.parse(new URLSearchParams(mockedAxios.post.mock.calls[0][1]).get('message')!);
+    const body = mockedAxios.post.mock.calls[0][1];
     expect(body.interactive.type).toBe('list');
   });
 
@@ -115,7 +115,7 @@ describe('GupshupV3Service', () => {
 
     const res = await service.sendTemplateMessage({ to: '5511988887777', templateId: 'tpl-1', params: ['A', 'B'] });
     expect(res.status).toBe('success');
-    const body = JSON.parse(new URLSearchParams(mockedAxios.post.mock.calls[0][1]).get('message')!);
+    const body = mockedAxios.post.mock.calls[0][1];
     expect(body.type).toBe('template');
     expect(body.template.name).toBe('tpl-1');
   });
@@ -132,7 +132,7 @@ describe('GupshupV3Service', () => {
       ctaText: 'Abrir',
     });
     expect(res.status).toBe('success');
-    const body = JSON.parse(new URLSearchParams(mockedAxios.post.mock.calls[0][1]).get('message')!);
+    const body = mockedAxios.post.mock.calls[0][1];
     expect(body.interactive.type).toBe('flow');
     expect(body.interactive.action.parameters.flow_id).toBe('flow-123');
   });

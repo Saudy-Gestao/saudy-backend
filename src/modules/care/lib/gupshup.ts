@@ -425,11 +425,11 @@ export class GupshupV3Service {
       console.log('[gupshup-v3] POST', url, 'to:', destination);
       const res = await axios.post(
         url,
-        new URLSearchParams({ message: JSON.stringify(body) }).toString(),
+        body,
         {
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Authorization': `Bearer ${this.bearerToken}`,
+            'Content-Type': 'application/json',
+            'token': this.bearerToken,
           },
         },
       );
@@ -562,7 +562,7 @@ export class GupshupV3Service {
       const res = await axios.get(
         `https://partner.gupshup.io/partner/app/${this.appId}/v3/media/${mediaId}`,
         {
-          headers: { 'Authorization': `Bearer ${this.bearerToken}` },
+          headers: { 'token': this.bearerToken },
         },
       );
       const url = res.data?.url || res.data?.media?.url || null;
