@@ -2938,14 +2938,14 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
       const isHumanActive = existingConversation?.humanStatus === 'QUEUED'
         || existingConversation?.humanStatus === 'ASSIGNED';
 
-      // Dedup: skip if we already sent a flow message in the last 30 seconds
+      // Dedup: skip if we already sent a flow message in the last 24 hours
       const recentFlowMessage = await prisma.whatsAppConversationMessage.findFirst({
         where: {
           phone,
           branchId: branchConfig.branchId,
           authorType: 'BOT',
           message: { contains: 'flow_sent' },
-          createdAt: { gte: new Date(Date.now() - 30_000) },
+          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) },
         },
       });
 
