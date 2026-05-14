@@ -2946,14 +2946,17 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
           sourceNumber: branchConfig.sourceNumber,
         });
 
-        await messaging.sendFlowMessage({
-          to: phone,
-          flowId: branchConfig.flowId,
-          flowToken,
-          bodyText: 'Olá! Para agendar uma consulta ou exame, preencha o formulário abaixo.',
-          ctaText: 'Agendar',
-          screenId: 'INTRO',
-        });
+        try {
+          await messaging.sendFlowMessage({
+            to: phone,
+            flowId: branchConfig.flowId,
+            flowToken,
+            bodyText: 'Olá! Para agendar uma consulta ou exame, preencha o formulário abaixo.',
+            ctaText: 'Agendar',
+          });
+        } catch (flowErr: any) {
+          console.error('[chatbot] sendFlowMessage failed, falling back to text menu', flowErr?.message);
+        }
 
         return { handled: true };
       }

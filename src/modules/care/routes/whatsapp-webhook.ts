@@ -916,6 +916,11 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     const source = normalizePhoneForConversation(inboundPayload?.source || inboundPayload?.sender?.phone || '');
     const messageEvent = parseWebhookMessageEvent(body, inboundPayload);
 
+    // Status-only events (delivered/read/sent/failed) with no inbound text — skip chatbot immediately
+    if (messageEvent && !inboundText && !inboundMedia.summary && !action) {
+      return { success: true, event: messageEvent };
+    }
+
     request.log.info({
       metaEventType: body?.type || inboundPayload?.type || null,
       source: inboundPayload?.source || inboundPayload?.sender?.phone || null,
