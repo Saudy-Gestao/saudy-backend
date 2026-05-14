@@ -2919,12 +2919,13 @@ async function processFlow(params: {
 export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<ChatbotResult> {
   const text = String(input.text || '').trim();
   const phone = formatPhoneForLookup(input.phone);
-  if (!text || !phone) return { handled: false };
+  if (!phone) return { handled: false };
 
   const branchConfig = await resolveBranchConfig(input.branchIdHint);
   if (!branchConfig?.branchId) return { handled: false };
 
   // Flow mode: when flowId is configured, use WhatsApp Flow for all non-human conversations
+  // This also handles media messages (no text) — dedup prevents re-sending
   if (branchConfig.flowId) {
     const isFlowComplete = text.startsWith('[FLOW_COMPLETE]');
     const isFlowHandoff = text.startsWith('[FLOW_HANDOFF]');
