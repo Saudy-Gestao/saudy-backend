@@ -2938,7 +2938,18 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
       const isHumanActive = existingConversation?.humanStatus === 'QUEUED'
         || existingConversation?.humanStatus === 'ASSIGNED';
 
-      if (!isHumanActive) {
+      // Dedup: skip if we already sent a flow message in the last 30 seconds
+      const recentFlowMessage = await prisma.whatsAppConversationMessage.findFirst({
+        where: {
+          phone,
+          branchId: branchConfig.branchId,
+          authorType: 'BOT',
+          message: { contains: 'flow_sent' },
+          createdAt: { gte: new Date(Date.now() - 30_000) },
+        },
+      });
+
+      if (!isHumanActive && !recentFlowMessage) {
         const convRecord = await upsertConversation({ branchId: branchConfig.branchId, phone, patient: await lookupPatient(branchConfig.branchId, phone) });
         const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone, conversationId: convRecord.id })).toString('base64');
         const messaging = new MetaMessagingService({
@@ -2946,6 +2957,17 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
           appId: branchConfig.appId || branchConfig.appName,
           sourceNumber: branchConfig.sourceNumber,
         });
+
+        // Record dedup marker before sending (prevents parallel retries)
+        await prisma.whatsAppConversationMessage.create({
+          data: {
+            conversationId: convRecord.id,
+            branchId: branchConfig.branchId,
+            phone,
+            authorType: 'BOT',
+            message: 'flow_sent',
+          },
+        }).catch(() => null);
 
         try {
           await messaging.sendFlowMessage({
