@@ -1640,6 +1640,290 @@ export default async function biRoutes(app: FastifyInstance) {
     };
   });
 
+  app.post('/widgets', {
+    preHandler: async (request, reply) => { await request.jwtVerify(); },
+    schema: {
+      summary: 'Generate custom AI widgets for a personalizable BI panel',
+      tags: ['BI'],
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['data', 'userPrompt'],
+        properties: {
+          data: { type: 'object' },
+          period: { type: 'object', properties: { startDate: { type: 'string' }, endDate: { type: 'string' } } },
+          filters: { type: 'object' },
+          panelName: { type: 'string' },
+          userPrompt: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const requestUserId = (request.user as any).id as string;
+    const context = await getLoggedContext(requestUserId);
+    if (!context.companyId) return reply.code(403).send({ error: 'User not associated with a company' });
+    if (!context.hasBiAccess) return reply.code(403).send({ error: 'User does not have BI access' });
+    if (!GROQ_API_KEY) return reply.code(503).send({ error: 'Serviço de IA não configurado.' });
+
+    const { data, period, panelName, userPrompt } = request.body as any;
+    const periodLabel = period?.startDate && period?.endDate
+      ? `de ${period.startDate} até ${period.endDate}`
+      : 'período selecionado';
+
+    // Converte os dados em texto simples com só os números relevantes — evita estouro de tokens
+    const lines: string[] = [];
+    const n = (v: any) => (v !== null && v !== undefined && v !== '' ? String(v) : 'N/D');
+
+    const overview = data?.overview;
+    if (overview?.kpis) {
+      const k = overview.kpis;
+      lines.push('=== VISÃO GERAL ===');
+      lines.push(`Atendimentos realizados: ${n(k.realizedAppointments)}`);
+      lines.push(`Taxa de comparecimento: ${n(k.attendanceRate)}%`);
+      lines.push(`Cancelamentos: ${n(k.canceledAppointments)}`);
+      lines.push(`Agendamentos pendentes: ${n(k.pendingAppointments)}`);
+      lines.push(`Receita: R$ ${n(k.revenue)}`);
+      lines.push(`Faturado: R$ ${n(k.invoiced)}`);
+      lines.push(`Ticket médio: R$ ${n(k.ticketAverage)}`);
+      lines.push(`Laudos pendentes: ${n(k.pendingReports)}`);
+      lines.push(`Autorizações pendentes: ${n(k.pendingAuthorizations)}`);
+      lines.push(`Estoque crítico: ${n(k.criticalStock)}`);
+      lines.push(`Perfis TEA ativos: ${n(k.activeTeaProfiles)}`);
+      lines.push(`Glosas TISS: R$ ${n(k.glosaValue)}`);
+    }
+    if (Array.isArray(overview?.charts?.insuranceMix) && overview.charts.insuranceMix.length > 0) {
+      lines.push('Atendimentos por convênio (nome: quantidade):');
+      overview.charts.insuranceMix.slice(0, 8).forEach((item: any) => lines.push(`  ${n(item.name)}: ${n(item.value)} atendimentos`));
+    }
+    if (Array.isArray(overview?.charts?.specialties) && overview.charts.specialties.length > 0) {
+      lines.push('Atendimentos por especialidade/procedimento (nome: quantidade):');
+      overview.charts.specialties.slice(0, 8).forEach((item: any) => lines.push(`  ${n(item.name)}: ${n(item.value)} atendimentos`));
+    }
+    if (Array.isArray(overview?.charts?.funnel) && overview.charts.funnel.length > 0) {
+      lines.push('Funil de atendimento (etapa: quantidade):');
+      overview.charts.funnel.slice(0, 8).forEach((item: any) => lines.push(`  ${n(item.name)}: ${n(item.value)}`));
+    }
+
+    const financial = data?.financial;
+    if (financial?.kpis) {
+      const k = financial.kpis;
+      lines.push('=== FINANCEIRO ===');
+      lines.push(`Entradas: R$ ${n(k.revenue)}`);
+      lines.push(`Saídas: R$ ${n(k.expenses)}`);
+      lines.push(`Faturado: R$ ${n(k.invoiced)}`);
+      lines.push(`Margem: ${n(k.margin)}%`);
+      lines.push(`Glosas: R$ ${n(k.glosaValue)}`);
+      lines.push(`TISS pendentes: ${n(k.pendingTiss)}`);
+    }
+    if (Array.isArray(financial?.charts?.insuranceRevenueMix) && financial.charts.insuranceRevenueMix.length > 0) {
+      lines.push('Faturamento por convênio:');
+      financial.charts.insuranceRevenueMix.slice(0, 8).forEach((item: any) => lines.push(`  ${n(item.name)}: R$ ${n(item.value)}`));
+    }
+
+    const occupancy = data?.occupancy;
+    if (occupancy?.kpis) {
+      const k = occupancy.kpis;
+      lines.push('=== OPERAÇÃO / OCUPAÇÃO ===');
+      lines.push(`Taxa de ocupação: ${n(k.occupancyRate)}%`);
+      lines.push(`Horas ocupadas: ${n(k.bookedMinutes)} min`);
+      lines.push(`Horas ociosas: ${n(k.idleMinutes)} min`);
+      lines.push(`Sem recurso: ${n(k.noResourceAppointments)}`);
+      lines.push(`Salas: ${n(k.roomsCount)} | Equipamentos: ${n(k.equipmentsCount)}`);
+    }
+    if (Array.isArray(occupancy?.rankings?.professionals) && occupancy.rankings.professionals.length > 0) {
+      lines.push('Médicos/profissionais (nome: atendimentos, ocupação):');
+      occupancy.rankings.professionals.slice(0, 10).forEach((item: any) =>
+        lines.push(`  ${n(item.name)}: ${n(item.appointments)} atendimentos, ${n(item.occupancyRate)}% ocupação`));
+    }
+    if (Array.isArray(occupancy?.rankings?.rooms) && occupancy.rankings.rooms.length > 0) {
+      lines.push('Salas (nome: atendimentos, ocupação):');
+      occupancy.rankings.rooms.slice(0, 6).forEach((item: any) =>
+        lines.push(`  ${n(item.name)}: ${n(item.appointments)} atendimentos, ${n(item.occupancyRate)}% ocupação`));
+    }
+
+    const clinical = data?.clinical;
+    if (clinical?.kpis) {
+      const k = clinical.kpis;
+      lines.push('=== CLÍNICO ===');
+      lines.push(`Auth. pendentes: ${n(k.pendingAuthorizations)}`);
+      lines.push(`Auth. negadas: ${n(k.deniedAuthorizations)}`);
+      lines.push(`SLA médio laudos: ${n(k.slaAvgHours)}h`);
+      lines.push(`SLA p95: ${n(k.slaP95Hours)}h`);
+    }
+
+    const reports = data?.reports;
+    if (reports?.kpis) {
+      const k = reports.kpis;
+      lines.push('=== LAUDOS ===');
+      lines.push(`Pendentes: ${n(k.pendingReports)}`);
+      lines.push(`Assinados: ${n(k.signedReports)}`);
+      lines.push(`TAT médio: ${n(k.tatAvgHours)}h`);
+    }
+
+    const tea = data?.tea;
+    if (tea?.kpis) {
+      const k = tea.kpis;
+      lines.push('=== TEA ===');
+      lines.push(`Perfis ativos: ${n(k.activeProfiles)}`);
+      lines.push(`Reservas pendentes: ${n(k.pendingReservations)}`);
+      lines.push(`Convertidas: ${n(k.convertedReservations)} (${n(k.conversionRate)}%)`);
+    }
+
+    const resources = data?.resources;
+    if (resources?.kpis) {
+      const k = resources.kpis;
+      lines.push('=== RECURSOS / ESTOQUE ===');
+      lines.push(`Itens monitorados: ${n(k.itemsCount)}`);
+      lines.push(`Em risco de ruptura: ${n(k.criticalCount)}`);
+      lines.push(`Valor em estoque: R$ ${n(k.stockValue)}`);
+    }
+
+    const communication = data?.communication;
+    if (communication?.kpis) {
+      const k = communication.kpis;
+      lines.push('=== COMUNICAÇÃO ===');
+      lines.push(`Conversas abertas: ${n(k.conversationsOpen)}`);
+      lines.push(`Conversas fechadas: ${n(k.conversationsClosed)}`);
+      lines.push(`Mensagens enviadas: ${n(k.messagesSent)}`);
+      lines.push(`Falha de entrega: ${n(k.messageFailureRate)}%`);
+    }
+
+    // Dados reais com nomes da clínica (enviados pelo frontend a partir das queries locais)
+    const raw = data?.rawData;
+
+    if (Array.isArray(raw?.doctors) && raw.doctors.length > 0) {
+      lines.push('=== MÉDICOS / PROFISSIONAIS (dados reais do período) ===');
+      raw.doctors.slice(0, 15).forEach((d: any) =>
+        lines.push(`  ${n(d.name)}: ${n(d.appointments)} atendimentos`));
+    }
+
+    if (Array.isArray(raw?.convenios) && raw.convenios.length > 0) {
+      lines.push('=== CONVÊNIOS (dados reais do período) ===');
+      raw.convenios.slice(0, 10).forEach((c: any) =>
+        lines.push(`  ${n(c.name)}: ${n(c.appointments)} atendimentos`));
+    }
+
+    if (Array.isArray(raw?.specialties) && raw.specialties.length > 0) {
+      lines.push('=== ESPECIALIDADES / PROCEDIMENTOS (dados reais do período) ===');
+      raw.specialties.slice(0, 10).forEach((s: any) =>
+        lines.push(`  ${n(s.name)}: ${n(s.appointments)} atendimentos`));
+    }
+
+    if (Array.isArray(raw?.inventory) && raw.inventory.length > 0) {
+      lines.push('=== ESTOQUE (itens reais cadastrados) ===');
+      raw.inventory.slice(0, 15).forEach((i: any) =>
+        lines.push(`  ${n(i.name)}: ${n(i.quantity)} unidades (mín: ${n(i.minQuantity)}, preço unit: R$ ${n(i.unitPrice)})`));
+    }
+
+    if (Array.isArray(raw?.teaProfiles) && raw.teaProfiles.length > 0) {
+      lines.push('=== PERFIS TEA (pacientes cadastrados) ===');
+      raw.teaProfiles.filter((p: any) => p.isActive).slice(0, 15).forEach((p: any) =>
+        lines.push(`  ${n(p.name)} (ativo)`));
+    }
+
+    const dataStr = lines.filter(Boolean).join('\n');
+
+    const prompt = `Você é um gerador de widgets de BI. Responda SOMENTE com JSON válido.
+
+PEDIDO DO USUÁRIO: "${userPrompt}"
+
+DADOS DISPONÍVEIS (período ${periodLabel}):
+${dataStr}
+
+INSTRUÇÕES OBRIGATÓRIAS:
+1. Conte quantos widgets o usuário pediu. Se pediu "um gráfico", gere exatamente 1 widget.
+2. NÃO adicione cards de métrica, textos ou outros widgets além do que foi pedido.
+3. Para gráficos de pizza (pie_chart): use SEMPRE type="pie_chart" com o campo "data" contendo objetos {"name":"NomeCategoria","value":NúmeroInteiro}.
+4. Para gráficos de barra (bar_chart): use type="bar_chart" com "data" contendo {"name":"Rótulo","value":NúmeroInteiro}.
+5. Os valores em "data" devem ser NÚMEROS INTEIROS extraídos dos dados acima.
+6. Se os dados não existirem para o gráfico pedido, gere type="text" com content explicando.
+
+FORMATO DE SAÍDA — retorne EXATAMENTE este JSON (só os widgets pedidos):
+{"widgets":[{"id":"w1","type":"TIPO","title":"TÍTULO","data":[{"name":"CATEGORIA","value":NUMERO}]}]}
+
+Tipos aceitos: metric, text, bar_chart, area_chart, pie_chart, ranking
+Para metric: adicionar campos "value" (string) e "hint" (string) e "color" (uma de: teal,blue,orange,red,grape,green,darkBlue)
+Para text: adicionar campo "content" (string)
+Para ranking: usar "items":[{"label":"x","value":"y","score":85}] ao invés de "data"
+
+NÃO inclua explicações fora do JSON. NÃO repita widgets. NÃO invente números.`;
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const callGroq = async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      try {
+        return await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
+          body: JSON.stringify({
+            model: 'llama-3.1-8b-instant',
+            temperature: 0.2,
+            max_tokens: 2048,
+            response_format: { type: 'json_object' },
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    try {
+      let response = await callGroq();
+
+      // Retry em qualquer erro não-ok (rate limit, 5xx, timeout temporário)
+      if (!response.ok) {
+        const errBody = await response.json() as any;
+        console.error('[bi/widgets] Groq 1st attempt error:', response.status, errBody?.error?.message || JSON.stringify(errBody).slice(0, 200));
+        const retryAfter = Number(response.headers.get('retry-after') || '3');
+        await sleep(Math.min(retryAfter, 6) * 1000);
+        response = await callGroq();
+      }
+
+      if (!response.ok) {
+        const err = await response.json() as any;
+        const errMsg = err?.error?.message || JSON.stringify(err);
+        console.error('[bi/widgets] Groq 2nd attempt error:', response.status, errMsg?.slice(0, 200));
+        if (response.status === 429) {
+          return reply.code(502).send({ error: 'Serviço de IA sobrecarregado. Aguarde alguns segundos e tente novamente.' });
+        }
+        return reply.code(502).send({ error: errMsg || 'Erro na API de IA.' });
+      }
+
+      const groqData = await response.json() as any;
+      const content = groqData.choices?.[0]?.message?.content?.trim();
+
+      if (!content) {
+        return reply.code(502).send({ error: 'A IA não retornou conteúdo. Tente novamente.' });
+      }
+
+      let parsed: any;
+      try { parsed = JSON.parse(content); } catch {
+        return reply.code(502).send({ error: 'Resposta inválida da IA. Tente reformular o pedido.' });
+      }
+
+      const widgets = Array.isArray(parsed.widgets) ? parsed.widgets.map((w: any, i: number) => ({
+        id: String(w.id || `w${i + 1}`),
+        type: ['metric', 'text', 'bar_chart', 'area_chart', 'pie_chart', 'ranking'].includes(w.type) ? w.type : 'text',
+        title: String(w.title || ''),
+        value: w.value !== undefined ? String(w.value) : undefined,
+        hint: w.hint !== undefined ? String(w.hint) : undefined,
+        color: w.color !== undefined ? String(w.color) : undefined,
+        content: w.content !== undefined ? String(w.content) : undefined,
+        data: Array.isArray(w.data) ? w.data : undefined,
+        items: Array.isArray(w.items) ? w.items : undefined,
+      })) : [];
+
+      return { widgets, generatedAt: new Date().toISOString() };
+    } catch (err: any) {
+      console.error('[bi/widgets] CATCH exception:', err?.name, err?.message);
+      return reply.code(502).send({ error: err?.message || 'Não foi possível conectar ao serviço de IA.' });
+    }
+  });
+
   app.post('/insights', {
     preHandler: async (request, reply) => { await request.jwtVerify(); },
     schema: {
