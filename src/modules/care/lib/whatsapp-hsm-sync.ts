@@ -37,6 +37,8 @@ const extractTemplateBaseName = (value: string) => {
 };
 
 async function getWabaId(phoneNumberId: string, bearerToken: string): Promise<string> {
+  if (process.env.WHATSAPP_WABA_ID) return process.env.WHATSAPP_WABA_ID;
+
   const res = await fetch(
     `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
     { headers: { Authorization: `Bearer ${bearerToken}` } },
@@ -47,7 +49,7 @@ async function getWabaId(phoneNumberId: string, bearerToken: string): Promise<st
   }
   const data = await res.json() as { whatsapp_business_account?: { id: string } };
   const wabaId = data.whatsapp_business_account?.id;
-  if (!wabaId) throw new Error('WABA ID não encontrado para o Phone Number ID informado.');
+  if (!wabaId) throw new Error('WABA ID não encontrado. Configure a env var WHATSAPP_WABA_ID.');
   return wabaId;
 }
 

@@ -535,13 +535,15 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
 
       if (phoneNumberId && bearerToken) {
         try {
-          // Buscar WABA ID a partir do Phone Number ID
-          const phoneRes = await fetch(
-            `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
-            { headers: { Authorization: `Bearer ${bearerToken}` } },
-          );
-          const phoneData = await phoneRes.json() as any;
-          const wabaId = phoneData?.whatsapp_business_account?.id;
+          let wabaId: string | undefined = process.env.WHATSAPP_WABA_ID;
+          if (!wabaId) {
+            const phoneRes = await fetch(
+              `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
+              { headers: { Authorization: `Bearer ${bearerToken}` } },
+            );
+            const phoneData = await phoneRes.json() as any;
+            wabaId = phoneData?.whatsapp_business_account?.id;
+          }
 
           if (wabaId && template.hsmTemplateName) {
             const deleteRes = await fetch(
@@ -633,13 +635,15 @@ export default async function whatsappConfigRoutes(app: FastifyInstance) {
       });
     }
 
-    // Buscar WABA ID a partir do Phone Number ID
-    const phoneRes = await fetch(
-      `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
-      { headers: { Authorization: `Bearer ${bearerToken}` } },
-    );
-    const phoneData = await phoneRes.json() as any;
-    const wabaId = phoneData?.whatsapp_business_account?.id;
+    let wabaId: string | undefined = process.env.WHATSAPP_WABA_ID;
+    if (!wabaId) {
+      const phoneRes = await fetch(
+        `https://graph.facebook.com/v21.0/${phoneNumberId}?fields=whatsapp_business_account`,
+        { headers: { Authorization: `Bearer ${bearerToken}` } },
+      );
+      const phoneData = await phoneRes.json() as any;
+      wabaId = phoneData?.whatsapp_business_account?.id;
+    }
     if (!wabaId) {
       return reply.code(400).send({ error: 'Não foi possível obter o WABA ID a partir do Phone Number ID.' });
     }
