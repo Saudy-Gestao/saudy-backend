@@ -2924,20 +2924,21 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
   const branchConfig = await resolveBranchConfig(input.branchIdHint);
   if (!branchConfig?.branchId) return { handled: false };
 
-  // v3 + Flow mode: send a WhatsApp Flow when user sends initial message in a fresh conversation
+  // Flow mode: when flowId is configured, use WhatsApp Flow for all non-human conversations
   if (branchConfig.flowId) {
     const isFlowComplete = text.startsWith('[FLOW_COMPLETE]');
-    if (!isFlowComplete) {
+    const isFlowHandoff = text.startsWith('[FLOW_HANDOFF]');
+
+    if (!isFlowComplete && !isFlowHandoff) {
       const existingConversation = await prisma.whatsAppConversation.findUnique({
         where: { branchId_phone: { branchId: branchConfig.branchId, phone } },
         select: { state: true, humanStatus: true },
       });
 
-      const isNewOrMenu = !existingConversation || existingConversation.state === 'MENU';
       const isHumanActive = existingConversation?.humanStatus === 'QUEUED'
         || existingConversation?.humanStatus === 'ASSIGNED';
 
-      if (isNewOrMenu && !isHumanActive) {
+      if (!isHumanActive) {
         const convRecord = await upsertConversation({ branchId: branchConfig.branchId, phone, patient: await lookupPatient(branchConfig.branchId, phone) });
         const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone, conversationId: convRecord.id })).toString('base64');
         const messaging = new MetaMessagingService({
@@ -2955,7 +2956,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
             ctaText: 'Agendar',
           });
         } catch (flowErr: any) {
-          console.error('[chatbot] sendFlowMessage failed, falling back to text menu', flowErr?.message);
+          console.error('[chatbot] sendFlowMessage failed', flowErr?.message);
         }
 
         return { handled: true };
