@@ -2949,40 +2949,48 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
         },
       });
 
-      if (!isHumanActive && !recentFlowMessage) {
-        const convRecord = await upsertConversation({ branchId: branchConfig.branchId, phone, patient: await lookupPatient(branchConfig.branchId, phone) });
-        const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone, conversationId: convRecord.id })).toString('base64');
-        const messaging = new MetaMessagingService({
-          bearerToken: branchConfig.apiKey,
-          appId: branchConfig.appId || branchConfig.appName,
-          sourceNumber: branchConfig.sourceNumber,
-        });
+      if (isHumanActive) {
+        // Human agent is active — let the message through without bot interference
+        return { handled: false };
+      }
 
-        // Record dedup marker before sending (prevents parallel retries)
-        await prisma.whatsAppConversationMessage.create({
-          data: {
-            conversationId: convRecord.id,
-            branchId: branchConfig.branchId,
-            phone,
-            authorType: 'BOT',
-            message: 'flow_sent',
-          },
-        }).catch(() => null);
-
-        try {
-          await messaging.sendFlowMessage({
-            to: phone,
-            flowId: branchConfig.flowId,
-            flowToken,
-            bodyText: 'Olá! Para agendar uma consulta ou exame, preencha o formulário abaixo.',
-            ctaText: 'Agendar',
-          });
-        } catch (flowErr: any) {
-          console.error('[chatbot] sendFlowMessage failed', flowErr?.message);
-        }
-
+      if (recentFlowMessage) {
+        // Dedup: flow already sent recently, silently ignore
         return { handled: true };
       }
+
+      const convRecord = await upsertConversation({ branchId: branchConfig.branchId, phone, patient: await lookupPatient(branchConfig.branchId, phone) });
+      const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone, conversationId: convRecord.id })).toString('base64');
+      const messaging = new MetaMessagingService({
+        bearerToken: branchConfig.apiKey,
+        appId: branchConfig.appId || branchConfig.appName,
+        sourceNumber: branchConfig.sourceNumber,
+      });
+
+      // Record dedup marker before sending (prevents parallel retries)
+      await prisma.whatsAppConversationMessage.create({
+        data: {
+          conversationId: convRecord.id,
+          branchId: branchConfig.branchId,
+          phone,
+          authorType: 'BOT',
+          message: 'flow_sent',
+        },
+      }).catch(() => null);
+
+      try {
+        await messaging.sendFlowMessage({
+          to: phone,
+          flowId: branchConfig.flowId,
+          flowToken,
+          bodyText: 'Olá! Para agendar uma consulta ou exame, preencha o formulário abaixo.',
+          ctaText: 'Agendar',
+        });
+      } catch (flowErr: any) {
+        console.error('[chatbot] sendFlowMessage failed', flowErr?.message);
+      }
+
+      return { handled: true };
     }
   }
 
