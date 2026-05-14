@@ -544,11 +544,7 @@ export class MetaMessagingService {
             flow_token: params.flowToken,
             flow_id: params.flowId,
             flow_cta: params.ctaText,
-            flow_action: 'navigate',
-            flow_action_payload: {
-              screen: params.screenId || 'INTRO',
-              data: params.data || {},
-            },
+            flow_action: 'data_exchange',
           },
         },
       },
