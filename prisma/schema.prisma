@@ -62,6 +62,7 @@ model Company {
     module_type              String   @default("padrao") // 'padrao', 'tea', 'apenas-tea'
     additionalBranchesAllowed Int      @default(0)
     branches                 Branch[]
+    patients                 Patient[]
     whatsappConversationTemplates WhatsAppConversationTemplate[]
 
     @@map("companies")
@@ -308,13 +309,15 @@ model DoctorRoom {
 model Patient {
     id                           String         @id @default(uuid())
     branchId                     String?
+    companyId                    String?
+    company                      Company?       @relation(fields: [companyId], references: [id])
     name                         String
     email                        String?
     phone                        String?
     cellphone                    String
     birthDate                    DateTime
     gender                       Gender?
-    cpf                          String         @unique @db.VarChar(11)
+    cpf                          String         @db.VarChar(11)
     rg                           String?
     maritalStatus                MaritalStatus?
     occupation                   String?
@@ -352,7 +355,9 @@ model Patient {
     teaPreReservations TeaPreReservation[]
     facialLogs         FacialLog[]
 
+    @@unique([cpf, companyId])
     @@index([branchId])
+    @@index([companyId])
     @@map("patients")
 }
 

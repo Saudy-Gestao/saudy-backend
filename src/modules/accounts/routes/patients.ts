@@ -22,7 +22,7 @@ const getUniqueConstraintField = (target: unknown): string | null => {
 
 const getUniqueConstraintMessage = (field: string) => {
   const messages: Record<string, string> = {
-    cpf: 'Já existe um paciente com este CPF',
+    cpf: 'Já existe um paciente com este CPF nesta empresa',
     email: 'Já existe um paciente com este e-mail',
     guardianCpf: 'Já existe um paciente com este CPF do responsável',
     registro: 'Já existe um registro com estes dados',
@@ -32,14 +32,16 @@ const getUniqueConstraintMessage = (field: string) => {
 };
 
 export default async function patientRoutes(app: FastifyInstance) {
-  const getLoggedBranchId = async (request: any) => {
+  const getLoggedContext = async (request: any) => {
     const userId = (request.user as any)?.id;
     if (!userId) return null;
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { sector: { include: { branch: true } } },
     });
-    return user?.sector?.branch?.id || null;
+    const branchId = user?.sector?.branch?.id || null;
+    const companyId = user?.sector?.branch?.companyId || null;
+    return branchId && companyId ? { branchId, companyId } : null;
   };
 
   // Auth hook for all routes in this plugin
@@ -82,8 +84,8 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const {
       isActive,
@@ -99,7 +101,7 @@ export default async function patientRoutes(app: FastifyInstance) {
       offset?: number;
     };
 
-    const where: any = { branchId };
+    const where: any = { companyId: ctx.companyId };
 
     if (isActive !== undefined) {
       where.isActive = isActive;
@@ -155,13 +157,13 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as { id: string };
 
     const patient = await prisma.patient.findFirst({
-      where: { id, branchId },
+      where: { id, companyId: ctx.companyId },
     });
 
     if (!patient) {
@@ -196,8 +198,8 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const { cpf } = request.params as { cpf: string };
     const normalizedCpf = normalizeCpf(cpf);
@@ -207,7 +209,7 @@ export default async function patientRoutes(app: FastifyInstance) {
     }
 
     const patient = await prisma.patient.findFirst({
-      where: { cpf: normalizedCpf, branchId },
+      where: { cpf: normalizedCpf, companyId: ctx.companyId },
     });
 
     if (!patient) {
@@ -223,7 +225,6 @@ export default async function patientRoutes(app: FastifyInstance) {
       summary: 'Create a new patient',
       tags: ['Patients'],
       security: [{ bearerAuth: [] }],
-      // body schema temporarily removed to diagnose client 400 errors
       response: {
         201: { $ref: 'Patient#' },
         400: { type: 'object', additionalProperties: true },
@@ -231,18 +232,16 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const data = request.body as any;
 
-    // Explicit check for empty or missing parsed body
     if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
       request.log.warn({ body: data }, 'Empty or missing request body for patient create');
       return reply.code(400).send({ error: 'Bad Request', details: 'Request body is empty or could not be parsed as JSON. Ensure Content-Type: application/json and valid JSON body.' });
     }
 
-    // Server-side field validation
     const fieldErrors: Record<string,string> = {};
     if (!data?.name || String(data.name).trim() === '') fieldErrors.name = 'Nome é obrigatório';
     const normalizedCpf = normalizeCpf(data?.cpf);
@@ -256,7 +255,6 @@ export default async function patientRoutes(app: FastifyInstance) {
     if (data?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
     if (data?.hasHealthInsurance && !data?.healthInsuranceName) fieldErrors.healthInsuranceName = 'Nome do convênio é obrigatório';
 
-    // Celular obrigatório + formato (10 ou 11 dígitos)
     if (!data?.cellphone) fieldErrors.cellphone = 'Celular é obrigatório';
     else if (!/^\d{10,11}$/.test(String(data.cellphone))) fieldErrors.cellphone = 'Celular inválido';
 
@@ -279,7 +277,8 @@ export default async function patientRoutes(app: FastifyInstance) {
           cpf: normalizedCpf,
           email: normalizedEmail || null,
           guardianCpf: normalizedGuardianCpf || null,
-          branchId,
+          branchId: ctx.branchId,
+          companyId: ctx.companyId,
           birthDate: new Date(data.birthDate),
           healthInsuranceExpiry: data.healthInsuranceExpiry ? new Date(data.healthInsuranceExpiry) : null,
           allergies: data.allergies || [],
@@ -333,20 +332,19 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as { id: string };
     const data = request.body as any;
 
-    const existing = await prisma.patient.findFirst({ where: { id, branchId } });
+    const existing = await prisma.patient.findFirst({ where: { id, companyId: ctx.companyId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Patient not found' });
     }
 
     try {
-      // validate provided fields on update
       const fieldErrors: Record<string,string> = {};
       const normalizedEmail = normalizeEmail(data?.email);
       if (data?.email !== undefined && normalizedEmail && !isValidEmail(normalizedEmail)) fieldErrors.email = 'Email inválido';
@@ -359,13 +357,11 @@ export default async function patientRoutes(app: FastifyInstance) {
       if (data?.birthDate !== undefined && data.birthDate && (isNaN(Date.parse(String(data.birthDate))) || new Date(String(data.birthDate)) > new Date())) fieldErrors.birthDate = 'Data de nascimento inválida';
       if (data?.hasHealthInsurance && data.hasHealthInsurance && !data?.healthInsuranceName) fieldErrors.healthInsuranceName = 'Nome do convênio é obrigatório';
 
-      // cellphone: if provided on update, must be present and valid
       if (data?.cellphone !== undefined) {
         if (!data.cellphone) fieldErrors.cellphone = 'Celular é obrigatório';
         else if (!/^\d{10,11}$/.test(String(data.cellphone))) fieldErrors.cellphone = 'Celular inválido';
       }
 
-      // gender: if provided on update, it must be valid when not empty
       if (data?.gender !== undefined) {
         if (data.gender !== null && String(data.gender).trim() !== '' && !['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) {
           fieldErrors.gender = 'Gênero inválido';
@@ -406,9 +402,13 @@ export default async function patientRoutes(app: FastifyInstance) {
         }
       }
 
+      // Never allow overriding companyId or branchId via update payload
+      delete updateData.companyId;
+      delete updateData.branchId;
+
       const patient = await prisma.patient.update({
         where: { id },
-        data: { ...updateData, branchId },
+        data: updateData,
       });
 
       return patient;
@@ -454,20 +454,19 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as { id: string };
 
-    const existing = await prisma.patient.findFirst({ where: { id, branchId } });
+    const existing = await prisma.patient.findFirst({ where: { id, companyId: ctx.companyId } });
 
     if (!existing) {
       return reply.code(404).send({ error: 'Patient not found' });
     }
 
-    // Check for appointments and medical records
     const [appointmentsCount, recordsCount] = await Promise.all([
-      prisma.appointment.count({ where: { patientId: id, branchId } }),
+      prisma.appointment.count({ where: { patientId: id } }),
       prisma.medicalRecord.count({ where: { patientId: id } }),
     ]);
 
@@ -512,12 +511,12 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as { id: string };
 
-    const patient = await prisma.patient.findFirst({ where: { id, branchId } });
+    const patient = await prisma.patient.findFirst({ where: { id, companyId: ctx.companyId } });
 
     if (!patient) {
       return reply.code(404).send({ error: 'Patient not found' });
@@ -572,8 +571,8 @@ export default async function patientRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+    const ctx = await getLoggedContext(request);
+    if (!ctx) return reply.code(403).send({ error: 'User not associated with a branch' });
 
     const [
       totalPatients,
@@ -581,11 +580,11 @@ export default async function patientRoutes(app: FastifyInstance) {
       withHealthInsurance,
       genderStats,
     ] = await Promise.all([
-      prisma.patient.count({ where: { branchId } }),
-      prisma.patient.count({ where: { branchId, isActive: true } }),
-      prisma.patient.count({ where: { branchId, hasHealthInsurance: true } }),
+      prisma.patient.count({ where: { companyId: ctx.companyId } }),
+      prisma.patient.count({ where: { companyId: ctx.companyId, isActive: true } }),
+      prisma.patient.count({ where: { companyId: ctx.companyId, hasHealthInsurance: true } }),
       prisma.patient.groupBy({
-        where: { branchId },
+        where: { companyId: ctx.companyId },
         by: ['gender'],
         _count: { gender: true },
       }),
