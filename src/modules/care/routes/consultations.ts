@@ -1674,6 +1674,133 @@ export default async function consultationRoutes(app: FastifyInstance) {
     return { items: visibleItems, total: visibleItems.length };
   });
 
+  // History endpoint — completed consultations for the logged doctor only
+  app.get('/historico', {
+    schema: {
+      summary: 'List completed consultations for the logged doctor',
+      tags: ['Consultations'],
+      querystring: {
+        type: 'object',
+        properties: {
+          search: { type: 'string' },
+          type: { type: 'string' },
+          startDate: { type: 'string' },
+          endDate: { type: 'string' },
+          limit: { type: 'number', default: 20 },
+          offset: { type: 'number', default: 0 },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const context = await getLoggedContext(request);
+    const branchId = context?.branchId;
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    // Only doctors can access their own history
+    if (!context?.doctorId && !context?.doctorName) {
+      return (reply as any).code(403).send({ error: 'Apenas médicos podem acessar o histórico de atendimentos' });
+    }
+
+    const { search, type, startDate, endDate, limit = 20, offset = 0 } = request.query as any;
+
+    const where: any = {
+      isActive: true,
+      branchId,
+      OR: [
+        ...(context.doctorId ? [{ doctorId: context.doctorId }] : []),
+        ...(context.doctorName ? [{ doctorName: context.doctorName }] : []),
+      ],
+      appointment: {
+        status: { in: ['REALIZADO', 'FINALIZADO', 'COMPLETED', 'ATENDIDO'] },
+      },
+    };
+
+    if (search) {
+      where.AND = [
+        {
+          OR: [
+            { patientName: { contains: search, mode: 'insensitive' } },
+            { convenio: { contains: search, mode: 'insensitive' } },
+          ],
+        },
+      ];
+    }
+
+    if (type) {
+      where.appointment = { ...where.appointment, type: { equals: type, mode: 'insensitive' } };
+    }
+
+    if (startDate || endDate) {
+      where.appointment = {
+        ...where.appointment,
+        date: {
+          ...(startDate ? { gte: startDate } : {}),
+          ...(endDate ? { lte: endDate } : {}),
+        },
+      };
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.consultation.findMany({
+        where,
+        take: Number(limit),
+        skip: Number(offset),
+        orderBy: [{ appointment: { date: 'desc' } }, { createdAt: 'desc' }],
+        include: {
+          appointment: {
+            select: {
+              id: true,
+              specialty: true,
+              type: true,
+              date: true,
+              time: true,
+              status: true,
+              observations: true,
+              patientId: true,
+              patientCpf: true,
+              patientName: true,
+              convenio: true,
+              durationMinutes: true,
+            },
+          },
+          medicalRecord: {
+            select: {
+              id: true,
+              chiefComplaint: true,
+              diagnosis: true,
+              treatment: true,
+              prescriptions: true,
+              examRequests: true,
+              notes: true,
+              riskClassification: true,
+            },
+          },
+        },
+      }),
+      prisma.consultation.count({ where }),
+    ]);
+
+    return {
+      items: items.map((item: any) => ({
+        id: item.id,
+        patientName: item.patientName || item.appointment?.patientName || null,
+        doctorName: item.doctorName || null,
+        convenio: item.convenio || item.appointment?.convenio || null,
+        date: item.appointment?.date || null,
+        time: item.appointment?.time || null,
+        type: item.appointment?.type || null,
+        specialty: item.appointment?.specialty || null,
+        appointmentStatus: item.appointment?.status || null,
+        appointmentId: item.appointment?.id || item.appointmentId || null,
+        isTeleconsultation: isTeleconsultationAppointment(item.appointment),
+        hasMedicalRecord: Boolean(item.medicalRecord),
+        chiefComplaint: item.medicalRecord?.chiefComplaint || item.mainComplaint || null,
+        diagnosis: item.medicalRecord?.diagnosis || null,
+      })),
+      total,
+    };
+  });
+
   app.get('/:id', {
     schema: {
       summary: 'Get consultation by ID',
@@ -1711,10 +1838,46 @@ export default async function consultationRoutes(app: FastifyInstance) {
             patientId: true,
             patientCpf: true,
             patientName: true,
+            convenio: true,
+            durationMinutes: true,
+            status: true,
+            attachments: {
+              select: {
+                id: true,
+                fileName: true,
+                mimeType: true,
+                sizeBytes: true,
+                uploadedAt: true,
+              },
+            },
           },
         },
         nursingResponse: {
           include: { answers: true },
+        },
+        medicalRecord: {
+          select: {
+            id: true,
+            riskClassification: true,
+            chiefComplaint: true,
+            historyOfPresentIllness: true,
+            physicalExamination: true,
+            diagnosis: true,
+            treatment: true,
+            prescriptions: true,
+            examRequests: true,
+            notes: true,
+            bloodPressureSystolic: true,
+            bloodPressureDiastolic: true,
+            heartRate: true,
+            respiratoryRate: true,
+            temperature: true,
+            oxygenSaturation: true,
+            weight: true,
+            height: true,
+            bmi: true,
+            recordDate: true,
+          },
         },
       },
     });
