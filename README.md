@@ -170,3 +170,44 @@ Para começar sem se perder:
 - A pasta `generated/` contém artefatos gerados e não é fonte principal de desenvolvimento.
 - O monólito usa schema PostgreSQL `public` via adapter em `src/lib/prisma-adapter.ts`.
 - O endpoint de `accounts/appointments` existe no código legado desse domínio, mas não está registrado no módulo `accounts` atual.
+
+## Deploy no Google Cloud Run
+
+Este repositório já está preparado para deploy automático no Cloud Run com GitHub Actions em `.github/workflows/deploy-cloud-run.yml`.
+
+### 1. Pré-requisitos no GCP
+
+1. Crie/provisione um projeto GCP.
+2. Ative APIs:
+   `Artifact Registry`, `Cloud Run`, `Cloud Build`, `IAM`, `Secret Manager`.
+3. Crie um repositório Docker no Artifact Registry:
+   `gcloud artifacts repositories create saudy --repository-format=docker --location=us-central1`
+4. Configure Workload Identity Federation para GitHub Actions e vincule uma service account com permissões de deploy (`roles/run.admin`, `roles/artifactregistry.writer`, `roles/iam.serviceAccountUser`).
+
+### 2. Configuração de secrets
+
+No GitHub, adicione:
+
+- `GCP_PROJECT_ID`
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`
+- `GCP_SERVICE_ACCOUNT`
+
+No Secret Manager (GCP), crie os secrets usados no deploy, como:
+
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `CORS_ORIGIN`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE`, `SMTP_FROM`
+- `GROQ_API_KEY`
+- `ORTHANC_URL`, `ORTHANC_AUTH`
+- `GOOGLE_STORAGE_BUCKET_DICOM`, `GOOGLE_STORAGE_BUCKET_ANEXOS`
+- `MWL_BRANCH_ID`, `MWL_PUBLIC_TOKEN`
+- `WHATSAPP_CHATBOT_BRANCH_ID`
+
+### 3. Deploy
+
+1. Faça push na branch `main` (ou rode manualmente em **Actions > Deploy to Cloud Run**).
+2. O workflow irá:
+   - buildar a imagem Docker
+   - publicar no Artifact Registry
+   - fazer deploy no serviço `saudy-api-monolith` no Cloud Run
