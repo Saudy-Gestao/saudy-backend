@@ -4,6 +4,15 @@ import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
 
+const resolveUniqueField = (target: string | string[] | undefined): { field: string; message: string } => {
+  const raw = Array.isArray(target) ? target[0] : (target ?? '');
+  // Prisma may return index name (e.g. "doctors_email_key") or field name ("email")
+  if (raw.includes('email')) return { field: 'email', message: 'Este e-mail já está em uso' };
+  if (raw.includes('cpf')) return { field: 'cpf', message: 'CPF já cadastrado' };
+  if (raw.includes('crm')) return { field: 'crm', message: 'CRM já cadastrado' };
+  return { field: raw, message: `${raw} já existe` };
+};
+
 const normalizeRoomIds = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
   return Array.from(
@@ -372,8 +381,8 @@ export default async function doctorRoutes(app: FastifyInstance) {
     } catch (error: any) {
       request.log.error({ err: error }, 'Failed to create doctor');
       if (error.code === 'P2002') {
-        const field = error.meta?.target?.[0];
-        return reply.code(400).send({ error: 'Validation failed', fields: { [field]: `${field} já existe` } });
+        const { field, message } = resolveUniqueField(error.meta?.target);
+        return reply.code(400).send({ error: 'Validation failed', fields: { [field]: message } });
       }
       return reply.code(400).send({ error: 'Failed to create doctor', details: error.message });
     }
@@ -530,8 +539,8 @@ export default async function doctorRoutes(app: FastifyInstance) {
       return mapDoctorResponse(doctor);
     } catch (error: any) {
       if (error.code === 'P2002') {
-        const field = error.meta?.target?.[0];
-        return reply.code(400).send({ error: 'Validation failed', fields: { [field]: `${field} já existe` } });
+        const { field, message } = resolveUniqueField(error.meta?.target);
+        return reply.code(400).send({ error: 'Validation failed', fields: { [field]: message } });
       }
       return reply.code(400).send({ error: 'Failed to update doctor', details: error.message });
     }
