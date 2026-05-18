@@ -2861,7 +2861,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         time: body.time,
         durationMinutes: slotDuration,
         type: procedure.appointmentType || 'CONSULTA',
-        status: 'CONFIRMADO',
+        status: 'PRE_AGENDADO',
         convenio,
         observations,
         authorizationStatus: 'PENDING',

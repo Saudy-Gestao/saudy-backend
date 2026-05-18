@@ -1721,4 +1721,79 @@ export default async function appointmentRoutes(app: FastifyInstance) {
 
     return { appointmentId: id, mwlEntry };
   });
+
+  // List online (self-scheduled) appointments pending operator review
+  app.get('/online', {
+    schema: {
+      summary: 'List pre-scheduled appointments from patient portal',
+      tags: ['Appointments'],
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const appointments = await prisma.appointment.findMany({
+      where: { branchId, status: 'PRE_AGENDADO' },
+      orderBy: [{ date: 'asc' }, { time: 'asc' }],
+      select: {
+        id: true,
+        patientName: true,
+        patientCpf: true,
+        doctorName: true,
+        specialty: true,
+        date: true,
+        time: true,
+        type: true,
+        convenio: true,
+        observations: true,
+        durationMinutes: true,
+        createdAt: true,
+      },
+    });
+
+    return { appointments };
+  });
+
+  // Confirm (accept) or reject an online pre-scheduled appointment
+  app.patch('/online/:id', {
+    schema: {
+      summary: 'Confirm or reject an online pre-scheduled appointment',
+      tags: ['Appointments'],
+      security: [{ bearerAuth: [] }],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['confirm', 'reject'] },
+          reason: { type: 'string' },
+        },
+        required: ['action'],
+      },
+    },
+  }, async (request, reply) => {
+    const branchId = await getLoggedBranchId(request);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as { id: string };
+    const { action, reason } = request.body as { action: 'confirm' | 'reject'; reason?: string };
+
+    const appointment = await prisma.appointment.findFirst({ where: { id, branchId, status: 'PRE_AGENDADO' } });
+    if (!appointment) return reply.code(404).send({ error: 'Pré-agendamento não encontrado' });
+
+    if (action === 'confirm') {
+      await prisma.appointment.update({ where: { id }, data: { status: 'AGENDADO' } });
+      return { ok: true, status: 'AGENDADO' };
+    } else {
+      const obs = reason ? `[RECUSADO: ${reason}]` : '[RECUSADO PELO OPERADOR]';
+      await prisma.appointment.update({
+        where: { id },
+        data: {
+          status: 'CANCELADO',
+          observations: appointment.observations ? `${obs}\n${appointment.observations}` : obs,
+        },
+      });
+      return { ok: true, status: 'CANCELADO' };
+    }
+  });
 }
