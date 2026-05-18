@@ -21,6 +21,7 @@ type AuthorizedBranchContext = {
   phone: string | null;
   companyId: string;
   publicCheckInEnabled: boolean;
+  requireFacialForPatientRegistration: boolean;
 };
 
 type RequestAccessContext = {
@@ -201,6 +202,7 @@ const getAuthorizedBranchContext = async (
       settings: {
         select: {
           publicCheckInEnabled: true,
+          requireFacialForPatientRegistration: true,
         },
       },
     },
@@ -216,6 +218,7 @@ const getAuthorizedBranchContext = async (
     phone: branch.phone,
     companyId: branch.companyId,
     publicCheckInEnabled: Boolean(branch.settings?.publicCheckInEnabled),
+    requireFacialForPatientRegistration: branch.settings?.requireFacialForPatientRegistration ?? true,
   };
 };
 
@@ -247,6 +250,7 @@ export default async function publicCheckInRoutes(app: FastifyInstance) {
       tradeName: branch.tradeName,
       phone: branch.phone,
       publicCheckInEnabled: branch.publicCheckInEnabled,
+      requireFacialForPatientRegistration: branch.requireFacialForPatientRegistration,
     };
   });
 

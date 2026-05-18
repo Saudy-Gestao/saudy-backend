@@ -1004,11 +1004,15 @@ model PreSchedulingFlow {
     linkSentAt            DateTime?
     linkSentByUserId      String?
     linkMockMessage       String?             @db.Text
-    patientVerifiedAt     DateTime?
-    patientVerifiedCpf    String?
-    patientVerifiedName   String?
-    patientVerifiedTrust  Float?
-    patientAccessExpiresAt DateTime?
+    patientVerifiedAt          DateTime?
+    patientVerifiedCpf         String?
+    patientVerifiedName        String?
+    patientVerifiedTrust       Float?
+    patientVerifiedMethod      String?
+    patientAccessExpiresAt     DateTime?
+    emailVerificationCode      String?
+    emailVerificationExpiresAt DateTime?
+    emailVerificationAttempts  Int       @default(0)
     anamnesisSentAt       DateTime?
     anamnesisSentByUserId String?
     patientComplaints     String?             @db.Text

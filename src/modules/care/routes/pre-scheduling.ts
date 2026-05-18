@@ -5,6 +5,7 @@ import prisma from '../lib/prisma';
 import { getAnexosStorage } from '../../../lib/storage';
 import { createMessagingService } from '../lib/messaging';
 import { resolveWhatsAppConfigForBranch } from '../lib/whatsapp-config-resolver';
+import { sendPreSchedulingVerificationEmail } from '../../auth/lib/mailer';
 
 const CONFIRMED_APPOINTMENT_STATUSES = new Set(['CONFIRMADO', 'CONFIRMED']);
 const TELECONSULTATION_OBSERVATION_MARKER = '[MODALIDADE: TELECONSULTA]';
@@ -829,13 +830,32 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
 
     if (!ensureActivePublicFlow(flow, reply)) return;
 
-    const anamnesisTemplate = flow.appointment
-      ? await resolveAnamnesisTemplateForAppointment(String(flow.branchId || ''), flow.appointment)
-      : null;
+    const [anamnesisTemplate, branchSettings, patient] = await Promise.all([
+      flow.appointment
+        ? resolveAnamnesisTemplateForAppointment(String(flow.branchId || ''), flow.appointment)
+        : Promise.resolve(null),
+      flow.branchId
+        ? prisma.branchSettings.findUnique({ where: { branchId: flow.branchId } })
+        : Promise.resolve(null),
+      flow.patientId
+        ? prisma.patient.findUnique({ where: { id: flow.patientId }, select: { email: true } })
+        : Promise.resolve(null),
+    ]);
+
+    const requireFacial = branchSettings?.requireFacialForPatientRegistration ?? true;
+
+    const maskEmail = (email: string | null | undefined) => {
+      if (!email) return null;
+      const [local, domain] = email.split('@');
+      if (!domain || local.length < 2) return null;
+      return `${local[0]}${'*'.repeat(Math.min(local.length - 1, 4))}@${domain}`;
+    };
 
     return reply.send({
       id: flow.id,
       branchId: flow.branchId,
+      requireFacialForPatientRegistration: requireFacial,
+      patientEmailMasked: maskEmail(patient?.email || flow.appointment?.patientEmail as string | undefined),
       patientName: flow.patientName || flow.appointment?.patientName || 'Paciente',
       appointment: {
         specialty: flow.appointment?.specialty || null,
@@ -941,6 +961,161 @@ export default async function preSchedulingRoutes(app: FastifyInstance) {
     return reply.send({
       verified: true,
       trust: updated.patientVerifiedTrust,
+      patientName: updated.patientVerifiedName,
+      verificationExpiresAt: updated.patientAccessExpiresAt,
+    });
+  });
+
+  app.post('/public/:token/request-email-code', {
+    schema: {
+      summary: 'Request email verification code for pre-scheduling identity confirmation',
+      tags: ['PreSchedulingPublic'],
+      params: {
+        type: 'object',
+        required: ['token'],
+        properties: { token: { type: 'string' } },
+      },
+    },
+  }, async (request, reply) => {
+    const { token } = request.params as { token: string };
+
+    const flow = await prisma.preSchedulingFlow.findFirst({
+      where: { publicToken: token },
+      include: { appointment: true },
+    });
+
+    if (!ensureActivePublicFlow(flow, reply)) return;
+
+    if (flow.patientVerifiedAt) {
+      return reply.code(400).send({ error: 'A identidade já foi validada para este link' });
+    }
+
+    // Resolve patient email: from patient record or appointment
+    const patient = flow.patientId
+      ? await prisma.patient.findUnique({ where: { id: flow.patientId }, select: { email: true, name: true } })
+      : null;
+
+    const patientEmail = patient?.email || (flow.appointment as any)?.patientEmail as string | undefined;
+
+    if (!patientEmail) {
+      return reply.code(422).send({ error: 'Paciente sem e-mail cadastrado. Procure a recepção para validar sua identidade.' });
+    }
+
+    // Rate-limit: block resend for 60s after last code generation
+    const lastCodeAt = flow.emailVerificationExpiresAt
+      ? new Date(flow.emailVerificationExpiresAt.getTime() - 10 * 60 * 1000)
+      : null;
+    if (lastCodeAt && Date.now() - lastCodeAt.getTime() < 60_000) {
+      return reply.code(429).send({ error: 'Aguarde 60 segundos antes de solicitar um novo código.' });
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    await prisma.preSchedulingFlow.update({
+      where: { id: flow.id },
+      data: {
+        emailVerificationCode: code,
+        emailVerificationExpiresAt: expiresAt,
+        emailVerificationAttempts: 0,
+      },
+    });
+
+    const appointmentInfo = flow.appointment
+      ? [
+          flow.appointment.date ? new Date(flow.appointment.date).toLocaleDateString('pt-BR') : null,
+          flow.appointment.time || null,
+          flow.appointment.specialty || null,
+        ].filter(Boolean).join(' • ')
+      : undefined;
+
+    await sendPreSchedulingVerificationEmail({
+      to: patientEmail,
+      code,
+      userName: patient?.name || flow.patientName || undefined,
+      appointmentInfo,
+    });
+
+    const maskEmail = (email: string) => {
+      const [local, domain] = email.split('@');
+      if (!domain || local.length < 2) return email;
+      return `${local[0]}${'*'.repeat(Math.min(local.length - 1, 4))}@${domain}`;
+    };
+
+    return reply.send({ sent: true, emailMasked: maskEmail(patientEmail) });
+  });
+
+  app.post('/public/:token/verify-email-code', {
+    schema: {
+      summary: 'Verify email code for pre-scheduling identity confirmation',
+      tags: ['PreSchedulingPublic'],
+      params: {
+        type: 'object',
+        required: ['token'],
+        properties: { token: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['code'],
+        properties: {
+          code: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { token } = request.params as { token: string };
+    const { code } = request.body as { code: string };
+
+    const flow = await prisma.preSchedulingFlow.findFirst({
+      where: { publicToken: token },
+      include: { appointment: true },
+    });
+
+    if (!ensureActivePublicFlow(flow, reply)) return;
+
+    if (flow.patientVerifiedAt) {
+      return reply.code(400).send({ error: 'A identidade já foi validada para este link' });
+    }
+
+    if (!flow.emailVerificationCode || !flow.emailVerificationExpiresAt) {
+      return reply.code(400).send({ error: 'Nenhum código solicitado. Solicite o envio do código primeiro.' });
+    }
+
+    if (new Date() > flow.emailVerificationExpiresAt) {
+      return reply.code(400).send({ error: 'Código expirado. Solicite um novo código.' });
+    }
+
+    const MAX_ATTEMPTS = 5;
+    if ((flow.emailVerificationAttempts ?? 0) >= MAX_ATTEMPTS) {
+      return reply.code(429).send({ error: 'Número máximo de tentativas atingido. Solicite um novo código.' });
+    }
+
+    if (code.trim() !== flow.emailVerificationCode) {
+      await prisma.preSchedulingFlow.update({
+        where: { id: flow.id },
+        data: { emailVerificationAttempts: { increment: 1 } },
+      });
+      return reply.code(400).send({ error: 'Código incorreto.' });
+    }
+
+    const patientName = flow.patientName || flow.appointment?.patientName || undefined;
+
+    const updated = await prisma.preSchedulingFlow.update({
+      where: { id: flow.id },
+      data: {
+        patientVerifiedAt: new Date(),
+        patientVerifiedCpf: flow.patientCpf || null,
+        patientVerifiedName: patientName || null,
+        patientVerifiedMethod: 'EMAIL_CODE',
+        emailVerificationCode: null,
+        emailVerificationExpiresAt: null,
+        patientAccessExpiresAt: new Date(Date.now() + PUBLIC_FLOW_WINDOW_MINUTES * 60 * 1000),
+        status: flow.status === 'PENDING' ? 'WAITING_PATIENT_DOCUMENTS' : flow.status,
+      },
+    });
+
+    return reply.send({
+      verified: true,
       patientName: updated.patientVerifiedName,
       verificationExpiresAt: updated.patientAccessExpiresAt,
     });

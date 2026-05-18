@@ -18,6 +18,13 @@ type AdminRegisterMailParams = {
   userName?: string;
 };
 
+type PreSchedulingVerificationMailParams = {
+  to: string;
+  code: string;
+  userName?: string;
+  appointmentInfo?: string;
+};
+
 type WelcomeMailParams = {
   to: string;
   login: string;
@@ -231,6 +238,43 @@ export async function sendAdminRegisterCodeEmail({ to, code, userName }: AdminRe
   return true;
 }
 
+function buildPreSchedulingVerificationHtml(code: string, userName?: string, appointmentInfo?: string) {
+  const firstName = userName?.trim()?.split(' ')[0] || 'paciente';
+
+  return `
+  <div style="margin:0;padding:24px;background:#f4f6fb;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid #e5e7eb;">
+      <tr>
+        <td style="padding:24px;background:linear-gradient(135deg,#003b7a 0%,#001f54 100%);color:#ffffff;">
+          <h1 style="margin:0;font-size:22px;">Saudy</h1>
+          <p style="margin:8px 0 0;font-size:14px;opacity:0.9;">Confirmação de identidade</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:28px;">
+          <p style="margin:0 0 16px;font-size:16px;">Olá, ${firstName}.</p>
+          <p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:#334155;">
+            Use o código abaixo para confirmar sua identidade e acessar o pré-atendimento${appointmentInfo ? ` da sua consulta: <strong>${appointmentInfo}</strong>` : ''}.
+          </p>
+
+          <div style="margin:0 auto 20px;max-width:240px;background:#eef2ff;border:1px dashed #4f46e5;border-radius:12px;padding:14px 16px;text-align:center;">
+            <span style="display:block;font-size:30px;font-weight:700;letter-spacing:8px;color:#1e293b;">${code}</span>
+          </div>
+
+          <p style="margin:0 0 8px;font-size:13px;color:#475569;">Esse código expira em 10 minutos.</p>
+          <p style="margin:0;font-size:13px;color:#475569;">Se você não tentou acessar o pré-atendimento, ignore este e-mail.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:18px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;">
+          <p style="margin:0;font-size:12px;color:#64748b;">© ${new Date().getFullYear()} Saudy — Confirmação segura de identidade.</p>
+        </td>
+      </tr>
+    </table>
+  </div>
+  `;
+}
+
 function buildWelcomeHtml(login: string, userName?: string) {
   const firstName = userName?.trim()?.split(' ')[0] || 'usuário';
 
@@ -267,6 +311,27 @@ function buildWelcomeHtml(login: string, userName?: string) {
     </table>
   </div>
   `;
+}
+
+export async function sendPreSchedulingVerificationEmail({ to, code, userName, appointmentInfo }: PreSchedulingVerificationMailParams) {
+  const transporter = getTransporter();
+
+  if (!transporter) {
+    console.warn('SMTP is not configured. Skipping pre-scheduling verification email send.');
+    return false;
+  }
+
+  const from = getMailFrom();
+
+  await transporter.sendMail({
+    from,
+    to,
+    subject: 'Saudy | Código de confirmação de identidade',
+    text: `Seu código de confirmação é: ${code}. Ele expira em 10 minutos.`,
+    html: buildPreSchedulingVerificationHtml(code, userName, appointmentInfo),
+  });
+
+  return true;
 }
 
 export async function sendWelcomeEmail({ to, login, userName }: WelcomeMailParams) {
