@@ -8,6 +8,7 @@ export const swaggerComponents = {
       type: 'object',
       properties: {
         id: { type: 'string' },
+        crmType: { type: 'string' },
         crm: { type: 'string' },
         crmState: { type: 'string' },
         name: { type: 'string' },

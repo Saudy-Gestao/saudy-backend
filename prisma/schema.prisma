@@ -252,6 +252,7 @@ model PasswordResetCode {
 model Doctor {
     id                String   @id @default(uuid())
     branchId          String?
+    crmType           String   @default("CRM")
     crm               String
     crmState          String   @db.VarChar(2)
     name              String
