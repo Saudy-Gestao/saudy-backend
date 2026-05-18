@@ -2932,7 +2932,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     const { procedureId, insuranceName } = request.query as { procedureId: string; insuranceName: string };
 
     const insurance = await prisma.insurance.findFirst({
-      where: { name: { equals: insuranceName, mode: 'insensitive' }, isActive: true },
+      where: {
+        name: { equals: insuranceName, mode: 'insensitive' },
+        isActive: true,
+        ...(payload.branchId ? { branchId: payload.branchId } : {}),
+      },
       select: { id: true, name: true },
     });
 
