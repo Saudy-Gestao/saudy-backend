@@ -413,4 +413,36 @@ export default async function userRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'User not found' });
     }
   });
+
+  // Self-deletion: user deletes their own account
+  app.delete('/users/me', {
+    preHandler: async (request, reply) => { await request.jwtVerify(); },
+    schema: {
+      summary: 'Delete own account',
+      tags: ['Users'],
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        properties: { password: { type: 'string' } },
+        required: ['password'],
+      },
+      response: {
+        200: { type: 'object', example: { message: 'Account deleted' } },
+        400: { type: 'object' },
+        401: { type: 'object' },
+      },
+    },
+  }, async (request, reply) => {
+    const { password } = request.body as { password: string };
+    const requestUserId = (request.user as any).id as string;
+
+    const user = await prisma.user.findUnique({ where: { id: requestUserId } });
+    if (!user) return reply.code(400).send({ error: 'User not found' });
+
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return reply.code(401).send({ error: 'Senha incorreta' });
+
+    await prisma.user.delete({ where: { id: requestUserId } });
+    return { message: 'Account deleted' };
+  });
 }

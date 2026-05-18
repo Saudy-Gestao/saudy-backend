@@ -296,7 +296,8 @@ type PatientPortalAccessLogEvent =
   | 'VERIFY_CODE_SESSION_INVALID'
   | 'VERIFY_CODE_INVALID_CODE'
   | 'VERIFY_CODE_RATE_LIMITED'
-  | 'VERIFY_CODE_BLOCKED';
+  | 'VERIFY_CODE_BLOCKED'
+  | 'PATIENT_SELF_DELETED_ACCOUNT';
 
 type RateLimitResult = {
   allowed: boolean;
@@ -2989,5 +2990,35 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     });
 
     return { ok: true };
+  });
+
+  // Self-deletion: patient permanently deletes their own account (LGPD)
+  app.delete('/patient-portal/me/account', {
+    schema: {
+      summary: 'Permanently delete patient account (LGPD)',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: { type: 'object', example: { message: 'Account deleted' } },
+        404: { type: 'object' },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+
+    registerAccessEvent(request, {
+      event: 'PATIENT_SELF_DELETED_ACCOUNT',
+      status: 'SUCCESS',
+      message: 'Paciente solicitou exclusão permanente da própria conta.',
+      patientId: patient.id,
+      cpf: patient.cpf,
+    });
+
+    await prisma.patient.delete({ where: { id: patient.id } });
+    return { message: 'Account deleted' };
   });
 }
