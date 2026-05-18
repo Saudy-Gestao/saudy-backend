@@ -602,14 +602,16 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         properties: {
           cpf: { type: 'string' },
           birthDate: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+          selectedPatientId: { type: 'string' },
         },
         required: ['cpf', 'birthDate'],
       },
     },
   }, async (request, reply) => {
-    const body = request.body as { cpf: string; birthDate: string };
+    const body = request.body as { cpf: string; birthDate: string; selectedPatientId?: string };
     const cpf = normalizeCpf(body?.cpf);
     const birthDate = normalizeDateInput(body?.birthDate);
+    const selectedPatientId = body?.selectedPatientId?.trim() || undefined;
     const clientIp = getClientIp(request);
 
     const ipRate = consumeRateLimit(
@@ -662,7 +664,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'CPF ou data de nascimento inválidos' });
     }
 
-    const patient = await prisma.patient.findFirst({
+    const patients = await prisma.patient.findMany({
       where: { cpf, isActive: true },
       select: {
         id: true,
@@ -673,10 +675,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         email: true,
         cellphone: true,
         phone: true,
+        branch: { select: { id: true, name: true } },
       },
     });
 
-    if (!patient) {
+    if (patients.length === 0) {
       registerAccessEvent(request, {
         event: 'REQUEST_CODE_PATIENT_NOT_FOUND',
         status: 'FAILED',
@@ -686,17 +689,38 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Paciente não encontrado' });
     }
 
-    const normalizedStoredBirthDate = formatDateOnly(patient.birthDate);
-    if (!normalizedStoredBirthDate || normalizedStoredBirthDate !== birthDate) {
+    // Validate birthDate — must match at least one record
+    type PatientRow = (typeof patients)[number];
+    const matchingPatients = patients.filter((p: PatientRow) => {
+      const stored = formatDateOnly(p.birthDate);
+      return stored && stored === birthDate;
+    });
+
+    if (matchingPatients.length === 0) {
       registerAccessEvent(request, {
         event: 'REQUEST_CODE_BIRTHDATE_MISMATCH',
         status: 'FAILED',
         message: 'Data de nascimento não confere.',
-        patientId: patient.id,
-        cpf: patient.cpf,
+        cpf,
       });
       return reply.code(401).send({ error: 'Dados de acesso inválidos' });
     }
+
+    // If multiple companies and no specific patient chosen, ask the user to pick
+    if (matchingPatients.length > 1 && !selectedPatientId) {
+      return reply.send({
+        requiresCompanySelection: true,
+        companies: matchingPatients.map((p: PatientRow) => ({
+          patientId: p.id,
+          branchId: p.branchId,
+          branchName: p.branch?.name ?? 'Clínica',
+        })),
+      });
+    }
+
+    const patient = selectedPatientId
+      ? (matchingPatients.find((p: PatientRow) => p.id === selectedPatientId) ?? matchingPatients[0])
+      : matchingPatients[0];
 
     if (!patient.email) {
       registerAccessEvent(request, {
