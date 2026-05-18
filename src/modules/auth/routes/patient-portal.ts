@@ -675,7 +675,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         email: true,
         cellphone: true,
         phone: true,
-        branch: { select: { id: true, name: true } },
+        company: { select: { id: true, name: true } },
       },
     });
 
@@ -713,7 +713,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         companies: matchingPatients.map((p: PatientRow) => ({
           patientId: p.id,
           branchId: p.branchId,
-          branchName: p.branch?.name ?? 'Clínica',
+          branchName: p.company?.name ?? 'Clínica',
         })),
       });
     }
