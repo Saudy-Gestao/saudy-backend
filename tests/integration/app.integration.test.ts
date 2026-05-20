@@ -48,17 +48,21 @@ describe('App integration', () => {
   it('responds to webhook health endpoint', async () => {
     const res = await app.inject({
       method: 'GET',
-      url: '/whatsapp/webhook/gupshup',
+      url: '/whatsapp/webhook',
+      query: {
+        'hub.mode': 'subscribe',
+        'hub.verify_token': 'saudy-webhook-token',
+        'hub.challenge': 'test-challenge',
+      },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true });
   });
 
   it('acknowledges webhook events safely', async () => {
     const res = await app.inject({
       method: 'POST',
-      url: '/whatsapp/webhook/gupshup',
+      url: '/whatsapp/webhook',
       payload: {},
     });
 

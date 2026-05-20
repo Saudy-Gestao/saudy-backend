@@ -8,13 +8,13 @@ const sendListMessageMock = vi.fn();
 
 const sendFlowMessageMock = vi.fn();
 
-vi.mock('../../src/modules/care/lib/gupshup', () => ({
-  default: vi.fn().mockImplementation(() => ({
+vi.mock('../../src/modules/care/lib/messaging', () => ({
+  GupshupService: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
     sendQuickReplyMessage: sendQuickReplyMessageMock,
     sendListMessage: sendListMessageMock,
   })),
-  GupshupV3Service: vi.fn().mockImplementation(() => ({
+  MetaMessagingService: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
     sendQuickReplyMessage: sendQuickReplyMessageMock,
     sendListMessage: sendListMessageMock,
@@ -49,6 +49,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     },
     whatsAppConversationMessage: {
       create: vi.fn(),
+      findFirst: vi.fn(),
     },
     whatsAppConversationMedia: {
       create: vi.fn(),
@@ -64,6 +65,10 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
       findFirst: vi.fn(),
     },
     insurance: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+    },
+    insuranceProcedure: {
       findMany: vi.fn(),
     },
     procedureDoctor: {
@@ -157,6 +162,9 @@ describe('handleWhatsAppChatbot', () => {
     mockedPrisma.procedure.findMany.mockResolvedValue([]);
     mockedPrisma.procedure.findFirst.mockResolvedValue(null);
     mockedPrisma.insurance.findMany.mockResolvedValue([]);
+    mockedPrisma.insurance.findFirst.mockResolvedValue(null);
+    mockedPrisma.insuranceProcedure.findMany.mockResolvedValue([]);
+    mockedPrisma.whatsAppConversationMessage.findFirst.mockResolvedValue(null);
     mockedPrisma.procedureDoctor.findMany.mockResolvedValue([]);
     mockedPrisma.doctor.findMany.mockResolvedValue([]);
     mockedPrisma.whatsAppTicket.create.mockResolvedValue({ id: 't-1' });

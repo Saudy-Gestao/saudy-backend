@@ -128,6 +128,10 @@ describe('auth patient portal routes', () => {
     mockedPrisma.delivery.findMany.mockResolvedValue([]);
     mockedPrisma.delivery.count.mockResolvedValue(0);
     mockedPrisma.delivery.create.mockResolvedValue({ id: 'd-1', status: 'SOLICITADO_IMPRESSAO', availableAt: new Date('2026-04-20T09:00:00Z') });
+    // Default: no patients found (findMany returns [])
+    mockedPrisma.patient.findMany.mockResolvedValue([]);
+    mockedPrisma.patient.findFirst.mockResolvedValue(null);
+    mockedPrisma.patientPortalDependentAuthorization.findMany.mockResolvedValue([]);
   });
 
   it('validates and sends code on /patient-portal/request-code', async () => {
@@ -142,8 +146,9 @@ describe('auth patient portal routes', () => {
     });
     expect(res.statusCode).toBe(400);
 
+    // patient not found (findMany returns [])
     mockedIsValidCpf.mockReturnValueOnce(true);
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce(null);
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([]);
     res = await app.inject({
       method: 'POST',
       url: '/patient-portal/request-code',
@@ -152,13 +157,14 @@ describe('auth patient portal routes', () => {
     });
     expect(res.statusCode).toBe(404);
 
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce({
+    // patient found but birthDate mismatch
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([{
       id: 'p-1',
       branchId: 'b-1',
       cpf: '12345678901',
       birthDate: new Date('1999-01-01'),
       email: 'p1@mail.com',
-    });
+    }]);
     res = await app.inject({
       method: 'POST',
       url: '/patient-portal/request-code',
@@ -167,14 +173,15 @@ describe('auth patient portal routes', () => {
     });
     expect(res.statusCode).toBe(401);
 
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce({
+    // patient found, correct date, but no email
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([{
       id: 'p-1',
       branchId: 'b-1',
       name: 'Paciente',
       cpf: '12345678901',
       birthDate: new Date('2000-01-01'),
       email: null,
-    });
+    }]);
     res = await app.inject({
       method: 'POST',
       url: '/patient-portal/request-code',
@@ -183,7 +190,8 @@ describe('auth patient portal routes', () => {
     });
     expect(res.statusCode).toBe(400);
 
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce({
+    // patient found, email exists, send fails
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([{
       id: 'p-1',
       branchId: 'b-1',
       name: 'Paciente 1',
@@ -192,8 +200,7 @@ describe('auth patient portal routes', () => {
       email: 'paciente@mail.com',
       cellphone: '1',
       phone: null,
-    });
-    mockedPrisma.patient.findMany.mockResolvedValue([]);
+    }]);
     mockedPrisma.patientPortalDependentAuthorization.findMany.mockResolvedValue([]);
     mockedSendPatientPortalAccessCodeEmail.mockResolvedValueOnce(false);
 
@@ -205,7 +212,8 @@ describe('auth patient portal routes', () => {
     });
     expect(res.statusCode).toBe(500);
 
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce({
+    // success
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([{
       id: 'p-1',
       branchId: 'b-1',
       name: 'Paciente 1',
@@ -214,7 +222,7 @@ describe('auth patient portal routes', () => {
       email: 'paciente@mail.com',
       cellphone: '1',
       phone: null,
-    });
+    }]);
     mockedSendPatientPortalAccessCodeEmail.mockResolvedValueOnce(true);
 
     res = await app.inject({
@@ -923,9 +931,8 @@ describe('auth patient portal routes', () => {
     expect(explicit?.authorizationSource).toBe('EXPLICIT_AUTHORIZATION');
 
     // maskEmail with short name (≤2 chars): triggers maskEmail branch
-    // Also test verify-code → no activeProfile path (normalizeCpf returns '' for principal)
     // Test maskEmail by checking request-code with 2-char name
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce({
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([{
       id: 'p-short',
       branchId: 'b-1',
       name: 'Ab',
@@ -934,8 +941,7 @@ describe('auth patient portal routes', () => {
       email: 'ab@test.com',
       cellphone: null,
       phone: null,
-    });
-    mockedPrisma.patient.findMany.mockResolvedValueOnce([]);
+    }]);
     mockedPrisma.patientPortalDependentAuthorization.findMany.mockResolvedValueOnce([]);
     mockedSendPatientPortalAccessCodeEmail.mockResolvedValueOnce(true);
     const maskRes = await app.inject({
@@ -1275,7 +1281,7 @@ describe('auth patient portal routes', () => {
     mockedNormalizeCpf.mockImplementation((value: string) => String(value || '').replace(/\D/g, ''));
     mockedIsValidCpf.mockReturnValue(true);
 
-    mockedPrisma.patient.findFirst.mockResolvedValue({
+    const patientRecord = {
       id: 'p-1',
       branchId: 'b-1',
       name: 'Paciente Curto',
@@ -1286,12 +1292,11 @@ describe('auth patient portal routes', () => {
       phone: null,
       createdAt: new Date(),
       isActive: true,
-    });
-    mockedPrisma.patientPortalDependentAuthorization.findMany.mockResolvedValue([
-      { dependentPatientId: 'dep-1', relationship: 'Filho' },
-    ]);
+    };
+    // request-code now uses findMany for patient lookup
     mockedPrisma.patient.findMany
-      .mockResolvedValueOnce([
+      .mockResolvedValueOnce([patientRecord])   // request-code patient lookup
+      .mockResolvedValueOnce([                  // resolvePortalProfilesForPrincipal guardian lookup
         {
           id: 'dep-1',
           branchId: 'b-1',
@@ -1303,7 +1308,7 @@ describe('auth patient portal routes', () => {
           phone: null,
         },
       ])
-      .mockResolvedValueOnce([
+      .mockResolvedValueOnce([                  // resolvePortalProfilesForPrincipal explicit dependents
         {
           id: 'dep-1',
           branchId: 'b-1',
@@ -1315,6 +1320,11 @@ describe('auth patient portal routes', () => {
           phone: null,
         },
       ]);
+    // findFirst still used by getPatientFromPayload inside verify-code flow
+    mockedPrisma.patient.findFirst.mockResolvedValue(patientRecord);
+    mockedPrisma.patientPortalDependentAuthorization.findMany.mockResolvedValue([
+      { dependentPatientId: 'dep-1', relationship: 'Filho' },
+    ]);
     mockedSendPatientPortalAccessCodeEmail.mockResolvedValue(true);
 
     const app = await buildApp();
@@ -1758,7 +1768,7 @@ describe('auth patient portal routes', () => {
     // maskEmail with no '@': patient.email = 'noemail' (truthy, passes !patient.email check)
     // Returns destination = 'noemail' (the raw string)
     mockedIsValidCpf.mockReturnValueOnce(true);
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce({
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([{
       id: 'p-noat',
       branchId: 'b-1',
       name: 'Patient',
@@ -1767,8 +1777,7 @@ describe('auth patient portal routes', () => {
       email: 'noemail',
       cellphone: '1',
       phone: null,
-    });
-    mockedPrisma.patient.findMany.mockResolvedValueOnce([]);
+    }]);
     mockedPrisma.patientPortalDependentAuthorization.findMany.mockResolvedValueOnce([]);
     mockedSendPatientPortalAccessCodeEmail.mockResolvedValueOnce(true);
     res = await app.inject({
@@ -2270,12 +2279,11 @@ describe('auth patient portal routes', () => {
 
     // Success path: patient with null branchId + null name + email='@domain.com'
     // Covers: line 697 (branchId||null), line 708 (name||undefined), line 60 (maskEmail !name||!domain → return raw)
-    mockedPrisma.patient.findFirst.mockResolvedValueOnce({
+    mockedPrisma.patient.findMany.mockResolvedValueOnce([{
       id: 'p-rc-31', branchId: null, name: null, cpf: '55544433322',
       birthDate: new Date('1985-05-05'), email: '@domain.com',
       cellphone: null, phone: null,
-    });
-    mockedPrisma.patient.findMany.mockResolvedValueOnce([]);
+    }]);
     mockedPrisma.patientPortalDependentAuthorization.findMany.mockResolvedValueOnce([]);
     mockedSendPatientPortalAccessCodeEmail.mockResolvedValueOnce(true);
     let res = await app.inject({

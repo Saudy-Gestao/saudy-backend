@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
-import GupshupService, { GupshupV3Service, createMessagingService } from '../../src/modules/care/lib/gupshup';
+import { GupshupService, MetaMessagingService as GupshupV3Service, createMessagingService } from '../../src/modules/care/lib/messaging';
 
 vi.mock('axios', () => ({
   default: {

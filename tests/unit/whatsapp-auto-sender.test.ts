@@ -16,18 +16,13 @@ const {
   extractTemplateParamsMock: vi.fn(),
 }));
 
-vi.mock('../../src/modules/care/lib/gupshup', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    sendTemplateMessage: sendTemplateMessageMock,
-    sendQuickReplyMessage: sendQuickReplyMessageMock,
-    sendTextMessage: sendTextMessageMock,
-  })),
+vi.mock('../../src/modules/care/lib/messaging', () => ({
   createMessagingService: vi.fn().mockImplementation(() => ({
     sendTemplateMessage: sendTemplateMessageMock,
     sendQuickReplyMessage: sendQuickReplyMessageMock,
     sendTextMessage: sendTextMessageMock,
   })),
-  GupshupV3Service: vi.fn().mockImplementation(() => ({
+  MetaMessagingService: vi.fn().mockImplementation(() => ({
     sendTemplateMessage: sendTemplateMessageMock,
     sendQuickReplyMessage: sendQuickReplyMessageMock,
     sendTextMessage: sendTextMessageMock,

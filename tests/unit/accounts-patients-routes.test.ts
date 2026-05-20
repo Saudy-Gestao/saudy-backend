@@ -41,7 +41,7 @@ async function buildApp() {
 describe('accounts patients routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedPrisma.user.findUnique.mockResolvedValue({ sector: { branch: { id: 'b1' } } });
+    mockedPrisma.user.findUnique.mockResolvedValue({ sector: { branch: { id: 'b1', companyId: 'c1' } } });
   });
 
   it('returns 403 when user has no branch', async () => {

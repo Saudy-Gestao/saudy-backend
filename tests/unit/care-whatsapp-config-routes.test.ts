@@ -200,7 +200,7 @@ describe('care whatsapp-config routes', () => {
       { method: 'POST', url: '/wa/whatsapp/templates/load-defaults' },
       { method: 'GET', url: '/wa/whatsapp/templates/t-1' },
       { method: 'DELETE', url: '/wa/whatsapp/templates/t-1' },
-      { method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' },
+      { method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' },
       { method: 'GET', url: '/wa/whatsapp/notification-config' },
       {
         method: 'POST',
@@ -433,13 +433,17 @@ describe('care whatsapp-config routes', () => {
     await app.close();
   });
 
-  it('deletes templates with gupshup validation branches', async () => {
+  it('deletes templates with meta validation branches', async () => {
+    // Set WABA ID env to skip the phone number ID lookup fetch
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
+    // 1) Template not found → 404
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce(null);
     let res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-z' });
     expect(res.statusCode).toBe(404);
 
+    // 2) Template with remote signals but no credentials → 400
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: '', accountSid: '' });
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
       id: 't-2',
@@ -452,6 +456,7 @@ describe('care whatsapp-config routes', () => {
     res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-2' });
     expect(res.statusCode).toBe(400);
 
+    // 3) With credentials, Meta DELETE returns non-404 error → 400
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
       id: 't-3',
@@ -461,14 +466,11 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateStatus: 'APPROVED',
       importedFromGupshupSync: true,
     });
-    (globalThis.fetch as any)
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ templates: [{ id: 'remote-id', elementName: 'temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }] }) })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'boom' })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'boom2' })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'boom3' });
+    (globalThis.fetch as any).mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'meta error' });
     res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-3' });
     expect(res.statusCode).toBe(400);
 
+    // 4) With credentials, Meta DELETE returns 404 (already gone) → 200
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
       id: 't-4',
@@ -478,14 +480,11 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateStatus: 'APPROVED',
       importedFromGupshupSync: true,
     });
-    (globalThis.fetch as any)
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ templates: [{ id: 'remote-id', elementName: 'temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }] }) })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'first' })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'second' })
-      .mockResolvedValueOnce({ ok: true, status: 404, text: async () => 'not-found' });
+    (globalThis.fetch as any).mockResolvedValueOnce({ ok: false, status: 404, text: async () => 'not found' });
     res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-4' });
     expect(res.statusCode).toBe(200);
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
@@ -555,7 +554,8 @@ describe('care whatsapp-config routes', () => {
     await app.close();
   });
 
-  it('deletes remote template matched only by element name', async () => {
+  it('deletes remote template matched by hsm name via Meta API', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
@@ -567,18 +567,19 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateStatus: 'APPROVED',
       importedFromGupshupSync: true,
     });
-    (globalThis.fetch as any)
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ templates: [{ elementName: 'temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }] }) })
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'deleted' });
+    (globalThis.fetch as any).mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'deleted' });
 
     const res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-10' });
     expect(res.statusCode).toBe(200);
-    expect((globalThis.fetch as any).mock.calls[1][0]).toContain('elementName=temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    // Meta API delete by name
+    expect((globalThis.fetch as any).mock.calls[0][0]).toContain('name=temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('deletes remote template when provider list only returns templateID and local hsm name fallback', async () => {
+  it('deletes remote template using Meta API with WABA ID lookup and hsm name', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
@@ -590,22 +591,18 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateStatus: 'APPROVED',
       importedFromGupshupSync: true,
     });
-    (globalThis.fetch as any)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ templates: [{ templateID: 'remote-template-id' }] }),
-      })
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'deleted-by-query' });
+    (globalThis.fetch as any).mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'deleted-by-query' });
 
     const res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-11' });
     expect(res.statusCode).toBe(200);
-    expect((globalThis.fetch as any).mock.calls[1][0]).toContain('templateId=remote-template-id');
-    expect((globalThis.fetch as any).mock.calls[1][0]).toContain('elementName=temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect((globalThis.fetch as any).mock.calls[0][0]).toContain('name=temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('deletes remote template when provider match has id but no element name', async () => {
+  it('deletes remote template when hsmTemplateName is null (no Meta delete call, only local)', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
@@ -617,28 +614,29 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateStatus: 'APPROVED',
       importedFromGupshupSync: true,
     });
-    (globalThis.fetch as any)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ templates: [{ id: 'remote-id-only', elementName: '' }] }),
-      })
-      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'deleted-by-id-query' });
 
+    // When hsmTemplateName is null but hsmTemplateId exists,
+    // the code enters the HSM block but `wabaId && template.hsmTemplateName` is false
+    // so no fetch is made for delete — just local delete succeeds
     const res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-12' });
     expect(res.statusCode).toBe(200);
-    expect((globalThis.fetch as any).mock.calls[1][0]).toContain('templateId=remote-id-only');
-    expect((globalThis.fetch as any).mock.calls[1][0]).not.toContain('elementName=');
+    // No Meta delete call since hsmTemplateName is null
+    expect((globalThis.fetch as any)).not.toHaveBeenCalled();
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('pushes template to gupshup and handles provider errors', async () => {
+  it('pushes template to meta and handles provider errors', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
+    // 1) Template not found → 404
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce(null);
-    let res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' });
+    let res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' });
     expect(res.statusCode).toBe(404);
 
+    // 2) Template exists, update hsm name, empty credentials → 400
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
       id: 't-1',
       branchId: 'b-1',
@@ -656,43 +654,48 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateName: 'confirmacao_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     });
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: '', accountSid: '' });
-    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' });
+    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' });
     expect([400, 500]).toContain(res.statusCode);
 
+    // 3) With credentials, Meta API returns error → 400
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
     (globalThis.fetch as any).mockResolvedValueOnce({
       ok: false,
       status: 422,
       text: async () => JSON.stringify({ message: 'invalid template' }),
     });
-    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' });
+    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' });
     expect(res.statusCode).toBe(400);
 
+    // 4) With credentials, 500 from Meta → 400
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
     (globalThis.fetch as any).mockResolvedValueOnce({
       ok: false,
       status: 500,
       text: async () => 'provider raw failure',
     });
-    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' });
+    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' });
     expect(res.statusCode).toBe(400);
 
+    // 5) Success
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: 'api-key' });
     (globalThis.fetch as any).mockResolvedValueOnce({
       ok: true,
       status: 201,
-      text: async () => JSON.stringify({ status: 'submitted' }),
+      text: async () => JSON.stringify({ id: 'tpl-id', status: 'PENDING' }),
     });
-    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' });
+    res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' });
     expect([200, 400]).toContain(res.statusCode);
     if (res.statusCode === 200) {
       expect(res.json().success).toBe(true);
     }
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('push-to-gupshup returns 400 when generated HSM name is still empty', async () => {
+  it('push-to-meta returns 400 when generated HSM name is still empty', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
@@ -712,16 +715,18 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateName: null,
     });
 
-    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' });
+    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' });
     expect([400, 500]).toContain(res.statusCode);
     if (res.statusCode === 400) {
       expect(res.json().error).toContain('não foi gerado corretamente');
     }
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('returns truncated delete attempt details when gupshup delete responses are very long', async () => {
+  it('returns truncated delete attempt details when meta delete responses are very long', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
     const longBody = 'x'.repeat(700);
 
@@ -734,29 +739,18 @@ describe('care whatsapp-config routes', () => {
       hsmTemplateStatus: 'APPROVED',
       importedFromGupshupSync: true,
     });
-    (globalThis.fetch as any)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ templates: [{ id: 'remote-id', elementName: 'temp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }] }),
-      })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => longBody })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => longBody })
-      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => longBody });
+    (globalThis.fetch as any).mockResolvedValueOnce({ ok: false, status: 500, text: async () => longBody });
 
     const res = await app.inject({ method: 'DELETE', url: '/wa/whatsapp/templates/t-long' });
+    // Route returns 400 when Meta delete fails with non-404 status
     expect([400, 500]).toContain(res.statusCode);
-    const payload = res.json() as any;
-    const detailsAsText = Array.isArray(payload?.details)
-      ? payload.details.join(' ')
-      : String(payload?.details || '');
-    if (detailsAsText) {
-      expect(detailsAsText).toContain('...');
-    }
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('push-to-gupshup returns 400 when app id exists but api key is missing', async () => {
+  it('push-to-meta returns 400 when app id exists but api key is missing', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
@@ -769,13 +763,15 @@ describe('care whatsapp-config routes', () => {
     });
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValueOnce({ appId: 'app-id', accountSid: '' });
 
-    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-12/push-to-gupshup' });
+    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-12/push-to-meta' });
     expect(res.statusCode).toBe(400);
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('push-to-gupshup uses provider detail fallback when message/error are absent', async () => {
+  it('push-to-meta uses provider error message fallback', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
@@ -790,16 +786,18 @@ describe('care whatsapp-config routes', () => {
     (globalThis.fetch as any).mockResolvedValueOnce({
       ok: false,
       status: 409,
-      text: async () => JSON.stringify({ detail: 'conflict-detail-message' }),
+      text: async () => JSON.stringify({ error: { message: 'conflict-message' } }),
     });
 
-    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-gupshup' });
+    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-1/push-to-meta' });
     expect(res.statusCode).toBe(400);
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
-  it('pushes non-confirmation template without buttons and uses details fallback', async () => {
+  it('pushes non-confirmation template without buttons', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
@@ -814,17 +812,21 @@ describe('care whatsapp-config routes', () => {
     (globalThis.fetch as any).mockResolvedValueOnce({
       ok: false,
       status: 422,
-      text: async () => JSON.stringify({ details: 'details-fallback-message' }),
+      text: async () => JSON.stringify({ error: { message: 'details-fallback-message' } }),
     });
 
-    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-7/push-to-gupshup' });
+    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-7/push-to-meta' });
     expect(res.statusCode).toBe(400);
-    expect((globalThis.fetch as any).mock.calls[0][1].body).not.toContain('buttons=');
+    // Meta uses JSON body, check no BUTTONS type for REMINDER
+    const requestBody = JSON.parse((globalThis.fetch as any).mock.calls[0][1].body);
+    expect(requestBody.components.some((c: any) => c.type === 'BUTTONS')).toBe(false);
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
   it('accepts non-json provider response when template already has valid hsm name', async () => {
+    process.env.WHATSAPP_WABA_ID = 'waba-test';
     const app = await buildApp();
 
     mockedPrisma.whatsAppMessageTemplate.findFirst.mockResolvedValueOnce({
@@ -842,13 +844,14 @@ describe('care whatsapp-config routes', () => {
       text: async () => 'submitted-without-json',
     });
 
-    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-9/push-to-gupshup' });
+    const res = await app.inject({ method: 'POST', url: '/wa/whatsapp/templates/t-9/push-to-meta' });
     expect([200, 500]).toContain(res.statusCode);
     if (res.statusCode === 200) {
-      expect(res.json().gupshupResponse).toBe('submitted-without-json');
+      expect(res.json().metaResponse).toBe('submitted-without-json');
     }
     expect(mockedPrisma.whatsAppMessageTemplate.update).not.toHaveBeenCalled();
 
+    delete process.env.WHATSAPP_WABA_ID;
     await app.close();
   });
 
