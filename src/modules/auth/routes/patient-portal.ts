@@ -1881,6 +1881,31 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     return { items, total: totalRaw };
   });
 
+  app.get('/patient-portal/me/report-layout', {
+    schema: {
+      summary: 'Get patient report layout configuration',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+    if (!patient.branchId) return reply.code(404).send({ error: 'Filial do paciente não encontrada' });
+
+    const config = await prisma.reportConfig.findFirst({
+      where: { branchId: patient.branchId },
+      select: { reportLayout: true },
+    });
+
+    return {
+      branchId: patient.branchId,
+      reportLayout: (config as any)?.reportLayout || null,
+    };
+  });
+
   app.post('/patient-portal/me/reports/:reportId/share-link', {
     schema: {
       summary: 'Generate secure share link for patient report',

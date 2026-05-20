@@ -385,7 +385,7 @@ export default async function reportRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const { branchId, userId, userName } = await getLoggedUser(request);
+    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const data = request.body as any;
@@ -489,7 +489,7 @@ export default async function reportRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const { branchId, userId, userName } = await getLoggedUser(request);
+    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
@@ -516,7 +516,19 @@ export default async function reportRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'birthDate must be YYYY-MM-DD' });
       }
 
-      const item = await prisma.report.update({ where: { id }, data: { ...data, branchId } });
+      const updateData: any = { ...data, branchId };
+      const signingDoctorName = String(doctorName || userName || '').trim() || null;
+      const isIssuerSigningNow = Boolean(data.issuerSignedAt) && !existing.issuerSignedAt;
+      const isReviewerSigningNow = Boolean(data.reviewerSignedAt) && !existing.reviewerSignedAt;
+
+      if (isIssuerSigningNow && !String(updateData.reportingDoctor || '').trim()) {
+        updateData.reportingDoctor = signingDoctorName || existing.reportingDoctor || null;
+      }
+      if (isReviewerSigningNow && !String(updateData.reviewingDoctor || '').trim()) {
+        updateData.reviewingDoctor = signingDoctorName || existing.reviewingDoctor || null;
+      }
+
+      const item = await prisma.report.update({ where: { id }, data: updateData });
 
       // Determine the most descriptive action label for meaningful status transitions
       let action = 'laudo_atualizado';
