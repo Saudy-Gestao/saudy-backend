@@ -45,20 +45,9 @@ export default async function reportRoutes(app: FastifyInstance) {
     }
   };
 
-  const reportAccessWhere = (id: string, branchId: string, doctorName?: string | null): any => ({
+  const reportAccessWhere = (id: string, branchId: string): any => ({
     id,
     branchId,
-    ...(doctorName
-      ? {
-          OR: [
-            { requestingDoctor: { equals: doctorName, mode: 'insensitive' } },
-            { reportingDoctor: { equals: doctorName, mode: 'insensitive' } },
-            { reviewingDoctor: { equals: doctorName, mode: 'insensitive' } },
-            { responsibleDoctor: { equals: doctorName, mode: 'insensitive' } },
-            { appointment: { doctorName: { equals: doctorName, mode: 'insensitive' } } },
-          ],
-        }
-      : {}),
   });
 
   app.addHook('onRequest', async (request, reply) => {
@@ -105,19 +94,6 @@ export default async function reportRoutes(app: FastifyInstance) {
         { requestingDoctor: { contains: search, mode: 'insensitive' } },
       ];
     }
-    if (context?.doctorName) {
-      where.AND = where.AND || [];
-      where.AND.push({
-        OR: [
-          { requestingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-          { reportingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-          { reviewingDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-          { responsibleDoctor: { equals: context.doctorName, mode: 'insensitive' } },
-          { appointment: { doctorName: { equals: context.doctorName, mode: 'insensitive' } } },
-        ],
-      });
-    }
-
     const [items, total] = await Promise.all([
       prisma.report.findMany({
         where,
@@ -149,7 +125,7 @@ export default async function reportRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
     const item = await prisma.report.findFirst({
-      where: reportAccessWhere(id, branchId, context?.doctorName),
+      where: reportAccessWhere(id, branchId),
       include: {
         appointment: { select: { id: true, patientName: true, patientCpf: true, specialty: true, date: true, time: true, doctorName: true, status: true } },
         worklistItem: { select: { id: true, dicomStudyUid: true, dicomUrl: true, dicomReceivedAt: true, accessionNumber: true } },
@@ -174,7 +150,7 @@ export default async function reportRoutes(app: FastifyInstance) {
 
     const { id } = request.params as any;
     const report = await prisma.report.findFirst({
-      where: reportAccessWhere(id, branchId, context?.doctorName),
+      where: reportAccessWhere(id, branchId),
       select: { id: true },
     });
     if (!report) return reply.code(404).send({ error: 'Report not found' });
@@ -216,12 +192,12 @@ export default async function reportRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
+    const { branchId, userId, userName, doctorName, doctorId } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
     const report = await prisma.report.findFirst({
-      where: reportAccessWhere(id, branchId, doctorName),
+      where: reportAccessWhere(id, branchId),
       select: { id: true, patientName: true, cpf: true, exam: true },
     });
     if (!report) return reply.code(404).send({ error: 'Report not found' });
@@ -305,12 +281,12 @@ export default async function reportRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
+    const { branchId, userId, userName, doctorName, doctorId } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id, temporaryStudyId } = request.params as any;
     const report = await prisma.report.findFirst({
-      where: reportAccessWhere(id, branchId, doctorName),
+      where: reportAccessWhere(id, branchId),
       select: { id: true },
     });
     if (!report) return reply.code(404).send({ error: 'Report not found' });
@@ -367,6 +343,8 @@ export default async function reportRoutes(app: FastifyInstance) {
           requestingDoctor: { type: 'string' },
           reportingDoctor: { type: 'string' },
           reviewingDoctor: { type: 'string' },
+          reportingDoctorId: { type: 'string' },
+          reviewingDoctorId: { type: 'string' },
           description: { type: 'string' },
           conclusion: { type: 'string' },
           notes: { type: 'string' },
@@ -377,15 +355,20 @@ export default async function reportRoutes(app: FastifyInstance) {
           observation: { type: 'string' },
           issuerSignedAt: { type: 'string' },
           reviewerSignedAt: { type: 'string' },
+          signIssuer: { type: 'boolean' },
+          signReviewer: { type: 'boolean' },
+          finalizedAt: { type: 'string' },
+          finalizedDoctorId: { type: 'string' },
         },
       },
       response: {
         201: { type: 'object' },
         400: { type: 'object', additionalProperties: true },
+        403: { type: 'object', additionalProperties: true },
       },
     },
   }, async (request, reply) => {
-    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
+    const { branchId, userId, userName, doctorName, doctorId } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const data = request.body as any;
@@ -409,8 +392,19 @@ export default async function reportRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'birthDate must be YYYY-MM-DD' });
     }
 
+    const shouldAttributeMedicalAuthor = data.status === 'laudado' || data.status === 'revisado' || data.status === 'finalizado';
+    if (shouldAttributeMedicalAuthor && !doctorId) {
+      return reply.code(403).send({ error: 'Usuário sem vínculo com médico para executar esta ação' });
+    }
+    if (!data.reportingDoctorId && doctorId && shouldAttributeMedicalAuthor) {
+      data.reportingDoctorId = doctorId;
+    }
+    if (!data.reportingDoctor && doctorName && shouldAttributeMedicalAuthor) {
+      data.reportingDoctor = doctorName;
+    }
+
     try {
-      const item = await prisma.report.create({ data: {
+      const createData: any = {
         branchId,
         worklistItemId: data.worklistItemId || null,
         appointmentId: data.appointmentId || null,
@@ -420,6 +414,8 @@ export default async function reportRoutes(app: FastifyInstance) {
         requestingDoctor: data.requestingDoctor || null,
         reportingDoctor: data.reportingDoctor || null,
         reviewingDoctor: data.reviewingDoctor || null,
+        reportingDoctorId: data.reportingDoctorId || null,
+        reviewingDoctorId: data.reviewingDoctorId || null,
         description: data.description || null,
         conclusion: data.conclusion || null,
         notes: data.notes || null,
@@ -428,9 +424,10 @@ export default async function reportRoutes(app: FastifyInstance) {
         scheduledFor: data.scheduledFor || null,
         responsibleDoctor: data.responsibleDoctor || null,
         observation: data.observation || null,
-        issuerSignedAt: data.issuerSignedAt || null,
-        reviewerSignedAt: data.reviewerSignedAt || null,
-      } });
+        issuerSignedAt: data.signIssuer ? new Date() : (data.issuerSignedAt || null),
+        reviewerSignedAt: data.signReviewer ? new Date() : (data.reviewerSignedAt || null),
+      };
+      const item = await prisma.report.create({ data: createData });
 
       await createAuditLog({
         branchId,
@@ -470,6 +467,8 @@ export default async function reportRoutes(app: FastifyInstance) {
           requestingDoctor: { type: 'string' },
           reportingDoctor: { type: 'string' },
           reviewingDoctor: { type: 'string' },
+          reportingDoctorId: { type: 'string' },
+          reviewingDoctorId: { type: 'string' },
           description: { type: 'string' },
           conclusion: { type: 'string' },
           notes: { type: 'string' },
@@ -480,16 +479,21 @@ export default async function reportRoutes(app: FastifyInstance) {
           observation: { type: 'string' },
           issuerSignedAt: { type: 'string' },
           reviewerSignedAt: { type: 'string' },
+          signIssuer: { type: 'boolean' },
+          signReviewer: { type: 'boolean' },
+          finalizedAt: { type: 'string' },
+          finalizedDoctorId: { type: 'string' },
         },
       },
       response: {
         200: { type: 'object' },
         400: { type: 'object', additionalProperties: true },
+        403: { type: 'object', additionalProperties: true },
         404: { type: 'object', additionalProperties: true },
       },
     },
   }, async (request, reply) => {
-    const { branchId, userId, userName, doctorName } = await getLoggedUser(request);
+    const { branchId, userId, userName, doctorName, doctorId } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
@@ -517,15 +521,107 @@ export default async function reportRoutes(app: FastifyInstance) {
       }
 
       const updateData: any = { ...data, branchId };
-      const signingDoctorName = String(doctorName || userName || '').trim() || null;
-      const isIssuerSigningNow = Boolean(data.issuerSignedAt) && !existing.issuerSignedAt;
-      const isReviewerSigningNow = Boolean(data.reviewerSignedAt) && !existing.reviewerSignedAt;
+      const signIssuerRequested = data.signIssuer === true;
+      const signReviewerRequested = data.signReviewer === true;
+      const hasDescriptionChange = data.description !== undefined && data.description !== existing.description;
+      const shouldResignReviewer = signReviewerRequested && (hasDescriptionChange || !existing.reviewerSignedAt);
+      if (data.issuerSignedAt !== undefined) updateData.issuerSignedAt = data.issuerSignedAt || null;
+      if (data.reviewerSignedAt !== undefined) updateData.reviewerSignedAt = data.reviewerSignedAt || null;
+      if (signIssuerRequested && !existing.issuerSignedAt) {
+        updateData.issuerSignedAt = new Date();
+      }
+      if (shouldResignReviewer) {
+        updateData.reviewerSignedAt = new Date();
+      }
+      delete updateData.signIssuer;
+      delete updateData.signReviewer;
 
-      if (isIssuerSigningNow && !String(updateData.reportingDoctor || '').trim()) {
+      // If report content changes after review signature, reviewer must sign again.
+      // Keep issuer signature untouched per current business rule.
+      if (hasDescriptionChange && existing.reviewerSignedAt && !signReviewerRequested) {
+        updateData.reviewerSignedAt = null;
+        updateData.reviewingDoctorId = null;
+        updateData.reviewingDoctor = null;
+      }
+      const signingDoctorName = String(doctorName || '').trim() || null;
+      const signingDoctorId = String(doctorId || '').trim() || null;
+      const isIssuerSigningNow = Boolean(updateData.issuerSignedAt) && !existing.issuerSignedAt;
+      const isReviewerSigningNow = Boolean(updateData.reviewerSignedAt) && !existing.reviewerSignedAt;
+
+      const isMedicalAttributionAction = Boolean(
+        isIssuerSigningNow
+        || isReviewerSigningNow
+        || data.status === 'laudado'
+        || data.status === 'revisado'
+        || data.status === 'finalizado',
+      );
+      if (isMedicalAttributionAction && !signingDoctorId) {
+        return reply.code(403).send({ error: 'Usuário sem vínculo com médico para executar esta ação' });
+      } else if (existing.status === 'finalizado' && data.status && data.status !== 'finalizado') {
+        // Current-state semantics: unfinalizing clears finalization markers.
+        if (data.finalizedAt === undefined) updateData.finalizedAt = null;
+        if (data.finalizedDoctorId === undefined) updateData.finalizedDoctorId = null;
+      }
+
+      // If reviewer signs first on a report without issuer signature, register both signatures.
+      if (isReviewerSigningNow && !existing.issuerSignedAt && !updateData.issuerSignedAt) {
+        updateData.issuerSignedAt = updateData.reviewerSignedAt;
+      }
+
+      if (isIssuerSigningNow) {
+        updateData.reportingDoctorId = signingDoctorId || (existing as any).reportingDoctorId || null;
         updateData.reportingDoctor = signingDoctorName || existing.reportingDoctor || null;
       }
-      if (isReviewerSigningNow && !String(updateData.reviewingDoctor || '').trim()) {
+      if (isReviewerSigningNow || shouldResignReviewer) {
+        updateData.reviewingDoctorId = signingDoctorId || (existing as any).reviewingDoctorId || null;
         updateData.reviewingDoctor = signingDoctorName || existing.reviewingDoctor || null;
+      }
+      if (updateData.issuerSignedAt && !String(updateData.reportingDoctorId || '').trim()) {
+        updateData.reportingDoctorId = (existing as any).reportingDoctorId || signingDoctorId || null;
+      }
+      if (updateData.issuerSignedAt && !String(updateData.reportingDoctor || '').trim()) {
+        updateData.reportingDoctor = existing.reportingDoctor || signingDoctorName || null;
+      }
+      // First meaningful save should claim the report author even without signature.
+      if ((data.description !== undefined || data.status === 'laudado') && !String(updateData.reportingDoctor || '').trim()) {
+        updateData.reportingDoctor = existing.reportingDoctor || signingDoctorName || null;
+      }
+      if ((data.description !== undefined || data.status === 'laudado') && !String(updateData.reportingDoctorId || '').trim()) {
+        updateData.reportingDoctorId = (existing as any).reportingDoctorId || signingDoctorId || null;
+      }
+      if (data.status === 'revisado' && !String(updateData.reviewingDoctorId || '').trim()) {
+        updateData.reviewingDoctorId = (existing as any).reviewingDoctorId || signingDoctorId || null;
+      }
+      if (data.status === 'revisado' && !String(updateData.reviewingDoctor || '').trim()) {
+        updateData.reviewingDoctor = existing.reviewingDoctor || signingDoctorName || null;
+      }
+
+      if (data.status === 'finalizado') {
+        const config = await prisma.reportConfig.findFirst({
+          where: { branchId },
+          select: { requiresReviewer: true },
+        });
+        const requiresReviewer = config?.requiresReviewer ?? true;
+        const nextIssuerSignedAt = updateData.issuerSignedAt ?? existing.issuerSignedAt;
+        const nextReviewerSignedAt = updateData.reviewerSignedAt ?? existing.reviewerSignedAt;
+
+        if (!nextIssuerSignedAt) {
+          return reply.code(400).send({ error: 'issuerSignedAt is required to finalize report' });
+        }
+        if (requiresReviewer && !nextReviewerSignedAt) {
+          return reply.code(400).send({ error: 'reviewerSignedAt is required to finalize report for this branch' });
+        }
+
+        if (!updateData.finalizedAt && !existing.finalizedAt) {
+          updateData.finalizedAt = new Date();
+        } else if (!updateData.finalizedAt) {
+          updateData.finalizedAt = existing.finalizedAt;
+        }
+        if (!updateData.finalizedDoctorId && !(existing as any).finalizedDoctorId) {
+          updateData.finalizedDoctorId = signingDoctorId;
+        } else if (!updateData.finalizedDoctorId) {
+          updateData.finalizedDoctorId = (existing as any).finalizedDoctorId;
+        }
       }
 
       const item = await prisma.report.update({ where: { id }, data: updateData });
@@ -542,7 +638,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         }
       } else if (data.issuerSignedAt && !existing.issuerSignedAt) {
         action = 'laudo_assinado_emissor';
-      } else if (data.reviewerSignedAt && !existing.reviewerSignedAt) {
+      } else if ((data.reviewerSignedAt || signReviewerRequested) && !existing.reviewerSignedAt) {
         action = 'laudo_assinado_revisor';
       } else if (data.description !== undefined) {
         action = 'laudo_conteudo_alterado';
@@ -553,7 +649,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         auditDetails.statusAnterior = existing.status;
         auditDetails.statusNovo = data.status;
       }
-      if (data.description !== undefined && data.description !== existing.description) {
+      if (hasDescriptionChange) {
         auditDetails.conteudoAnterior = existing.description || '';
         auditDetails.conteudoNovo = data.description || '';
       }
@@ -563,8 +659,11 @@ export default async function reportRoutes(app: FastifyInstance) {
       if (data.reviewerSignedAt !== undefined) {
         auditDetails.assinaturaRevisor = data.reviewerSignedAt;
       }
-      auditDetails.medicoEmissor = item.issuerSignedAt ? (item.reportingDoctor || userName) : null;
+      auditDetails.medicoEmissor = item.issuerSignedAt ? (item.reportingDoctor || null) : null;
       auditDetails.medicoRevisor = item.reviewerSignedAt ? (item.reviewingDoctor || null) : null;
+      auditDetails.medicoEmissorId = (item as any).reportingDoctorId || null;
+      auditDetails.medicoRevisorId = (item as any).reviewingDoctorId || null;
+      auditDetails.medicoFinalizadorId = (item as any).finalizedDoctorId || null;
 
       await createAuditLog({
         branchId,
