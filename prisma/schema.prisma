@@ -1213,6 +1213,17 @@ model Report {
     issuerSignedAt    DateTime?
     reviewerSignedAt  DateTime?
     finalizedAt       DateTime?
+    publishedAt       DateTime?
+    publishedVersion  Int                  @default(0)
+    publishedDescription String?
+    publishedConclusion  String?
+    publishedNotes       String?
+    publishedExam        String?
+    publishedRequestingDoctor String?
+    publishedReportingDoctor  String?
+    publishedReviewingDoctor  String?
+    publishedIssuerSignedAt   DateTime?
+    publishedReviewerSignedAt DateTime?
     addendums         ReportAddendum[]
     temporaryDicomStudies TemporaryDicomStudy[]
     createdAt         DateTime            @default(now())

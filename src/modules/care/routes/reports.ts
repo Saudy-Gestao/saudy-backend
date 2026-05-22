@@ -4,6 +4,50 @@ import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import { deleteOrthancStudy } from '../../dicom/orthanc';
 import { hasPermanentStudyReference, uploadTemporaryPriorStudy } from '../../dicom/temporary-prior-studies';
+import { generatePatientReportPdfBuffer } from '../../auth/lib/patient-report-pdf';
+
+const FINAL_REPORT_STATUSES = new Set([
+  'FINALIZADO',
+  'FINALIZADO_COM_REVISAO',
+  'LIBERADO',
+  'ASSINADO',
+  'CONCLUIDO',
+  'FINAL',
+  'APROVADO',
+]);
+
+function normalizeReportStatus(value?: string | null) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_');
+}
+
+function resolvePatientVisibleReport(report: any) {
+  const hasPublishedSnapshot = Boolean(report?.publishedAt);
+  const normalizedStatus = normalizeReportStatus(report?.status);
+  const isCurrentlyFinalized = FINAL_REPORT_STATUSES.has(normalizedStatus);
+  const isUnderReview = hasPublishedSnapshot && !isCurrentlyFinalized;
+
+  return {
+    ...report,
+    isUnderReview,
+    patientWarning: isUnderReview
+      ? 'Este laudo está em revisão pela clínica. Você está visualizando a última versão publicada.'
+      : null,
+    description: (hasPublishedSnapshot ? report?.publishedDescription : report?.description) || null,
+    conclusion: (hasPublishedSnapshot ? report?.publishedConclusion : report?.conclusion) || null,
+    notes: (hasPublishedSnapshot ? report?.publishedNotes : report?.notes) || null,
+    exam: (hasPublishedSnapshot ? report?.publishedExam : report?.exam) || null,
+    requestingDoctor: (hasPublishedSnapshot ? report?.publishedRequestingDoctor : report?.requestingDoctor) || null,
+    reportingDoctor: (hasPublishedSnapshot ? report?.publishedReportingDoctor : report?.reportingDoctor) || null,
+    reviewingDoctor: (hasPublishedSnapshot ? report?.publishedReviewingDoctor : report?.reviewingDoctor) || null,
+    issuerSignedAt: (hasPublishedSnapshot ? report?.publishedIssuerSignedAt : report?.issuerSignedAt) || null,
+    reviewerSignedAt: (hasPublishedSnapshot ? report?.publishedReviewerSignedAt : report?.reviewerSignedAt) || null,
+  };
+}
 
 export default async function reportRoutes(app: FastifyInstance) {
   const getLoggedUser = async (request: any) => {
@@ -135,6 +179,172 @@ export default async function reportRoutes(app: FastifyInstance) {
     });
     if (!item) return reply.code(404).send({ error: 'Report not found' });
     return item;
+  });
+
+  app.get('/:id/patient-facing-pdf', {
+    schema: {
+      summary: 'Render patient-facing report PDF (same source used by patient portal)',
+      tags: ['Reports'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    },
+  }, async (request, reply) => {
+    const { branchId } = await getLoggedUser(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const report = await prisma.report.findFirst({
+      where: reportAccessWhere(id, branchId),
+      include: {
+        appointment: {
+          select: {
+            id: true,
+            date: true,
+            time: true,
+            specialty: true,
+            doctorName: true,
+          },
+        },
+      },
+    });
+    if (!report) return reply.code(404).send({ error: 'Report not found' });
+
+    const visibleReport = resolvePatientVisibleReport(report);
+    const config = await prisma.reportConfig.findFirst({
+      where: { branchId },
+      select: { reportLayout: true, requiresReviewer: true },
+    });
+
+    const pdf = await generatePatientReportPdfBuffer({
+      reportId: String(report.id),
+      reportContentHtml: String(visibleReport?.description || '').trim() || `<p>${String(visibleReport?.conclusion || '-')}</p>`,
+      reportStatus: visibleReport?.status || null,
+      reportUnderReview: Boolean(visibleReport?.isUnderReview),
+      publishedVersion: visibleReport?.publishedVersion ?? null,
+      patientWarning: visibleReport?.patientWarning || null,
+      patient: {
+        name: report?.patientName || report?.appointment?.patientName || '-',
+        cpf: report?.cpf || report?.appointment?.patientCpf || null,
+      },
+      examName: visibleReport?.exam || report?.appointment?.specialty || '-',
+      appointment: {
+        date: report?.appointment?.date || null,
+        time: report?.appointment?.time || null,
+      },
+      doctors: {
+        requestingDoctor: visibleReport?.requestingDoctor || null,
+        reportingDoctor: visibleReport?.reportingDoctor || null,
+        reviewingDoctor: visibleReport?.reviewingDoctor || null,
+      },
+      signatures: {
+        issuerSignedAt: visibleReport?.issuerSignedAt || null,
+        reviewerSignedAt: visibleReport?.reviewerSignedAt || null,
+      },
+      layout: (config as any)?.reportLayout || null,
+      requiresReviewer: (config as any)?.requiresReviewer !== false,
+      hideUnderReviewNotice: true,
+      previewRibbonText: 'Prévia médica',
+    });
+
+    reply.header('Content-Type', 'application/pdf');
+    reply.header('Content-Disposition', `inline; filename="laudo-${report.id}.pdf"`);
+    reply.header('Cache-Control', 'no-store');
+    reply.header('Content-Length', String(pdf.length));
+    return reply.send(pdf);
+  });
+
+  app.post('/:id/patient-facing-pdf-preview', {
+    schema: {
+      summary: 'Render doctor preview PDF using current editor content',
+      tags: ['Reports'],
+      params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      body: {
+        type: 'object',
+        properties: {
+          contentHtml: { type: 'string' },
+          patientName: { type: 'string' },
+          patientCpf: { type: 'string' },
+          examName: { type: 'string' },
+          appointmentDate: { type: 'string' },
+          appointmentTime: { type: 'string' },
+          requestingDoctor: { type: 'string' },
+          reportingDoctor: { type: 'string' },
+          reviewingDoctor: { type: 'string' },
+          issuerSignedAt: { type: 'string' },
+          reviewerSignedAt: { type: 'string' },
+        },
+      },
+    },
+  }, async (request, reply) => {
+    const { branchId } = await getLoggedUser(request);
+    if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
+
+    const { id } = request.params as any;
+    const body = (request.body || {}) as any;
+
+    const report = await prisma.report.findFirst({
+      where: reportAccessWhere(id, branchId),
+      include: {
+        appointment: {
+          select: {
+            id: true,
+            date: true,
+            time: true,
+            specialty: true,
+            doctorName: true,
+            patientName: true,
+            patientCpf: true,
+          },
+        },
+      },
+    });
+    if (!report) return reply.code(404).send({ error: 'Report not found' });
+
+    const visibleReport = resolvePatientVisibleReport(report);
+    const config = await prisma.reportConfig.findFirst({
+      where: { branchId },
+      select: { reportLayout: true, requiresReviewer: true },
+    });
+    const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(body, key);
+    const pick = (key: string, fallback: any) => (hasOwn(key) ? body[key] : fallback);
+
+    const pdf = await generatePatientReportPdfBuffer({
+      reportId: String(report.id),
+      reportContentHtml: String(pick('contentHtml', visibleReport?.description) || '').trim()
+        || String(visibleReport?.description || '').trim()
+        || `<p>${String(visibleReport?.conclusion || '-')}</p>`,
+      reportStatus: visibleReport?.status || null,
+      reportUnderReview: Boolean(visibleReport?.isUnderReview),
+      publishedVersion: visibleReport?.publishedVersion ?? null,
+      patientWarning: visibleReport?.patientWarning || null,
+      patient: {
+        name: pick('patientName', report?.patientName || report?.appointment?.patientName || '-'),
+        cpf: pick('patientCpf', report?.cpf || report?.appointment?.patientCpf || null),
+      },
+      examName: pick('examName', visibleReport?.exam || report?.appointment?.specialty || '-'),
+      appointment: {
+        date: pick('appointmentDate', report?.appointment?.date || null),
+        time: pick('appointmentTime', report?.appointment?.time || null),
+      },
+      doctors: {
+        requestingDoctor: pick('requestingDoctor', visibleReport?.requestingDoctor || null),
+        reportingDoctor: pick('reportingDoctor', visibleReport?.reportingDoctor || null),
+        reviewingDoctor: pick('reviewingDoctor', visibleReport?.reviewingDoctor || null),
+      },
+      signatures: {
+        issuerSignedAt: pick('issuerSignedAt', visibleReport?.issuerSignedAt || null),
+        reviewerSignedAt: pick('reviewerSignedAt', visibleReport?.reviewerSignedAt || null),
+      },
+      layout: (config as any)?.reportLayout || null,
+      requiresReviewer: (config as any)?.requiresReviewer !== false,
+      hideUnderReviewNotice: true,
+      previewRibbonText: 'Prévia médica',
+    });
+
+    reply.header('Content-Type', 'application/pdf');
+    reply.header('Content-Disposition', `inline; filename="laudo-preview-${report.id}.pdf"`);
+    reply.header('Cache-Control', 'no-store');
+    reply.header('Content-Length', String(pdf.length));
+    return reply.send(pdf);
   });
 
   app.get('/:id/temporary-prior-studies', {
@@ -622,6 +832,19 @@ export default async function reportRoutes(app: FastifyInstance) {
         } else if (!updateData.finalizedDoctorId) {
           updateData.finalizedDoctorId = (existing as any).finalizedDoctorId;
         }
+
+        // Persist the exact published snapshot shown to patients.
+        updateData.publishedAt = new Date();
+        updateData.publishedVersion = Number((existing as any).publishedVersion || 0) + 1;
+        updateData.publishedDescription = updateData.description ?? existing.description ?? null;
+        updateData.publishedConclusion = updateData.conclusion ?? existing.conclusion ?? null;
+        updateData.publishedNotes = updateData.notes ?? existing.notes ?? null;
+        updateData.publishedExam = updateData.exam ?? existing.exam ?? null;
+        updateData.publishedRequestingDoctor = updateData.requestingDoctor ?? existing.requestingDoctor ?? null;
+        updateData.publishedReportingDoctor = updateData.reportingDoctor ?? existing.reportingDoctor ?? null;
+        updateData.publishedReviewingDoctor = updateData.reviewingDoctor ?? existing.reviewingDoctor ?? null;
+        updateData.publishedIssuerSignedAt = nextIssuerSignedAt ?? null;
+        updateData.publishedReviewerSignedAt = nextReviewerSignedAt ?? null;
       }
 
       const item = await prisma.report.update({ where: { id }, data: updateData });
