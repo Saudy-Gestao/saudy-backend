@@ -76,6 +76,17 @@ const formatDateTimeLabel = (date?: string | null, time?: string | null) => {
   return rawTime ? `${rawDate} ${rawTime}` : rawDate;
 };
 
+const SAO_PAULO_TIME_ZONE = 'America/Sao_Paulo';
+const ptBrDateTimeFormatter = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: SAO_PAULO_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
 type GeneratePatientReportPdfParams = {
   reportId: string;
   reportContentHtml: string;
@@ -105,13 +116,20 @@ type GeneratePatientReportPdfParams = {
   requiresReviewer?: boolean;
   hideUnderReviewNotice?: boolean;
   previewRibbonText?: string | null;
+  addendums?: Array<{
+    id: string;
+    content: string;
+    finalizedAt?: Date | string | null;
+    issuerSignedAt?: Date | string | null;
+    issuerDoctorName?: string | null;
+  }>;
 };
 
 const toDateLabel = (value?: Date | string | null) => {
   if (!value) return 'Pendente';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toISOString();
+  return ptBrDateTimeFormatter.format(date);
 };
 
 function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string {
@@ -124,6 +142,30 @@ function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string
   const issuerSigned = issuerSignedAtLabel !== 'Pendente';
   const reviewerSigned = reviewerSignedAtLabel !== 'Pendente';
   const requiresReviewer = params.requiresReviewer !== false;
+  const addendums = Array.isArray(params.addendums) ? params.addendums : [];
+
+  const headerHtml = `<div class="header"><div class="logo-wrap">${layout.showLogo && logoSrc ? `<img class="logo" src="${escapeHtml(logoSrc)}" alt="Logo" />` : ''}</div><div><div class="clinic">${escapeHtml(layout.clinicName)}</div><h1>${escapeHtml(layout.title || 'Laudo Medico')}</h1>${layout.subtitle ? `<div class="subtitle">${escapeHtml(layout.subtitle)}</div>` : ''}${layout.headerText ? `<div class="header-text">${escapeHtml(layout.headerText)}</div>` : ''}</div></div>`;
+  const metaHtml = layout.showPatientInfo ? `<div class="meta"><div class="meta-item"><b>Paciente:</b> ${escapeHtml(params.patient.name || '-')}</div><div class="meta-item"><b>Exame:</b> ${escapeHtml(params.examName || '-')}</div><div class="meta-item"><b>CPF:</b> ${escapeHtml(params.patient.cpf || 'Nao informado')}</div><div class="meta-item"><b>Data/Hora:</b> ${escapeHtml(formatDateTimeLabel(params.appointment?.date || null, params.appointment?.time || null))}</div></div>` : '';
+  const noticeHtml = params.reportUnderReview && !params.hideUnderReviewNotice
+    ? `<div class="notice"><div class="notice-title">Laudo em revisao pela clinica</div><div class="notice-text">${escapeHtml(params.patientWarning || 'Voce esta visualizando a ultima versao publicada enquanto uma atualizacao esta em andamento.')}</div>${params.publishedVersion ? `<div class="notice-version">${escapeHtml(`Versao publicada: v${params.publishedVersion}`)}</div>` : ''}</div>`
+    : '';
+  const reportSignaturesHtml = layout.showSignatures
+    ? `<div class="signatures"><div class="sign-card"><div class="sign-title">Emissor</div><div class="sign-person">${escapeHtml(params.doctors?.reportingDoctor || 'Emissor nao identificado')}</div><div class="sign-status"><span class="sign-dot ${issuerSigned ? 'sign-dot-ok' : 'sign-dot-pending'}">${issuerSigned ? '&#10003;' : '...'}</span><span>${issuerSigned ? 'Assinado' : 'Pendente'}</span></div><div class="sign-time">${escapeHtml(issuerSignedAtLabel)}</div></div><div class="sign-card"><div class="sign-title">Revisor</div><div class="sign-person">${escapeHtml(params.doctors?.reviewingDoctor || (requiresReviewer ? 'Revisor nao identificado' : 'Revisor nao obrigatorio'))}</div><div class="sign-status"><span class="sign-dot ${reviewerSigned ? 'sign-dot-ok' : 'sign-dot-pending'}">${reviewerSigned ? '&#10003;' : '...'}</span><span>${requiresReviewer ? (reviewerSigned ? 'Assinado' : 'Pendente') : 'Nao obrigatorio'}</span></div><div class="sign-time">${escapeHtml(reviewerSignedAtLabel === 'Pendente' && !requiresReviewer ? 'Nao obrigatorio' : reviewerSignedAtLabel)}</div></div></div>`
+    : '';
+  const footerHtml = `<div class="footer">${footer ? `<div class="footer-extra">${escapeHtml(footer)}</div>` : ''}</div>`;
+  const paperHeightMm = layout.paperSize === 'Letter'
+    ? (layout.orientation === 'landscape' ? 216 : 279)
+    : (layout.orientation === 'landscape' ? 210 : 297);
+  const innerHeightMm = Math.max(80, paperHeightMm - layout.marginTopMm - layout.marginBottomMm);
+
+  const mainSheetHtml = `<div class="sheet">${params.previewRibbonText ? `<div class="preview-ribbon">${escapeHtml(params.previewRibbonText)}</div>` : ''}${headerHtml}${metaHtml}${noticeHtml}<div class="content">${contentHtml}</div><div class="doc-end">${reportSignaturesHtml}${footerHtml}</div></div>`;
+
+  const addendumSheetsHtml = addendums.map((addendum, index) => {
+    const finalizedAtLabel = toDateLabel(addendum.finalizedAt || null);
+    const addendumIssuerSignedAt = toDateLabel(addendum.issuerSignedAt || null);
+    const addendumSignatureHtml = `<div class="signatures"><div class="sign-card"><div class="sign-title">Emissor do adendo</div><div class="sign-person">${escapeHtml(addendum.issuerDoctorName || 'Nao identificado')}</div><div class="sign-status"><span class="sign-dot ${addendumIssuerSignedAt !== 'Pendente' ? 'sign-dot-ok' : 'sign-dot-pending'}">${addendumIssuerSignedAt !== 'Pendente' ? '&#10003;' : '...'}</span><span>${addendumIssuerSignedAt !== 'Pendente' ? 'Assinado' : 'Pendente'}</span></div><div class="sign-time">${escapeHtml(addendumIssuerSignedAt)}</div></div><div class="sign-card"><div class="sign-title">Finalização do adendo</div><div class="sign-person">Adendo ${index + 1}</div><div class="sign-time">${escapeHtml(finalizedAtLabel)}</div></div></div>`;
+    return `<div class="sheet">${params.previewRibbonText ? `<div class="preview-ribbon">${escapeHtml(params.previewRibbonText)}</div>` : ''}${headerHtml}${metaHtml}<div class="content"><h2>Adendo ${index + 1}</h2>${String(addendum.content || '').trim() || '<p>-</p>'}</div><div class="doc-end">${addendumSignatureHtml}${footerHtml}</div></div>`;
+  }).join('');
 
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -131,7 +173,8 @@ function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string
   <style>
     html, body { margin: 0; padding: 0; background: #ffffff; color: #0f172a; }
     body { font-family: ${layout.fontFamily}; font-size: ${layout.fontSizePx}px; line-height: 1.42; }
-    .sheet { width: auto; min-height: auto; box-sizing: border-box; margin: 0 auto; padding: ${layout.marginTopMm}mm ${layout.marginRightMm}mm ${layout.marginBottomMm}mm ${layout.marginLeftMm}mm; background: #fff; }
+    .sheet { width: auto; min-height: ${innerHeightMm}mm; box-sizing: border-box; margin: 0 auto; padding: ${layout.marginTopMm}mm ${layout.marginRightMm}mm ${layout.marginBottomMm}mm ${layout.marginLeftMm}mm; background: #fff; display: flex; flex-direction: column; }
+    .sheet + .sheet { break-before: page; page-break-before: always; }
     .header { border-bottom: 2px solid ${layout.primaryColor || '#0f172a'}; padding: 4px 0 14px; margin-bottom: 16px; display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; }
     .logo-wrap { width: 164px; height: 96px; display: flex; align-items: center; justify-content: center; border: 1px solid #d6e0ee; border-radius: 12px; background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%); box-shadow: inset 0 0 0 1px #eef4fb; padding: 6px; box-sizing: border-box; }
     .logo { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; }
@@ -148,6 +191,7 @@ function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string
     .content p { margin: 0 0 8px; }
     .content ul, .content ol { margin: 4px 0 10px 22px; }
     .content li { margin: 2px 0; }
+    .doc-end { margin-top: auto; }
     .notice { margin-bottom: 14px; border: 1px solid #f59e0b; background: #fffbeb; color: #7c2d12; border-radius: 8px; padding: 10px 12px; }
     .notice-title { font-weight: 800; font-size: 12px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
     .notice-text { font-size: 12px; line-height: 1.35; }
@@ -164,16 +208,8 @@ function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string
     .footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #475569; }
     .footer-extra { margin-top: 2px; font-size: 11px; color: #475569; }
     .preview-ribbon { position: fixed; left: -44px; top: 52%; transform: rotate(-90deg); background: #0f4c81; color: #ffffff; border-radius: 8px 8px 0 0; padding: 8px 16px; font-weight: 800; letter-spacing: 0.08em; font-size: 11px; text-transform: uppercase; z-index: 20; }
-    @media print { @page { size: ${layout.paperSize} ${layout.orientation}; margin: 0; } html, body { background: #fff !important; color: #111 !important; } .sheet { width: auto; min-height: auto; margin: 0; border: none; border-radius: 0; background: #fff !important; } h1, .meta, .signatures, .footer, .subtitle, .header-text { color: #111 !important; } }
-  </style></head><body><div class="sheet">
-    ${params.previewRibbonText ? `<div class="preview-ribbon">${escapeHtml(params.previewRibbonText)}</div>` : ''}
-    <div class="header"><div class="logo-wrap">${layout.showLogo && logoSrc ? `<img class="logo" src="${escapeHtml(logoSrc)}" alt="Logo" />` : ''}</div><div><div class="clinic">${escapeHtml(layout.clinicName)}</div><h1>${escapeHtml(layout.title || 'Laudo Médico')}</h1>${layout.subtitle ? `<div class="subtitle">${escapeHtml(layout.subtitle)}</div>` : ''}${layout.headerText ? `<div class="header-text">${escapeHtml(layout.headerText)}</div>` : ''}</div></div>
-    ${layout.showPatientInfo ? `<div class="meta"><div class="meta-item"><b>Paciente:</b> ${escapeHtml(params.patient.name || '-')}</div><div class="meta-item"><b>Exame:</b> ${escapeHtml(params.examName || '-')}</div><div class="meta-item"><b>CPF:</b> ${escapeHtml(params.patient.cpf || 'Não informado')}</div><div class="meta-item"><b>Data/Hora:</b> ${escapeHtml(formatDateTimeLabel(params.appointment?.date || null, params.appointment?.time || null))}</div></div>` : ''}
-    ${params.reportUnderReview && !params.hideUnderReviewNotice ? `<div class="notice"><div class="notice-title">Laudo em revisão pela clínica</div><div class="notice-text">${escapeHtml(params.patientWarning || 'Você está visualizando a última versão publicada enquanto uma atualização está em andamento.')}</div>${params.publishedVersion ? `<div class="notice-version">${escapeHtml(`Versão publicada: v${params.publishedVersion}`)}</div>` : ''}</div>` : ''}
-    <div class="content">${contentHtml}</div>
-    ${layout.showSignatures ? `<div class="signatures"><div class="sign-card"><div class="sign-title">Emissor</div><div class="sign-person">${escapeHtml(params.doctors?.reportingDoctor || 'Emissor não identificado')}</div><div class="sign-status"><span class="sign-dot ${issuerSigned ? 'sign-dot-ok' : 'sign-dot-pending'}">${issuerSigned ? '&#10003;' : '...'}</span><span>${issuerSigned ? 'Assinado' : 'Pendente'}</span></div><div class="sign-time">${escapeHtml(issuerSignedAtLabel)}</div></div><div class="sign-card"><div class="sign-title">Revisor</div><div class="sign-person">${escapeHtml(params.doctors?.reviewingDoctor || (requiresReviewer ? 'Revisor não identificado' : 'Revisor não obrigatório'))}</div><div class="sign-status"><span class="sign-dot ${reviewerSigned ? 'sign-dot-ok' : 'sign-dot-pending'}">${reviewerSigned ? '&#10003;' : '...'}</span><span>${requiresReviewer ? (reviewerSigned ? 'Assinado' : 'Pendente') : 'Não obrigatório'}</span></div><div class="sign-time">${escapeHtml(reviewerSignedAtLabel === 'Pendente' && !requiresReviewer ? 'Não obrigatório' : reviewerSignedAtLabel)}</div></div></div>` : ''}
-    <div class="footer">${footer ? `<div class="footer-extra">${escapeHtml(footer)}</div>` : ''}</div>
-  </div></body></html>`;
+    @media print { @page { size: ${layout.paperSize} ${layout.orientation}; margin: 0; } html, body { background: #fff !important; color: #111 !important; } .sheet { width: auto; min-height: ${innerHeightMm}mm; margin: 0; border: none; border-radius: 0; background: #fff !important; display: flex; flex-direction: column; } h1, .meta, .signatures, .footer, .subtitle, .header-text { color: #111 !important; } }
+  </style></head><body>${mainSheetHtml}${addendumSheetsHtml}</body></html>`;
 }
 
 export async function generatePatientReportPdfBuffer(params: GeneratePatientReportPdfParams): Promise<Buffer> {

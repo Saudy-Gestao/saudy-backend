@@ -26,26 +26,29 @@ function normalizeReportStatus(value?: string | null) {
 }
 
 function resolvePatientVisibleReport(report: any) {
-  const hasPublishedSnapshot = Boolean(report?.publishedAt);
+  const latestPublication = Array.isArray(report?.publications) ? report.publications[0] : null;
+  const hasPublishedSnapshot = Boolean(latestPublication);
   const normalizedStatus = normalizeReportStatus(report?.status);
   const isCurrentlyFinalized = FINAL_REPORT_STATUSES.has(normalizedStatus);
   const isUnderReview = hasPublishedSnapshot && !isCurrentlyFinalized;
 
   return {
     ...report,
+    latestPublication,
+    publishedVersion: latestPublication?.version ?? null,
     isUnderReview,
     patientWarning: isUnderReview
       ? 'Este laudo está em revisão pela clínica. Você está visualizando a última versão publicada.'
       : null,
-    description: (hasPublishedSnapshot ? report?.publishedDescription : report?.description) || null,
-    conclusion: (hasPublishedSnapshot ? report?.publishedConclusion : report?.conclusion) || null,
-    notes: (hasPublishedSnapshot ? report?.publishedNotes : report?.notes) || null,
-    exam: (hasPublishedSnapshot ? report?.publishedExam : report?.exam) || null,
-    requestingDoctor: (hasPublishedSnapshot ? report?.publishedRequestingDoctor : report?.requestingDoctor) || null,
-    reportingDoctor: (hasPublishedSnapshot ? report?.publishedReportingDoctor : report?.reportingDoctor) || null,
-    reviewingDoctor: (hasPublishedSnapshot ? report?.publishedReviewingDoctor : report?.reviewingDoctor) || null,
-    issuerSignedAt: (hasPublishedSnapshot ? report?.publishedIssuerSignedAt : report?.issuerSignedAt) || null,
-    reviewerSignedAt: (hasPublishedSnapshot ? report?.publishedReviewerSignedAt : report?.reviewerSignedAt) || null,
+    description: (hasPublishedSnapshot ? latestPublication?.description : report?.description) || null,
+    conclusion: (hasPublishedSnapshot ? latestPublication?.conclusion : report?.conclusion) || null,
+    notes: (hasPublishedSnapshot ? latestPublication?.notes : report?.notes) || null,
+    exam: (hasPublishedSnapshot ? latestPublication?.exam : report?.exam) || null,
+    requestingDoctor: (hasPublishedSnapshot ? latestPublication?.requestingDoctor : report?.requestingDoctor) || null,
+    reportingDoctor: (hasPublishedSnapshot ? latestPublication?.reportingDoctor : report?.reportingDoctor) || null,
+    reviewingDoctor: (hasPublishedSnapshot ? latestPublication?.reviewingDoctor : report?.reviewingDoctor) || null,
+    issuerSignedAt: (hasPublishedSnapshot ? latestPublication?.issuerSignedAt : report?.issuerSignedAt) || null,
+    reviewerSignedAt: (hasPublishedSnapshot ? latestPublication?.reviewerSignedAt : report?.reviewerSignedAt) || null,
   };
 }
 
@@ -147,13 +150,18 @@ export default async function reportRoutes(app: FastifyInstance) {
         include: {
           appointment: { select: { id: true, patientName: true, patientCpf: true, specialty: true, date: true, time: true, doctorName: true, convenio: true } },
           worklistItem: { select: { id: true, dicomStudyUid: true, dicomUrl: true, dicomReceivedAt: true } },
-          addendums: { where: { isActive: true }, select: { id: true } },
+          addendums: { where: { isActive: true, status: 'finalizado' }, select: { id: true } },
         },
       }),
       prisma.report.count({ where }),
     ]);
 
-    return { items, total };
+    const normalizedItems = items.map((item: any) => ({
+      ...item,
+      hasFinalizedAddendum: Array.isArray(item.addendums) && item.addendums.length > 0,
+    }));
+
+    return { items: normalizedItems, total };
   });
 
   app.get('/:id', {
@@ -204,6 +212,15 @@ export default async function reportRoutes(app: FastifyInstance) {
             doctorName: true,
           },
         },
+        addendums: {
+          where: { isActive: true, status: 'finalizado' },
+          orderBy: { createdAt: 'asc' },
+        },
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
       },
     });
     if (!report) return reply.code(404).send({ error: 'Report not found' });
@@ -213,6 +230,7 @@ export default async function reportRoutes(app: FastifyInstance) {
       where: { branchId },
       select: { reportLayout: true, requiresReviewer: true },
     });
+    const addendums = Array.isArray((report as any)?.addendums) ? (report as any).addendums : [];
 
     const pdf = await generatePatientReportPdfBuffer({
       reportId: String(report.id),
@@ -239,6 +257,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         issuerSignedAt: visibleReport?.issuerSignedAt || null,
         reviewerSignedAt: visibleReport?.reviewerSignedAt || null,
       },
+      addendums: addendums.map((item: any) => ({ ...item, issuerDoctorName: item.issuerDoctor || null })),
       layout: (config as any)?.reportLayout || null,
       requiresReviewer: (config as any)?.requiresReviewer !== false,
       hideUnderReviewNotice: true,
@@ -295,6 +314,15 @@ export default async function reportRoutes(app: FastifyInstance) {
             patientCpf: true,
           },
         },
+        addendums: {
+          where: { isActive: true, status: 'finalizado' },
+          orderBy: { createdAt: 'asc' },
+        },
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
       },
     });
     if (!report) return reply.code(404).send({ error: 'Report not found' });
@@ -304,6 +332,7 @@ export default async function reportRoutes(app: FastifyInstance) {
       where: { branchId },
       select: { reportLayout: true, requiresReviewer: true },
     });
+    const addendums = Array.isArray((report as any)?.addendums) ? (report as any).addendums : [];
     const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(body, key);
     const pick = (key: string, fallback: any) => (hasOwn(key) ? body[key] : fallback);
 
@@ -334,6 +363,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         issuerSignedAt: pick('issuerSignedAt', visibleReport?.issuerSignedAt || null),
         reviewerSignedAt: pick('reviewerSignedAt', visibleReport?.reviewerSignedAt || null),
       },
+      addendums: addendums.map((item: any) => ({ ...item, issuerDoctorName: item.issuerDoctor || null })),
       layout: (config as any)?.reportLayout || null,
       requiresReviewer: (config as any)?.requiresReviewer !== false,
       hideUnderReviewNotice: true,
@@ -634,8 +664,8 @@ export default async function reportRoutes(app: FastifyInstance) {
         scheduledFor: data.scheduledFor || null,
         responsibleDoctor: data.responsibleDoctor || null,
         observation: data.observation || null,
-        issuerSignedAt: data.signIssuer ? new Date() : (data.issuerSignedAt || null),
-        reviewerSignedAt: data.signReviewer ? new Date() : (data.reviewerSignedAt || null),
+        issuerSignedAt: data.signIssuer ? new Date() : (data.issuerSignedAt ? new Date(data.issuerSignedAt) : null),
+        reviewerSignedAt: data.signReviewer ? new Date() : (data.reviewerSignedAt ? new Date(data.reviewerSignedAt) : null),
       };
       const item = await prisma.report.create({ data: createData });
 
@@ -735,8 +765,9 @@ export default async function reportRoutes(app: FastifyInstance) {
       const signReviewerRequested = data.signReviewer === true;
       const hasDescriptionChange = data.description !== undefined && data.description !== existing.description;
       const shouldResignReviewer = signReviewerRequested && (hasDescriptionChange || !existing.reviewerSignedAt);
-      if (data.issuerSignedAt !== undefined) updateData.issuerSignedAt = data.issuerSignedAt || null;
-      if (data.reviewerSignedAt !== undefined) updateData.reviewerSignedAt = data.reviewerSignedAt || null;
+      if (data.issuerSignedAt !== undefined) updateData.issuerSignedAt = data.issuerSignedAt ? new Date(data.issuerSignedAt) : null;
+      if (data.reviewerSignedAt !== undefined) updateData.reviewerSignedAt = data.reviewerSignedAt ? new Date(data.reviewerSignedAt) : null;
+      if (data.finalizedAt !== undefined) updateData.finalizedAt = data.finalizedAt ? new Date(data.finalizedAt) : null;
       if (signIssuerRequested && !existing.issuerSignedAt) {
         updateData.issuerSignedAt = new Date();
       }
@@ -806,6 +837,7 @@ export default async function reportRoutes(app: FastifyInstance) {
         updateData.reviewingDoctor = existing.reviewingDoctor || signingDoctorName || null;
       }
 
+      let publicationCreateData: any = null;
       if (data.status === 'finalizado') {
         const config = await prisma.reportConfig.findFirst({
           where: { branchId },
@@ -833,21 +865,41 @@ export default async function reportRoutes(app: FastifyInstance) {
           updateData.finalizedDoctorId = (existing as any).finalizedDoctorId;
         }
 
-        // Persist the exact published snapshot shown to patients.
-        updateData.publishedAt = new Date();
-        updateData.publishedVersion = Number((existing as any).publishedVersion || 0) + 1;
-        updateData.publishedDescription = updateData.description ?? existing.description ?? null;
-        updateData.publishedConclusion = updateData.conclusion ?? existing.conclusion ?? null;
-        updateData.publishedNotes = updateData.notes ?? existing.notes ?? null;
-        updateData.publishedExam = updateData.exam ?? existing.exam ?? null;
-        updateData.publishedRequestingDoctor = updateData.requestingDoctor ?? existing.requestingDoctor ?? null;
-        updateData.publishedReportingDoctor = updateData.reportingDoctor ?? existing.reportingDoctor ?? null;
-        updateData.publishedReviewingDoctor = updateData.reviewingDoctor ?? existing.reviewingDoctor ?? null;
-        updateData.publishedIssuerSignedAt = nextIssuerSignedAt ?? null;
-        updateData.publishedReviewerSignedAt = nextReviewerSignedAt ?? null;
+        const latestPublication = await prisma.reportPublication.findFirst({
+          where: { reportId: id, isActive: true },
+          orderBy: { version: 'desc' },
+          select: { version: true },
+        });
+        const nextVersion = Number(latestPublication?.version || 0) + 1;
+        const publishedAt = new Date();
+        publicationCreateData = {
+          branchId,
+          reportId: id,
+          version: nextVersion,
+          publishedAt,
+          description: updateData.description ?? existing.description ?? null,
+          conclusion: updateData.conclusion ?? existing.conclusion ?? null,
+          notes: updateData.notes ?? existing.notes ?? null,
+          exam: updateData.exam ?? existing.exam ?? null,
+          requestingDoctor: updateData.requestingDoctor ?? existing.requestingDoctor ?? null,
+          reportingDoctor: updateData.reportingDoctor ?? existing.reportingDoctor ?? null,
+          reviewingDoctor: updateData.reviewingDoctor ?? existing.reviewingDoctor ?? null,
+          issuerSignedAt: nextIssuerSignedAt ?? null,
+          reviewerSignedAt: nextReviewerSignedAt ?? null,
+        };
       }
 
-      const item = await prisma.report.update({ where: { id }, data: updateData });
+      let item: any = null;
+      if (publicationCreateData) {
+        const txResult = await prisma.$transaction(async (tx) => {
+          const updated = await tx.report.update({ where: { id }, data: updateData });
+          await tx.reportPublication.create({ data: publicationCreateData });
+          return updated;
+        });
+        item = txResult;
+      } else {
+        item = await prisma.report.update({ where: { id }, data: updateData });
+      }
 
       // Determine the most descriptive action label for meaningful status transitions
       let action = 'laudo_atualizado';

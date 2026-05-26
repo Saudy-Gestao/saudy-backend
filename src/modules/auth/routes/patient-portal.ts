@@ -78,7 +78,10 @@ function normalizeReportStatus(value?: string | null) {
 
 function isVisibleToPatientReport(reportOrStatus?: any) {
   if (reportOrStatus && typeof reportOrStatus === 'object') {
-    if (reportOrStatus.publishedAt) return true;
+    const hasPublication = Array.isArray(reportOrStatus.publications)
+      ? reportOrStatus.publications.length > 0
+      : Boolean(reportOrStatus.latestPublication);
+    if (hasPublication) return true;
     const normalizedObj = normalizeReportStatus(reportOrStatus.status);
     return Boolean(normalizedObj && FINAL_REPORT_STATUSES.has(normalizedObj));
   }
@@ -88,26 +91,29 @@ function isVisibleToPatientReport(reportOrStatus?: any) {
 }
 
 function resolvePatientVisibleReport(report: any) {
-  const hasPublishedSnapshot = Boolean(report?.publishedAt);
+  const latestPublication = Array.isArray(report?.publications) ? report.publications[0] : null;
+  const hasPublishedSnapshot = Boolean(latestPublication);
   const normalizedStatus = normalizeReportStatus(report?.status);
   const isCurrentlyFinalized = FINAL_REPORT_STATUSES.has(normalizedStatus);
   const isUnderReview = hasPublishedSnapshot && !isCurrentlyFinalized;
 
   return {
     ...report,
+    latestPublication,
+    publishedVersion: latestPublication?.version ?? null,
     isUnderReview,
     patientWarning: isUnderReview
       ? 'Este laudo está em revisão pela clínica. Você está visualizando a última versão publicada.'
       : null,
-    description: (hasPublishedSnapshot ? report?.publishedDescription : report?.description) || null,
-    conclusion: (hasPublishedSnapshot ? report?.publishedConclusion : report?.conclusion) || null,
-    notes: (hasPublishedSnapshot ? report?.publishedNotes : report?.notes) || null,
-    exam: (hasPublishedSnapshot ? report?.publishedExam : report?.exam) || null,
-    requestingDoctor: (hasPublishedSnapshot ? report?.publishedRequestingDoctor : report?.requestingDoctor) || null,
-    reportingDoctor: (hasPublishedSnapshot ? report?.publishedReportingDoctor : report?.reportingDoctor) || null,
-    reviewingDoctor: (hasPublishedSnapshot ? report?.publishedReviewingDoctor : report?.reviewingDoctor) || null,
-    issuerSignedAt: (hasPublishedSnapshot ? report?.publishedIssuerSignedAt : report?.issuerSignedAt) || null,
-    reviewerSignedAt: (hasPublishedSnapshot ? report?.publishedReviewerSignedAt : report?.reviewerSignedAt) || null,
+    description: (hasPublishedSnapshot ? latestPublication?.description : report?.description) || null,
+    conclusion: (hasPublishedSnapshot ? latestPublication?.conclusion : report?.conclusion) || null,
+    notes: (hasPublishedSnapshot ? latestPublication?.notes : report?.notes) || null,
+    exam: (hasPublishedSnapshot ? latestPublication?.exam : report?.exam) || null,
+    requestingDoctor: (hasPublishedSnapshot ? latestPublication?.requestingDoctor : report?.requestingDoctor) || null,
+    reportingDoctor: (hasPublishedSnapshot ? latestPublication?.reportingDoctor : report?.reportingDoctor) || null,
+    reviewingDoctor: (hasPublishedSnapshot ? latestPublication?.reviewingDoctor : report?.reviewingDoctor) || null,
+    issuerSignedAt: (hasPublishedSnapshot ? latestPublication?.issuerSignedAt : report?.issuerSignedAt) || null,
+    reviewerSignedAt: (hasPublishedSnapshot ? latestPublication?.reviewerSignedAt : report?.reviewerSignedAt) || null,
   };
 }
 
@@ -257,6 +263,7 @@ async function buildPatientReportPdf(report: any, patient: any) {
     : null;
   const visibleReport = resolvePatientVisibleReport(report);
   const contentHtml = String(visibleReport?.description || '').trim() || `<p>${String(visibleReport?.conclusion || '-')}</p>`;
+  const addendums = Array.isArray((report as any)?.addendums) ? (report as any).addendums : [];
 
   return generatePatientReportPdfBuffer({
     reportId: String(report?.id || ''),
@@ -283,6 +290,7 @@ async function buildPatientReportPdf(report: any, patient: any) {
       issuerSignedAt: visibleReport?.issuerSignedAt || null,
       reviewerSignedAt: visibleReport?.reviewerSignedAt || null,
     },
+    addendums: addendums.map((item: any) => ({ ...item, issuerDoctorName: item.issuerDoctor || null })),
     layout: (config as any)?.reportLayout || null,
     requiresReviewer: (config as any)?.requiresReviewer !== false,
   });
@@ -1112,7 +1120,16 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
             { appointment: { is: { patientCpf: patient.cpf } } },
           ],
         },
-        select: { id: true, status: true, publishedAt: true },
+        select: {
+          id: true,
+          status: true,
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+            select: { id: true },
+          },
+        },
         take: 500,
       }),
     ]);
@@ -1376,6 +1393,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           appointment: patientAppointmentWhere,
         },
         include: {
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+          },
           appointment: {
             select: {
               id: true,
@@ -1406,6 +1428,24 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           exam: true,
           updatedAt: true,
           createdAt: true,
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              version: true,
+              description: true,
+              conclusion: true,
+              notes: true,
+              exam: true,
+              requestingDoctor: true,
+              reportingDoctor: true,
+              reviewingDoctor: true,
+              issuerSignedAt: true,
+              reviewerSignedAt: true,
+            },
+          },
           appointment: {
             select: {
               id: true,
@@ -1553,6 +1593,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           ],
         },
         include: {
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+          },
           appointment: {
             select: {
               date: true,
@@ -1931,6 +1976,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         take: Math.max(limit * 3, limit),
         skip: offset,
         include: {
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+          },
           appointment: {
             select: {
               id: true,
@@ -1955,10 +2005,56 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       prisma.report.count({ where }),
     ]);
 
-    const items = rawItems
+    const visibleRawItems = rawItems
       .filter((item: any) => isVisibleToPatientReport(item))
-      .slice(0, limit)
-      .map((item: any) => resolvePatientVisibleReport(item));
+      .slice(0, limit);
+    const reportIds = visibleRawItems.map((item: any) => String(item.id));
+    const addendumAuditLogs = reportIds.length > 0 ? await prisma.reportAuditLog.findMany({
+      where: {
+        reportId: { in: reportIds },
+        action: { in: ['adendo_finalizado', 'adendo_removido'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        reportId: true,
+        action: true,
+        createdAt: true,
+      },
+    }) : [];
+
+    const addendumEventsByReport = new Map<string, {
+      latestAddendumPublishedAt: Date | null;
+      latestAddendumRemovedAt: Date | null;
+      addendumEvents: Array<{ type: 'published' | 'removed'; createdAt: Date }>;
+    }>();
+    for (const log of addendumAuditLogs as any[]) {
+      const key = String(log.reportId || '');
+      if (!key) continue;
+      const current = addendumEventsByReport.get(key) || {
+        latestAddendumPublishedAt: null,
+        latestAddendumRemovedAt: null,
+        addendumEvents: [],
+      };
+      if (log.action === 'adendo_finalizado' && !current.latestAddendumPublishedAt) current.latestAddendumPublishedAt = log.createdAt;
+      if (log.action === 'adendo_removido' && !current.latestAddendumRemovedAt) current.latestAddendumRemovedAt = log.createdAt;
+      if (log.action === 'adendo_finalizado') current.addendumEvents.push({ type: 'published', createdAt: log.createdAt });
+      if (log.action === 'adendo_removido') current.addendumEvents.push({ type: 'removed', createdAt: log.createdAt });
+      addendumEventsByReport.set(key, current);
+    }
+
+    const items = visibleRawItems.map((item: any) => {
+      const visible = resolvePatientVisibleReport(item);
+      const events = addendumEventsByReport.get(String(item.id));
+      return {
+        ...visible,
+        latestAddendumPublishedAt: events?.latestAddendumPublishedAt || null,
+        latestAddendumRemovedAt: events?.latestAddendumRemovedAt || null,
+        addendumEvents: (events?.addendumEvents || []).map((event) => ({
+          type: event.type,
+          createdAt: event.createdAt,
+        })),
+      };
+    });
 
     return { items, total: totalRaw };
   });
@@ -2030,6 +2126,13 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           { appointment: { is: { patientCpf: patient.cpf } } },
         ],
       },
+      include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
+      },
     });
 
     if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
@@ -2090,6 +2193,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         ],
       },
       include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
         appointment: {
           select: {
             date: true,
@@ -2097,6 +2205,10 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
             specialty: true,
             doctorName: true,
           },
+        },
+        addendums: {
+          where: { isActive: true, status: 'finalizado' },
+          orderBy: { createdAt: 'asc' },
         },
       },
     });
@@ -2168,6 +2280,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         ],
       },
       include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
         appointment: {
           select: {
             date: true,
@@ -2175,6 +2292,10 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
             specialty: true,
             doctorName: true,
           },
+        },
+        addendums: {
+          where: { isActive: true, status: 'finalizado' },
+          orderBy: { createdAt: 'asc' },
         },
       },
     });
@@ -2208,6 +2329,12 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       select: {
         id: true,
         status: true,
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+          select: { id: true },
+        },
         worklistItem: { select: { id: true, dicomStudyUid: true } },
       },
     });
@@ -2420,6 +2547,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         ],
       },
       include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
         appointment: {
           select: {
             date: true,
