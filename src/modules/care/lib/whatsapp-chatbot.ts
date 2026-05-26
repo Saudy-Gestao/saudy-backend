@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
-import { MetaMessagingService } from './messaging';
+import { createMessagingService } from './messaging';
 import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
@@ -624,10 +624,11 @@ async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig 
 
 
 async function sendResponse(branchConfig: BranchConfig, phone: string, response: ChatbotResponse) {
-  const messaging = new MetaMessagingService({
-    bearerToken: branchConfig.apiKey,
-    appId: branchConfig.appId || branchConfig.appName,
-    sourceNumber: branchConfig.sourceNumber,
+  const messaging = createMessagingService({
+    accountSid: branchConfig.apiKey,
+    authToken: branchConfig.appName,
+    fromNumber: branchConfig.sourceNumber,
+    appId: branchConfig.appId,
   });
 
   if (response.binaryOptions) {
