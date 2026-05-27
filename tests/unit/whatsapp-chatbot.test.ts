@@ -1,25 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HUMAN_FLOWS, handleWhatsAppChatbot } from '../../src/modules/care/lib/whatsapp-chatbot';
 import prisma from '../../src/modules/care/lib/prisma';
+import * as messagingModule from '../../src/modules/care/lib/messaging';
 
 const sendTextMessageMock = vi.fn();
 const sendQuickReplyMessageMock = vi.fn();
 const sendListMessageMock = vi.fn();
-
 const sendFlowMessageMock = vi.fn();
 
 vi.mock('../../src/modules/care/lib/messaging', () => ({
-  GupshupService: vi.fn().mockImplementation(() => ({
-    sendTextMessage: sendTextMessageMock,
-    sendQuickReplyMessage: sendQuickReplyMessageMock,
-    sendListMessage: sendListMessageMock,
-  })),
-  MetaMessagingService: vi.fn().mockImplementation(() => ({
-    sendTextMessage: sendTextMessageMock,
-    sendQuickReplyMessage: sendQuickReplyMessageMock,
-    sendListMessage: sendListMessageMock,
-    sendFlowMessage: sendFlowMessageMock,
-  })),
+  GupshupService: vi.fn(),
+  MetaMessagingService: vi.fn(),
+  createMessagingService: vi.fn(),
 }));
 
 vi.mock('../../src/modules/care/lib/appointment-whatsapp-events', () => ({
@@ -180,6 +172,12 @@ describe('handleWhatsAppChatbot', () => {
     sendQuickReplyMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-2' });
     sendListMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-3' });
     sendFlowMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-4' });
+    vi.mocked(messagingModule.createMessagingService).mockReturnValue({
+      sendTextMessage: sendTextMessageMock,
+      sendQuickReplyMessage: sendQuickReplyMessageMock,
+      sendListMessage: sendListMessageMock,
+      sendFlowMessage: sendFlowMessageMock,
+    } as any);
   });
 
   it('returns handled false when text is empty', async () => {

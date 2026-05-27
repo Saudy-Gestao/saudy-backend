@@ -570,22 +570,22 @@ export class MetaMessagingService {
 }
 
 /**
- * Creates a MetaMessagingService from the shape stored in WhatsAppConfig:
- *   accountSid  = Bearer token (Meta System User Token)
- *   authToken   = unused (legacy)
- *   fromNumber  = source WhatsApp number (kept for compat, not used in v3 API calls)
+ * Creates a GupshupService from the shape stored in WhatsAppConfig:
+ *   accountSid  = Gupshup API key (sk_xxxx)
+ *   authToken   = Gupshup app name
+ *   fromNumber  = source WhatsApp number
  */
 export function createMessagingService(config: {
   accountSid: string;
   authToken?: string;
   fromNumber?: string;
   appId?: string | null;
-}): MetaMessagingService {
-  return new MetaMessagingService({
-    bearerToken: config.accountSid,
-    appId: config.appId || config.authToken || '',
+}): GupshupService {
+  return new GupshupService({
+    apiKey: config.accountSid,
+    appName: config.authToken || '',
     sourceNumber: config.fromNumber || '',
   });
 }
 
-export default MetaMessagingService;
+export default GupshupService;

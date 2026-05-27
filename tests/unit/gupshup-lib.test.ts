@@ -156,9 +156,9 @@ describe('GupshupV3Service', () => {
 });
 
 describe('createMessagingService factory', () => {
-  it('creates GupshupV3Service from accountSid/authToken shape', async () => {
-    mockedAxios.post.mockResolvedValueOnce({ data: { messages: [{ id: 'x1' }] } });
-    const service = createMessagingService({ accountSid: 'bearer', authToken: 'app-id', fromNumber: '5511999990000' });
+  it('creates GupshupService from accountSid/authToken shape', async () => {
+    mockedAxios.create.mockReturnValueOnce({ post: vi.fn().mockResolvedValueOnce({ data: { status: 'submitted', messageId: 'x1' } }) } as any);
+    const service = createMessagingService({ accountSid: 'sk_key', authToken: 'myapp', fromNumber: '5511999990000' });
 
     const res = await service.sendTextMessage({ to: '5511988887777', message: 'Oi' });
     expect(res.status).toBe('success');

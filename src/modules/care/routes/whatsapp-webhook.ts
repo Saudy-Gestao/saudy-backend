@@ -1073,7 +1073,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     }
 
     if (!action || !originatingLog?.appointmentId || !originatingLog.branchId) {
-      if (source && (inboundText || inboundMedia.summary)) {
+      if (source && inboundText) {
         const chatbotBranchHint = await resolveBranchHintFromPayload(body, source);
         const chatbotResult = await handleWhatsAppChatbot({
           phone: source,

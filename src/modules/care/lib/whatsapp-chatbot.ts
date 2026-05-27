@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
-import { MetaMessagingService } from './messaging';
+import { createMessagingService } from './messaging';
 import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 
@@ -624,10 +624,11 @@ async function resolveBranchConfig(branchIdHint?: string): Promise<BranchConfig 
 
 
 async function sendResponse(branchConfig: BranchConfig, phone: string, response: ChatbotResponse) {
-  const messaging = new MetaMessagingService({
-    bearerToken: branchConfig.apiKey,
-    appId: branchConfig.appId || branchConfig.appName,
-    sourceNumber: branchConfig.sourceNumber,
+  const messaging = createMessagingService({
+    accountSid: branchConfig.apiKey,
+    authToken: branchConfig.appName,
+    fromNumber: branchConfig.sourceNumber,
+    appId: branchConfig.appId,
   });
 
   if (response.binaryOptions) {
@@ -2924,76 +2925,7 @@ export async function handleWhatsAppChatbot(input: ChatbotInput): Promise<Chatbo
   const branchConfig = await resolveBranchConfig(input.branchIdHint);
   if (!branchConfig?.branchId) return { handled: false };
 
-  // Flow mode: when flowId is configured, use WhatsApp Flow for all non-human conversations
-  // This also handles media messages (no text) — dedup prevents re-sending
-  if (branchConfig.flowId) {
-    const isFlowComplete = text.startsWith('[FLOW_COMPLETE]');
-    const isFlowHandoff = text.startsWith('[FLOW_HANDOFF]');
-
-    if (!isFlowComplete && !isFlowHandoff) {
-      const existingConversation = await prisma.whatsAppConversation.findUnique({
-        where: { branchId_phone: { branchId: branchConfig.branchId, phone } },
-        select: { state: true, humanStatus: true },
-      });
-
-      const isHumanActive = existingConversation?.humanStatus === 'QUEUED'
-        || existingConversation?.humanStatus === 'ASSIGNED';
-
-      // Dedup: skip if we already sent a flow message in the last 24 hours
-      const recentFlowMessage = await prisma.whatsAppConversationMessage.findFirst({
-        where: {
-          phone,
-          branchId: branchConfig.branchId,
-          authorType: 'BOT',
-          message: { contains: 'flow_sent' },
-          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) },
-        },
-      });
-
-      if (isHumanActive) {
-        // Human agent is active — let the message through without bot interference
-        return { handled: false };
-      }
-
-      if (recentFlowMessage) {
-        // Dedup: flow already sent recently, silently ignore
-        return { handled: true };
-      }
-
-      const convRecord = await upsertConversation({ branchId: branchConfig.branchId, phone, patient: await lookupPatient(branchConfig.branchId, phone) });
-      const flowToken = Buffer.from(JSON.stringify({ branchId: branchConfig.branchId, phone, conversationId: convRecord.id })).toString('base64');
-      const messaging = new MetaMessagingService({
-        bearerToken: branchConfig.apiKey,
-        appId: branchConfig.appId || branchConfig.appName,
-        sourceNumber: branchConfig.sourceNumber,
-      });
-
-      // Record dedup marker before sending (prevents parallel retries)
-      await prisma.whatsAppConversationMessage.create({
-        data: {
-          conversationId: convRecord.id,
-          branchId: branchConfig.branchId,
-          phone,
-          authorType: 'BOT',
-          message: 'flow_sent',
-        },
-      }).catch(() => null);
-
-      try {
-        await messaging.sendFlowMessage({
-          to: phone,
-          flowId: branchConfig.flowId,
-          flowToken,
-          bodyText: 'Olá! Para agendar uma consulta ou exame, preencha o formulário abaixo.',
-          ctaText: 'Agendar',
-        });
-      } catch (flowErr: any) {
-        console.error('[chatbot] sendFlowMessage failed', flowErr?.message);
-      }
-
-      return { handled: true };
-    }
-  }
+  if (!text) return { handled: false };
 
   let patient = await lookupPatient(branchConfig.branchId, phone);
   let conversation = await upsertConversation({
