@@ -112,6 +112,8 @@ function resolvePatientVisibleReport(report: any) {
     requestingDoctor: (hasPublishedSnapshot ? latestPublication?.requestingDoctor : report?.requestingDoctor) || null,
     reportingDoctor: (hasPublishedSnapshot ? latestPublication?.reportingDoctor : report?.reportingDoctor) || null,
     reviewingDoctor: (hasPublishedSnapshot ? latestPublication?.reviewingDoctor : report?.reviewingDoctor) || null,
+    reportingDoctorId: report?.reportingDoctorId || null,
+    reviewingDoctorId: report?.reviewingDoctorId || null,
     issuerSignedAt: (hasPublishedSnapshot ? latestPublication?.issuerSignedAt : report?.issuerSignedAt) || null,
     reviewerSignedAt: (hasPublishedSnapshot ? latestPublication?.reviewerSignedAt : report?.reviewerSignedAt) || null,
   };
@@ -264,6 +266,28 @@ async function buildPatientReportPdf(report: any, patient: any) {
   const visibleReport = resolvePatientVisibleReport(report);
   const contentHtml = String(visibleReport?.description || '').trim() || `<p>${String(visibleReport?.conclusion || '-')}</p>`;
   const addendums = Array.isArray((report as any)?.addendums) ? (report as any).addendums : [];
+  const doctorIds = Array.from(new Set([
+    String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim(),
+    String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim(),
+    ...addendums.map((item: any) => String(item?.issuerDoctorId || '').trim()),
+  ].filter(Boolean)));
+  const doctors = doctorIds.length > 0
+    ? await prisma.doctor.findMany({
+      where: { id: { in: doctorIds } },
+      select: { id: true, name: true, crmType: true, crm: true, crmState: true, signatureImageBase64: true },
+    })
+    : [];
+  const doctorMap = new Map<string, any>(doctors.map((doctor: any) => [doctor.id, doctor]));
+  const reportingDoctor = doctorMap.get(String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim());
+  const reviewingDoctor = doctorMap.get(String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim());
+  const getRegistration = (doctor: any) => {
+    if (!doctor) return null;
+    const type = String(doctor.crmType || 'CRM').trim();
+    const crm = String(doctor.crm || '').trim();
+    const state = String(doctor.crmState || '').trim();
+    if (!crm) return null;
+    return `${type} ${crm}${state ? `/${state}` : ''}`;
+  };
 
   return generatePatientReportPdfBuffer({
     reportId: String(report?.id || ''),
@@ -285,12 +309,24 @@ async function buildPatientReportPdf(report: any, patient: any) {
       requestingDoctor: visibleReport?.requestingDoctor || null,
       reportingDoctor: visibleReport?.reportingDoctor || null,
       reviewingDoctor: visibleReport?.reviewingDoctor || null,
+      reportingDoctorSignatureBase64: reportingDoctor?.signatureImageBase64 || null,
+      reviewingDoctorSignatureBase64: reviewingDoctor?.signatureImageBase64 || null,
+      reportingDoctorRegistration: getRegistration(reportingDoctor),
+      reviewingDoctorRegistration: getRegistration(reviewingDoctor),
     },
     signatures: {
       issuerSignedAt: visibleReport?.issuerSignedAt || null,
       reviewerSignedAt: visibleReport?.reviewerSignedAt || null,
     },
-    addendums: addendums.map((item: any) => ({ ...item, issuerDoctorName: item.issuerDoctor || null })),
+    addendums: addendums.map((item: any) => {
+      const issuerDoctor = doctorMap.get(String(item?.issuerDoctorId || '').trim());
+      return {
+        ...item,
+        issuerDoctorName: item.issuerDoctor || null,
+        issuerDoctorSignatureBase64: issuerDoctor?.signatureImageBase64 || null,
+        issuerDoctorRegistration: getRegistration(issuerDoctor),
+      };
+    }),
     layout: (config as any)?.reportLayout || null,
     requiresReviewer: (config as any)?.requiresReviewer !== false,
   });

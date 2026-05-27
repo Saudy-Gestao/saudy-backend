@@ -47,6 +47,8 @@ function resolvePatientVisibleReport(report: any) {
     requestingDoctor: (hasPublishedSnapshot ? latestPublication?.requestingDoctor : report?.requestingDoctor) || null,
     reportingDoctor: (hasPublishedSnapshot ? latestPublication?.reportingDoctor : report?.reportingDoctor) || null,
     reviewingDoctor: (hasPublishedSnapshot ? latestPublication?.reviewingDoctor : report?.reviewingDoctor) || null,
+    reportingDoctorId: report?.reportingDoctorId || null,
+    reviewingDoctorId: report?.reviewingDoctorId || null,
     issuerSignedAt: (hasPublishedSnapshot ? latestPublication?.issuerSignedAt : report?.issuerSignedAt) || null,
     reviewerSignedAt: (hasPublishedSnapshot ? latestPublication?.reviewerSignedAt : report?.reviewerSignedAt) || null,
   };
@@ -231,6 +233,28 @@ export default async function reportRoutes(app: FastifyInstance) {
       select: { reportLayout: true, requiresReviewer: true },
     });
     const addendums = Array.isArray((report as any)?.addendums) ? (report as any).addendums : [];
+    const doctorIds = Array.from(new Set([
+      String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim(),
+      String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim(),
+      ...addendums.map((item: any) => String(item?.issuerDoctorId || '').trim()),
+    ].filter(Boolean)));
+    const doctors = doctorIds.length > 0
+      ? await prisma.doctor.findMany({
+        where: { id: { in: doctorIds } },
+        select: { id: true, name: true, crmType: true, crm: true, crmState: true, signatureImageBase64: true },
+      })
+      : [];
+    const doctorMap = new Map<string, any>(doctors.map((doctor: any) => [doctor.id, doctor]));
+    const reportingDoctor = doctorMap.get(String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim());
+    const reviewingDoctor = doctorMap.get(String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim());
+    const getRegistration = (doctor: any) => {
+      if (!doctor) return null;
+      const type = String(doctor.crmType || 'CRM').trim();
+      const crm = String(doctor.crm || '').trim();
+      const state = String(doctor.crmState || '').trim();
+      if (!crm) return null;
+      return `${type} ${crm}${state ? `/${state}` : ''}`;
+    };
 
     const pdf = await generatePatientReportPdfBuffer({
       reportId: String(report.id),
@@ -252,12 +276,24 @@ export default async function reportRoutes(app: FastifyInstance) {
         requestingDoctor: visibleReport?.requestingDoctor || null,
         reportingDoctor: visibleReport?.reportingDoctor || null,
         reviewingDoctor: visibleReport?.reviewingDoctor || null,
+        reportingDoctorSignatureBase64: reportingDoctor?.signatureImageBase64 || null,
+        reviewingDoctorSignatureBase64: reviewingDoctor?.signatureImageBase64 || null,
+        reportingDoctorRegistration: getRegistration(reportingDoctor),
+        reviewingDoctorRegistration: getRegistration(reviewingDoctor),
       },
       signatures: {
         issuerSignedAt: visibleReport?.issuerSignedAt || null,
         reviewerSignedAt: visibleReport?.reviewerSignedAt || null,
       },
-      addendums: addendums.map((item: any) => ({ ...item, issuerDoctorName: item.issuerDoctor || null })),
+      addendums: addendums.map((item: any) => {
+        const issuerDoctor = doctorMap.get(String(item?.issuerDoctorId || '').trim());
+        return {
+          ...item,
+          issuerDoctorName: item.issuerDoctor || null,
+          issuerDoctorSignatureBase64: issuerDoctor?.signatureImageBase64 || null,
+          issuerDoctorRegistration: getRegistration(issuerDoctor),
+        };
+      }),
       layout: (config as any)?.reportLayout || null,
       requiresReviewer: (config as any)?.requiresReviewer !== false,
       hideUnderReviewNotice: true,
@@ -333,6 +369,28 @@ export default async function reportRoutes(app: FastifyInstance) {
       select: { reportLayout: true, requiresReviewer: true },
     });
     const addendums = Array.isArray((report as any)?.addendums) ? (report as any).addendums : [];
+    const doctorIds = Array.from(new Set([
+      String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim(),
+      String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim(),
+      ...addendums.map((item: any) => String(item?.issuerDoctorId || '').trim()),
+    ].filter(Boolean)));
+    const doctors = doctorIds.length > 0
+      ? await prisma.doctor.findMany({
+        where: { id: { in: doctorIds } },
+        select: { id: true, name: true, crmType: true, crm: true, crmState: true, signatureImageBase64: true },
+      })
+      : [];
+    const doctorMap = new Map<string, any>(doctors.map((doctor: any) => [doctor.id, doctor]));
+    const reportingDoctor = doctorMap.get(String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim());
+    const reviewingDoctor = doctorMap.get(String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim());
+    const getRegistration = (doctor: any) => {
+      if (!doctor) return null;
+      const type = String(doctor.crmType || 'CRM').trim();
+      const crm = String(doctor.crm || '').trim();
+      const state = String(doctor.crmState || '').trim();
+      if (!crm) return null;
+      return `${type} ${crm}${state ? `/${state}` : ''}`;
+    };
     const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(body, key);
     const pick = (key: string, fallback: any) => (hasOwn(key) ? body[key] : fallback);
 
@@ -358,12 +416,24 @@ export default async function reportRoutes(app: FastifyInstance) {
         requestingDoctor: pick('requestingDoctor', visibleReport?.requestingDoctor || null),
         reportingDoctor: pick('reportingDoctor', visibleReport?.reportingDoctor || null),
         reviewingDoctor: pick('reviewingDoctor', visibleReport?.reviewingDoctor || null),
+        reportingDoctorSignatureBase64: reportingDoctor?.signatureImageBase64 || null,
+        reviewingDoctorSignatureBase64: reviewingDoctor?.signatureImageBase64 || null,
+        reportingDoctorRegistration: getRegistration(reportingDoctor),
+        reviewingDoctorRegistration: getRegistration(reviewingDoctor),
       },
       signatures: {
         issuerSignedAt: pick('issuerSignedAt', visibleReport?.issuerSignedAt || null),
         reviewerSignedAt: pick('reviewerSignedAt', visibleReport?.reviewerSignedAt || null),
       },
-      addendums: addendums.map((item: any) => ({ ...item, issuerDoctorName: item.issuerDoctor || null })),
+      addendums: addendums.map((item: any) => {
+        const issuerDoctor = doctorMap.get(String(item?.issuerDoctorId || '').trim());
+        return {
+          ...item,
+          issuerDoctorName: item.issuerDoctor || null,
+          issuerDoctorSignatureBase64: issuerDoctor?.signatureImageBase64 || null,
+          issuerDoctorRegistration: getRegistration(issuerDoctor),
+        };
+      }),
       layout: (config as any)?.reportLayout || null,
       requiresReviewer: (config as any)?.requiresReviewer !== false,
       hideUnderReviewNotice: true,
@@ -1025,3 +1095,5 @@ export default async function reportRoutes(app: FastifyInstance) {
     return { message: 'Deleted' };
   });
 }
+
+

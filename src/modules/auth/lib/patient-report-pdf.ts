@@ -107,6 +107,10 @@ type GeneratePatientReportPdfParams = {
     requestingDoctor?: string | null;
     reportingDoctor?: string | null;
     reviewingDoctor?: string | null;
+    reportingDoctorSignatureBase64?: string | null;
+    reviewingDoctorSignatureBase64?: string | null;
+    reportingDoctorRegistration?: string | null;
+    reviewingDoctorRegistration?: string | null;
   };
   signatures?: {
     issuerSignedAt?: Date | string | null;
@@ -122,6 +126,8 @@ type GeneratePatientReportPdfParams = {
     finalizedAt?: Date | string | null;
     issuerSignedAt?: Date | string | null;
     issuerDoctorName?: string | null;
+    issuerDoctorSignatureBase64?: string | null;
+    issuerDoctorRegistration?: string | null;
   }>;
 };
 
@@ -130,6 +136,22 @@ const toDateLabel = (value?: Date | string | null) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return ptBrDateTimeFormatter.format(date);
+};
+
+const renderSignatureCard = (params: {
+  title: string;
+  person: string;
+  statusLabel: string;
+  statusOk: boolean;
+  timeLabel: string;
+  signatureImageBase64?: string | null;
+  registration?: string | null;
+}) => {
+  const signatureImage = String(params.signatureImageBase64 || '').trim();
+  const registration = String(params.registration || '').trim();
+  const hideStatusBadge = Boolean(signatureImage && params.statusOk);
+  const timeLabel = hideStatusBadge ? `Assinado em: ${params.timeLabel}` : params.timeLabel;
+  return `<div class="sign-card"><div class="sign-title">${escapeHtml(params.title)}</div><div class="sign-person">${escapeHtml(params.person)}</div>${registration ? `<div class="sign-registration">${escapeHtml(registration)}</div>` : ''}${signatureImage ? `<div class="sign-image-wrap"><img class="sign-image" src="${escapeHtml(signatureImage)}" alt="Assinatura" /></div>` : ''}${hideStatusBadge ? '' : `<div class="sign-status"><span class="sign-dot ${params.statusOk ? 'sign-dot-ok' : 'sign-dot-pending'}">${params.statusOk ? '&#10003;' : '...'}</span><span>${escapeHtml(params.statusLabel)}</span></div>`}<div class="sign-time">${escapeHtml(timeLabel)}</div></div>`;
 };
 
 function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string {
@@ -150,7 +172,23 @@ function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string
     ? `<div class="notice"><div class="notice-title">Laudo em revisao pela clinica</div><div class="notice-text">${escapeHtml(params.patientWarning || 'Voce esta visualizando a ultima versao publicada enquanto uma atualizacao esta em andamento.')}</div>${params.publishedVersion ? `<div class="notice-version">${escapeHtml(`Versao publicada: v${params.publishedVersion}`)}</div>` : ''}</div>`
     : '';
   const reportSignaturesHtml = layout.showSignatures
-    ? `<div class="signatures"><div class="sign-card"><div class="sign-title">Emissor</div><div class="sign-person">${escapeHtml(params.doctors?.reportingDoctor || 'Emissor nao identificado')}</div><div class="sign-status"><span class="sign-dot ${issuerSigned ? 'sign-dot-ok' : 'sign-dot-pending'}">${issuerSigned ? '&#10003;' : '...'}</span><span>${issuerSigned ? 'Assinado' : 'Pendente'}</span></div><div class="sign-time">${escapeHtml(issuerSignedAtLabel)}</div></div><div class="sign-card"><div class="sign-title">Revisor</div><div class="sign-person">${escapeHtml(params.doctors?.reviewingDoctor || (requiresReviewer ? 'Revisor nao identificado' : 'Revisor nao obrigatorio'))}</div><div class="sign-status"><span class="sign-dot ${reviewerSigned ? 'sign-dot-ok' : 'sign-dot-pending'}">${reviewerSigned ? '&#10003;' : '...'}</span><span>${requiresReviewer ? (reviewerSigned ? 'Assinado' : 'Pendente') : 'Nao obrigatorio'}</span></div><div class="sign-time">${escapeHtml(reviewerSignedAtLabel === 'Pendente' && !requiresReviewer ? 'Nao obrigatorio' : reviewerSignedAtLabel)}</div></div></div>`
+    ? `<div class="signatures">${renderSignatureCard({
+      title: 'Emissor',
+      person: params.doctors?.reportingDoctor || 'Emissor nao identificado',
+      registration: params.doctors?.reportingDoctorRegistration || null,
+      signatureImageBase64: issuerSigned ? params.doctors?.reportingDoctorSignatureBase64 : null,
+      statusLabel: issuerSigned ? 'Assinado' : 'Pendente',
+      statusOk: issuerSigned,
+      timeLabel: issuerSignedAtLabel,
+    })}${renderSignatureCard({
+      title: 'Revisor',
+      person: params.doctors?.reviewingDoctor || (requiresReviewer ? 'Revisor nao identificado' : 'Revisor nao obrigatorio'),
+      registration: params.doctors?.reviewingDoctorRegistration || null,
+      signatureImageBase64: reviewerSigned ? params.doctors?.reviewingDoctorSignatureBase64 : null,
+      statusLabel: requiresReviewer ? (reviewerSigned ? 'Assinado' : 'Pendente') : 'Nao obrigatorio',
+      statusOk: reviewerSigned,
+      timeLabel: reviewerSignedAtLabel === 'Pendente' && !requiresReviewer ? 'Nao obrigatorio' : reviewerSignedAtLabel,
+    })}</div>`
     : '';
   const footerHtml = `<div class="footer">${footer ? `<div class="footer-extra">${escapeHtml(footer)}</div>` : ''}</div>`;
   const paperHeightMm = layout.paperSize === 'Letter'
@@ -163,7 +201,15 @@ function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string
   const addendumSheetsHtml = addendums.map((addendum, index) => {
     const finalizedAtLabel = toDateLabel(addendum.finalizedAt || null);
     const addendumIssuerSignedAt = toDateLabel(addendum.issuerSignedAt || null);
-    const addendumSignatureHtml = `<div class="signatures"><div class="sign-card"><div class="sign-title">Emissor do adendo</div><div class="sign-person">${escapeHtml(addendum.issuerDoctorName || 'Nao identificado')}</div><div class="sign-status"><span class="sign-dot ${addendumIssuerSignedAt !== 'Pendente' ? 'sign-dot-ok' : 'sign-dot-pending'}">${addendumIssuerSignedAt !== 'Pendente' ? '&#10003;' : '...'}</span><span>${addendumIssuerSignedAt !== 'Pendente' ? 'Assinado' : 'Pendente'}</span></div><div class="sign-time">${escapeHtml(addendumIssuerSignedAt)}</div></div><div class="sign-card"><div class="sign-title">Finalização do adendo</div><div class="sign-person">Adendo ${index + 1}</div><div class="sign-time">${escapeHtml(finalizedAtLabel)}</div></div></div>`;
+    const addendumSignatureHtml = `<div class="signatures">${renderSignatureCard({
+      title: 'Emissor do adendo',
+      person: addendum.issuerDoctorName || 'Nao identificado',
+      registration: addendum.issuerDoctorRegistration || null,
+      signatureImageBase64: addendumIssuerSignedAt !== 'Pendente' ? addendum.issuerDoctorSignatureBase64 : null,
+      statusLabel: addendumIssuerSignedAt !== 'Pendente' ? 'Assinado' : 'Pendente',
+      statusOk: addendumIssuerSignedAt !== 'Pendente',
+      timeLabel: addendumIssuerSignedAt,
+    })}<div class="sign-card"><div class="sign-title">Finalizacao do adendo</div><div class="sign-person">Adendo ${index + 1}</div><div class="sign-time">${escapeHtml(finalizedAtLabel)}</div></div></div>`;
     return `<div class="sheet">${params.previewRibbonText ? `<div class="preview-ribbon">${escapeHtml(params.previewRibbonText)}</div>` : ''}${headerHtml}${metaHtml}<div class="content"><h2>Adendo ${index + 1}</h2>${String(addendum.content || '').trim() || '<p>-</p>'}</div><div class="doc-end">${addendumSignatureHtml}${footerHtml}</div></div>`;
   }).join('');
 
@@ -200,6 +246,9 @@ function buildReportDocumentHtml(params: GeneratePatientReportPdfParams): string
     .sign-card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; background: #fafcff; }
     .sign-title { font-weight: 700; color: #334155; margin-bottom: 2px; }
     .sign-person { color: #0b1324; font-weight: 700; margin-bottom: 3px; }
+    .sign-registration { font-size: 11px; color: #475569; margin-bottom: 6px; }
+    .sign-image-wrap { min-height: 42px; margin-bottom: 6px; display: flex; align-items: flex-end; }
+    .sign-image { max-width: 220px; max-height: 56px; object-fit: contain; object-position: left bottom; }
     .sign-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; }
     .sign-dot { width: 18px; height: 18px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; color: #fff; }
     .sign-dot-ok { background: #16a34a; }
@@ -236,3 +285,5 @@ export async function generatePatientReportPdfBuffer(params: GeneratePatientRepo
     await browser.close();
   }
 }
+
+

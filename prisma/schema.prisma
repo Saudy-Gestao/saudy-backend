@@ -267,6 +267,7 @@ model Doctor {
     specialties       String[] @default([])
     consultationFee   Decimal? @db.Decimal(10, 2)
     biography         String?  @db.Text
+    signatureImageBase64 String?  @db.Text
     address           String?
     addressNumber     String?
     addressComplement String?
@@ -2271,3 +2272,4 @@ model CodeChunk {
     @@index([repo, filePath])
     @@map("code_chunks")
 }
+

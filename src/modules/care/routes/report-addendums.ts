@@ -132,17 +132,24 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
         }
       }
 
+      let resolvedReportWorklistItemId: string | null = null;
       if (data.reportId) {
-        const report = await prisma.report.findFirst({ where: { id: data.reportId, branchId } });
+        const report = await prisma.report.findFirst({
+          where: { id: data.reportId, branchId },
+          select: { id: true, worklistItemId: true },
+        });
         if (!report) {
           return reply.code(404).send({ error: 'Report (laudo) not found' });
         }
+        resolvedReportWorklistItemId = report.worklistItemId || null;
       }
+
+      const resolvedWorklistItemId = data.worklistItemId || resolvedReportWorklistItemId || null;
 
       const item = await prisma.reportAddendum.create({
         data: {
           branchId,
-          worklistItemId: data.worklistItemId || null,
+          worklistItemId: resolvedWorklistItemId,
           reportId: data.reportId || null,
           content: data.content || '',
           status: data.status || 'draft',
@@ -195,6 +202,15 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
       delete updateData.reviewerSignedAt;
       delete updateData.savedAt;
       delete updateData.finalizedAt;
+
+      // If addendum is linked to a report and worklist item was omitted, inherit from report.
+      if ((updateData.worklistItemId === undefined || updateData.worklistItemId === null || updateData.worklistItemId === '') && existing.reportId) {
+        const report = await prisma.report.findFirst({
+          where: { id: existing.reportId, branchId },
+          select: { worklistItemId: true },
+        });
+        updateData.worklistItemId = report?.worklistItemId || null;
+      }
 
       if (data.status === 'finalizado') {
         const effectiveIssuerSignedAt = existing.issuerSignedAt ?? null;
