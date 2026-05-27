@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import type { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
@@ -961,7 +962,7 @@ export default async function reportRoutes(app: FastifyInstance) {
 
       let item: any = null;
       if (publicationCreateData) {
-        const txResult = await prisma.$transaction(async (tx) => {
+        const txResult = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
           const updated = await tx.report.update({ where: { id }, data: updateData });
           await tx.reportPublication.create({ data: publicationCreateData });
           return updated;
