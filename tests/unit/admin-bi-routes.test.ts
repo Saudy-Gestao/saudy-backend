@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+process.env.GROQ_API_KEY = process.env.GROQ_API_KEY || 'test-key';
+
 vi.mock('../../src/modules/admin/lib/prisma', () => ({
   default: {
     user: { findUnique: vi.fn() },
