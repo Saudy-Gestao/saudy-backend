@@ -267,6 +267,7 @@ model Doctor {
     specialties       String[] @default([])
     consultationFee   Decimal? @db.Decimal(10, 2)
     biography         String?  @db.Text
+    signatureImageBase64 String?  @db.Text
     address           String?
     addressNumber     String?
     addressComplement String?
@@ -287,6 +288,9 @@ model Doctor {
 
     medicalRecords MedicalRecord[]
     users          User[]
+    reportsAsReportingDoctor Report[] @relation("reporting_doctor")
+    reportsAsReviewingDoctor Report[] @relation("reviewing_doctor")
+    reportsAsFinalizedDoctor Report[] @relation("finalized_doctor")
 
     @@unique([crm, crmState])
     @@index([branchId])
@@ -1191,8 +1195,14 @@ model Report {
     cpf               String?
     birthDate         String?
     requestingDoctor  String?
+    reportingDoctorId String?
+    reportingDoctorRef Doctor? @relation("reporting_doctor", fields: [reportingDoctorId], references: [id], onDelete: SetNull)
     reportingDoctor   String?
+    reviewingDoctorId String?
+    reviewingDoctorRef Doctor? @relation("reviewing_doctor", fields: [reviewingDoctorId], references: [id], onDelete: SetNull)
     reviewingDoctor   String?
+    finalizedDoctorId String?
+    finalizedDoctorRef Doctor? @relation("finalized_doctor", fields: [finalizedDoctorId], references: [id], onDelete: SetNull)
     description       String?
     conclusion        String?
     notes             String?
@@ -1201,8 +1211,10 @@ model Report {
     scheduledFor      String?
     responsibleDoctor String?
     observation       String?
-    issuerSignedAt    String?
-    reviewerSignedAt  String?
+    issuerSignedAt    DateTime?             @db.Timestamptz(3)
+    reviewerSignedAt  DateTime?             @db.Timestamptz(3)
+    finalizedAt       DateTime?             @db.Timestamptz(3)
+    publications      ReportPublication[]
     addendums         ReportAddendum[]
     temporaryDicomStudies TemporaryDicomStudy[]
     createdAt         DateTime            @default(now())
@@ -1212,6 +1224,9 @@ model Report {
     @@index([branchId])
     @@index([worklistItemId])
     @@index([appointmentId])
+    @@index([reportingDoctorId])
+    @@index([reviewingDoctorId])
+    @@index([finalizedDoctorId])
     @@map("reports")
 }
 
@@ -1299,10 +1314,12 @@ model ReportAddendum {
     reportId         String?             // preferred: link to Report (laudo)
     content          String              @db.Text
     status           String              @default("draft")
-    issuerSignedAt   String?
-    reviewerSignedAt String?
-    savedAt          String?
-    finalizedAt      String?
+    issuerSignedAt   DateTime?          @db.Timestamptz(3)
+    issuerDoctorId   String?
+    issuerDoctor     String?
+    reviewerSignedAt DateTime?          @db.Timestamptz(3)
+    savedAt          DateTime?          @db.Timestamptz(3)
+    finalizedAt      DateTime?          @db.Timestamptz(3)
     createdAt        DateTime            @default(now())
     updatedAt        DateTime            @updatedAt
     isActive         Boolean             @default(true)
@@ -1313,6 +1330,31 @@ model ReportAddendum {
     @@index([worklistItemId, status])
     @@index([reportId, status])
     @@map("report_addendums")
+}
+
+model ReportPublication {
+    id                 String    @id @default(uuid())
+    branchId           String
+    reportId           String
+    report             Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+    version            Int
+    publishedAt        DateTime  @db.Timestamptz(3)
+    description        String?   @db.Text
+    conclusion         String?
+    notes              String?
+    exam               String?
+    requestingDoctor   String?
+    reportingDoctor    String?
+    reviewingDoctor    String?
+    issuerSignedAt     DateTime? @db.Timestamptz(3)
+    reviewerSignedAt   DateTime? @db.Timestamptz(3)
+    createdAt          DateTime  @default(now())
+    updatedAt          DateTime  @updatedAt
+    isActive           Boolean   @default(true)
+
+    @@unique([reportId, version])
+    @@index([branchId, reportId, publishedAt])
+    @@map("report_publications")
 }
 
 model ReportAuditLog {
@@ -2230,3 +2272,4 @@ model CodeChunk {
     @@index([repo, filePath])
     @@map("code_chunks")
 }
+

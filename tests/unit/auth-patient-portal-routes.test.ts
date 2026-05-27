@@ -35,6 +35,15 @@ vi.mock('../../src/modules/auth/lib/prisma', () => ({
       findFirst: vi.fn(),
       count: vi.fn(),
     },
+    reportAuditLog: {
+      findMany: vi.fn(),
+    },
+    reportConfig: {
+      findFirst: vi.fn(),
+    },
+    doctor: {
+      findMany: vi.fn(),
+    },
     preSchedulingDocument: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
@@ -105,6 +114,9 @@ describe('auth patient portal routes', () => {
     mockedPrisma.preSchedulingDocument.findFirst.mockResolvedValue(null);
     mockedPrisma.report.findMany.mockResolvedValue([]);
     mockedPrisma.report.count.mockResolvedValue(0);
+    mockedPrisma.reportAuditLog.findMany.mockResolvedValue([]);
+    mockedPrisma.reportConfig.findFirst.mockResolvedValue(null);
+    mockedPrisma.doctor.findMany.mockResolvedValue([]);
     mockedPrisma.appointment.findMany.mockResolvedValue([]);
     mockedPrisma.appointment.count.mockResolvedValue(0);
     mockedPrisma.appointment.findFirst.mockResolvedValue(null);

@@ -12,6 +12,7 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
     return {
       userId: user?.id || null,
       userName: (user as any)?.name || null,
+      doctorId: (user as any)?.doctorId || null,
       branchId: user?.sector?.branch?.id || null,
     };
   };
@@ -105,6 +106,8 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
           content: { type: 'string' },
           status: { type: 'string' },
           issuerSignedAt: { type: 'string' },
+          issuerDoctorId: { type: 'string' },
+          issuerDoctor: { type: 'string' },
           reviewerSignedAt: { type: 'string' },
           savedAt: { type: 'string' },
           finalizedAt: { type: 'string' },
@@ -129,24 +132,33 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
         }
       }
 
+      let resolvedReportWorklistItemId: string | null = null;
       if (data.reportId) {
-        const report = await prisma.report.findFirst({ where: { id: data.reportId, branchId } });
+        const report = await prisma.report.findFirst({
+          where: { id: data.reportId, branchId },
+          select: { id: true, worklistItemId: true },
+        });
         if (!report) {
           return reply.code(404).send({ error: 'Report (laudo) not found' });
         }
+        resolvedReportWorklistItemId = report.worklistItemId || null;
       }
+
+      const resolvedWorklistItemId = data.worklistItemId || resolvedReportWorklistItemId || null;
 
       const item = await prisma.reportAddendum.create({
         data: {
           branchId,
-          worklistItemId: data.worklistItemId || null,
+          worklistItemId: resolvedWorklistItemId,
           reportId: data.reportId || null,
           content: data.content || '',
           status: data.status || 'draft',
-          issuerSignedAt: data.issuerSignedAt || null,
-          reviewerSignedAt: data.reviewerSignedAt || null,
-          savedAt: data.savedAt || null,
-          finalizedAt: data.finalizedAt || null,
+          issuerSignedAt: null,
+          issuerDoctorId: data.issuerDoctorId || null,
+          issuerDoctor: data.issuerDoctor || null,
+          reviewerSignedAt: null,
+          savedAt: new Date(),
+          finalizedAt: null,
         },
       });
 
@@ -175,7 +187,7 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
       body: { type: 'object' },
     },
   }, async (request, reply) => {
-    const { branchId, userId, userName } = await getLoggedUser(request);
+    const { branchId, userId, userName, doctorId } = await getLoggedUser(request);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { id } = request.params as any;
@@ -185,7 +197,44 @@ export default async function reportAddendumRoutes(app: FastifyInstance) {
       const existing = await prisma.reportAddendum.findFirst({ where: { id, branchId } });
       if (!existing) return reply.code(404).send({ error: 'Report addendum not found' });
 
-      const item = await prisma.reportAddendum.update({ where: { id }, data: { ...data, branchId } });
+      const updateData: any = { ...data, branchId };
+      delete updateData.issuerSignedAt;
+      delete updateData.reviewerSignedAt;
+      delete updateData.savedAt;
+      delete updateData.finalizedAt;
+
+      // If addendum is linked to a report and worklist item was omitted, inherit from report.
+      if ((updateData.worklistItemId === undefined || updateData.worklistItemId === null || updateData.worklistItemId === '') && existing.reportId) {
+        const report = await prisma.report.findFirst({
+          where: { id: existing.reportId, branchId },
+          select: { worklistItemId: true },
+        });
+        updateData.worklistItemId = report?.worklistItemId || null;
+      }
+
+      if (data.status === 'finalizado') {
+        const effectiveIssuerSignedAt = existing.issuerSignedAt ?? null;
+        if (!effectiveIssuerSignedAt) {
+          return reply.code(400).send({ error: 'issuerSignedAt is required to finalize addendum' });
+        }
+        updateData.finalizedAt = new Date();
+      } else if (data.status && data.status !== existing.status && data.status !== 'finalizado') {
+        updateData.finalizedAt = null;
+      }
+
+      const isIssuerSigningNow = Boolean(data.issuerSignedAt) && !existing.issuerSignedAt;
+      if (isIssuerSigningNow) {
+        if (!doctorId) return reply.code(400).send({ error: 'User is not associated with a doctor' });
+        updateData.issuerDoctorId = doctorId;
+        updateData.issuerDoctor = userName || null;
+        updateData.issuerSignedAt = new Date();
+      }
+
+      if (data.content !== undefined || data.status === 'draft') {
+        updateData.savedAt = new Date();
+      }
+
+      const item = await prisma.reportAddendum.update({ where: { id }, data: updateData });
 
       let action = 'adendo_atualizado';
       if (data.status && data.status !== existing.status) {

@@ -40,6 +40,7 @@ describe('care report-addendums routes', () => {
     mockedPrisma.user.findUnique.mockResolvedValue({
       id: 'u-1',
       name: 'User',
+      doctorId: 'd-1',
       sector: { branch: { id: 'b-1' } },
     });
     mockedPrisma.reportAddendum.findMany.mockResolvedValue([{ id: 'a-1' }]);
@@ -101,9 +102,8 @@ describe('care report-addendums routes', () => {
 
     mockedPrisma.reportAddendum.findFirst
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: 'a-1', reportId: 'r-1', status: 'draft', content: '' })
-      .mockResolvedValueOnce({ id: 'a-1', reportId: 'r-1', status: 'draft', content: '' })
-      .mockResolvedValueOnce({ id: 'a-1', reportId: 'r-1', status: 'draft', content: '' })
+      .mockResolvedValueOnce({ id: 'a-1', reportId: 'r-1', status: 'draft', content: '', issuerSignedAt: new Date('2026-05-20T10:00:00Z') })
+      .mockResolvedValueOnce({ id: 'a-1', reportId: 'r-1', status: 'draft', content: '', issuerSignedAt: new Date('2026-05-20T10:00:00Z') })
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'a-1', reportId: 'r-1', status: 'finalizado', content: 'x' });
 
@@ -117,6 +117,11 @@ describe('care report-addendums routes', () => {
 
     res = await app.inject({ method: 'PUT', url: '/report-addendums/a-1', payload: { status: 'finalizado' } });
     expect(res.statusCode).toBe(200);
+
+    mockedPrisma.reportAddendum.findFirst.mockReset();
+    mockedPrisma.reportAddendum.findFirst
+      .mockResolvedValueOnce({ id: 'a-1', reportId: 'r-1', status: 'finalizado', content: 'x' })
+      .mockResolvedValueOnce(null);
 
     res = await app.inject({ method: 'DELETE', url: '/report-addendums/a-1' });
     expect(res.statusCode).toBe(200);

@@ -1,9 +1,10 @@
-import { FastifyInstance } from 'fastify';
+﻿import { FastifyInstance } from 'fastify';
 import crypto from 'crypto';
 import prisma from '../lib/prisma';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { getAnexosStorage } from '../../../lib/storage';
 import { sendPatientPortalAccessCodeEmail } from '../lib/mailer';
+import { generatePatientReportPdfBuffer } from '../lib/patient-report-pdf';
 
 const PATIENT_CODE_EXPIRATION_MINUTES = 10;
 const PATIENT_ACCESS_TOKEN_EXPIRATION = process.env.PATIENT_PORTAL_TOKEN_EXPIRES_IN || '12h';
@@ -75,10 +76,47 @@ function normalizeReportStatus(value?: string | null) {
     .replace(/\s+/g, '_');
 }
 
-function isVisibleToPatientReport(status?: string | null) {
-  const normalized = normalizeReportStatus(status);
+function isVisibleToPatientReport(reportOrStatus?: any) {
+  if (reportOrStatus && typeof reportOrStatus === 'object') {
+    const hasPublication = Array.isArray(reportOrStatus.publications)
+      ? reportOrStatus.publications.length > 0
+      : Boolean(reportOrStatus.latestPublication);
+    if (hasPublication) return true;
+    const normalizedObj = normalizeReportStatus(reportOrStatus.status);
+    return Boolean(normalizedObj && FINAL_REPORT_STATUSES.has(normalizedObj));
+  }
+  const normalized = normalizeReportStatus(reportOrStatus);
   if (!normalized) return false;
   return FINAL_REPORT_STATUSES.has(normalized);
+}
+
+function resolvePatientVisibleReport(report: any) {
+  const latestPublication = Array.isArray(report?.publications) ? report.publications[0] : null;
+  const hasPublishedSnapshot = Boolean(latestPublication);
+  const normalizedStatus = normalizeReportStatus(report?.status);
+  const isCurrentlyFinalized = FINAL_REPORT_STATUSES.has(normalizedStatus);
+  const isUnderReview = hasPublishedSnapshot && !isCurrentlyFinalized;
+
+  return {
+    ...report,
+    latestPublication,
+    publishedVersion: latestPublication?.version ?? null,
+    isUnderReview,
+    patientWarning: isUnderReview
+      ? 'Este laudo está em revisão pela clínica. Você está visualizando a última versão publicada.'
+      : null,
+    description: (hasPublishedSnapshot ? latestPublication?.description : report?.description) || null,
+    conclusion: (hasPublishedSnapshot ? latestPublication?.conclusion : report?.conclusion) || null,
+    notes: (hasPublishedSnapshot ? latestPublication?.notes : report?.notes) || null,
+    exam: (hasPublishedSnapshot ? latestPublication?.exam : report?.exam) || null,
+    requestingDoctor: (hasPublishedSnapshot ? latestPublication?.requestingDoctor : report?.requestingDoctor) || null,
+    reportingDoctor: (hasPublishedSnapshot ? latestPublication?.reportingDoctor : report?.reportingDoctor) || null,
+    reviewingDoctor: (hasPublishedSnapshot ? latestPublication?.reviewingDoctor : report?.reviewingDoctor) || null,
+    reportingDoctorId: report?.reportingDoctorId || null,
+    reviewingDoctorId: report?.reviewingDoctorId || null,
+    issuerSignedAt: (hasPublishedSnapshot ? latestPublication?.issuerSignedAt : report?.issuerSignedAt) || null,
+    reviewerSignedAt: (hasPublishedSnapshot ? latestPublication?.reviewerSignedAt : report?.reviewerSignedAt) || null,
+  };
 }
 
 function normalizeComparableText(value?: string | null) {
@@ -215,6 +253,83 @@ function buildSimplePdfBuffer(title: string, lines: string[]) {
     Buffer.from(`${xrefLines}\n`, 'utf-8'),
     Buffer.from(`${trailer}\n`, 'utf-8'),
   ]);
+}
+
+async function buildPatientReportPdf(report: any, patient: any) {
+  const branchId = patient?.branchId || report?.branchId || null;
+  const config = branchId
+    ? await prisma.reportConfig.findFirst({
+      where: { branchId },
+      select: { reportLayout: true, requiresReviewer: true },
+    })
+    : null;
+  const visibleReport = resolvePatientVisibleReport(report);
+  const contentHtml = String(visibleReport?.description || '').trim() || `<p>${String(visibleReport?.conclusion || '-')}</p>`;
+  const addendums = Array.isArray((report as any)?.addendums) ? (report as any).addendums : [];
+  const doctorIds = Array.from(new Set([
+    String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim(),
+    String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim(),
+    ...addendums.map((item: any) => String(item?.issuerDoctorId || '').trim()),
+  ].filter(Boolean)));
+  const doctors = doctorIds.length > 0
+    ? await prisma.doctor.findMany({
+      where: { id: { in: doctorIds } },
+      select: { id: true, name: true, crmType: true, crm: true, crmState: true, signatureImageBase64: true },
+    })
+    : [];
+  const doctorMap = new Map<string, any>(doctors.map((doctor: any) => [doctor.id, doctor]));
+  const reportingDoctor = doctorMap.get(String(visibleReport?.reportingDoctorId || report?.reportingDoctorId || '').trim());
+  const reviewingDoctor = doctorMap.get(String(visibleReport?.reviewingDoctorId || report?.reviewingDoctorId || '').trim());
+  const getRegistration = (doctor: any) => {
+    if (!doctor) return null;
+    const type = String(doctor.crmType || 'CRM').trim();
+    const crm = String(doctor.crm || '').trim();
+    const state = String(doctor.crmState || '').trim();
+    if (!crm) return null;
+    return `${type} ${crm}${state ? `/${state}` : ''}`;
+  };
+
+  return generatePatientReportPdfBuffer({
+    reportId: String(report?.id || ''),
+    reportContentHtml: contentHtml,
+    reportStatus: visibleReport?.status || null,
+    reportUnderReview: Boolean(visibleReport?.isUnderReview),
+    publishedVersion: visibleReport?.publishedVersion ?? null,
+    patientWarning: visibleReport?.patientWarning || null,
+    patient: {
+      name: patient?.name || report?.patientName || '-',
+      cpf: patient?.cpf || report?.cpf || null,
+    },
+    examName: visibleReport?.exam || report?.appointment?.specialty || '-',
+    appointment: {
+      date: report?.appointment?.date || null,
+      time: report?.appointment?.time || null,
+    },
+    doctors: {
+      requestingDoctor: visibleReport?.requestingDoctor || null,
+      reportingDoctor: visibleReport?.reportingDoctor || null,
+      reviewingDoctor: visibleReport?.reviewingDoctor || null,
+      reportingDoctorSignatureBase64: reportingDoctor?.signatureImageBase64 || null,
+      reviewingDoctorSignatureBase64: reviewingDoctor?.signatureImageBase64 || null,
+      reportingDoctorRegistration: getRegistration(reportingDoctor),
+      reviewingDoctorRegistration: getRegistration(reviewingDoctor),
+    },
+    signatures: {
+      issuerSignedAt: visibleReport?.issuerSignedAt || null,
+      reviewerSignedAt: visibleReport?.reviewerSignedAt || null,
+    },
+    addendums: addendums.map((item: any) => {
+      const issuerDoctor = doctorMap.get(String(item?.issuerDoctorId || '').trim());
+      return {
+        ...item,
+        issuerDoctorName: item.issuerDoctor || null,
+        issuerDoctorSignatureBase64: issuerDoctor?.signatureImageBase64 || null,
+        issuerDoctorRegistration: getRegistration(issuerDoctor),
+      };
+    }),
+    layout: (config as any)?.reportLayout || null,
+    requiresReviewer: (config as any)?.requiresReviewer !== false,
+  });
 }
 
 async function hasAnamnesisTemplateForAppointment(branchId: string | null, appointment: any) {
@@ -516,6 +631,12 @@ const resolvePortalProfilesForPrincipal = async (principalPatient: any, activePa
 };
 
 const buildReportPdfLines = (patient: any, report: any) => ([
+  ...(report.isUnderReview ? [
+    '*** LAUDO EM REVISAO PELA CLINICA ***',
+    'Você está visualizando a última versão publicada enquanto uma atualização está em andamento.',
+    `Versao publicada: v${Math.max(1, Number(report.publishedVersion || 0))}`,
+    '---',
+  ] : []),
   `Paciente: ${patient.name || report.patientName || '-'}`,
   `CPF: ${patient.cpf || report.cpf || '-'}`,
   `Exame: ${report.exam || report.appointment?.specialty || '-'}`,
@@ -690,7 +811,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Paciente não encontrado' });
     }
 
-    // Validate birthDate — must match at least one record
+    // Validate birthDate â€” must match at least one record
     type PatientRow = (typeof patients)[number];
     const matchingPatients = patients.filter((p: PatientRow) => {
       const stored = formatDateOnly(p.birthDate);
@@ -1035,12 +1156,21 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
             { appointment: { is: { patientCpf: patient.cpf } } },
           ],
         },
-        select: { id: true, status: true },
+        select: {
+          id: true,
+          status: true,
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+            select: { id: true },
+          },
+        },
         take: 500,
       }),
     ]);
 
-    const reportsCount = reportsRaw.filter((item: any) => isVisibleToPatientReport(item?.status)).length;
+    const reportsCount = reportsRaw.filter((item: any) => isVisibleToPatientReport(item)).length;
 
     return {
       patient: {
@@ -1299,6 +1429,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           appointment: patientAppointmentWhere,
         },
         include: {
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+          },
           appointment: {
             select: {
               id: true,
@@ -1329,6 +1464,24 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           exam: true,
           updatedAt: true,
           createdAt: true,
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              version: true,
+              description: true,
+              conclusion: true,
+              notes: true,
+              exam: true,
+              requestingDoctor: true,
+              reportingDoctor: true,
+              reviewingDoctor: true,
+              issuerSignedAt: true,
+              reviewerSignedAt: true,
+            },
+          },
           appointment: {
             select: {
               id: true,
@@ -1345,7 +1498,9 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       }),
     ]);
 
-    const reportItems = reportsRaw.filter((report: any) => isVisibleToPatientReport(report?.status));
+    const reportItems = reportsRaw
+      .filter((report: any) => isVisibleToPatientReport(report))
+      .map((report: any) => resolvePatientVisibleReport(report));
 
     const mergedItems = [
       ...preSchedulingDocs.map((doc: any) => ({
@@ -1474,6 +1629,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           ],
         },
         include: {
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+          },
           appointment: {
             select: {
               date: true,
@@ -1485,13 +1645,13 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         },
       });
       if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
-      if (!isVisibleToPatientReport(report.status)) {
+      if (!isVisibleToPatientReport(report)) {
         return reply.code(400).send({ error: 'Laudo ainda não liberado para download' });
       }
-      const pdf = buildSimplePdfBuffer('Laudo Médico - Saudy', buildReportPdfLines(patient, report));
+      const pdf = await buildPatientReportPdf(report, patient);
       const fileName = `laudo-${report.id}.pdf`;
       reply.header('Content-Type', 'application/pdf');
-      reply.header('Content-Disposition', `inline; filename="${fileName}"`);
+      reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
       reply.header('Content-Length', String(pdf.length));
       return reply.send(pdf);
     }
@@ -1852,6 +2012,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         take: Math.max(limit * 3, limit),
         skip: offset,
         include: {
+          publications: {
+            where: { isActive: true },
+            orderBy: { version: 'desc' },
+            take: 1,
+          },
           appointment: {
             select: {
               id: true,
@@ -1876,9 +2041,83 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       prisma.report.count({ where }),
     ]);
 
-    const items = rawItems.filter((item: any) => isVisibleToPatientReport(item?.status)).slice(0, limit);
+    const visibleRawItems = rawItems
+      .filter((item: any) => isVisibleToPatientReport(item))
+      .slice(0, limit);
+    const reportIds = visibleRawItems.map((item: any) => String(item.id));
+    const addendumAuditLogs = reportIds.length > 0 ? await prisma.reportAuditLog.findMany({
+      where: {
+        reportId: { in: reportIds },
+        action: { in: ['adendo_finalizado', 'adendo_removido'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        reportId: true,
+        action: true,
+        createdAt: true,
+      },
+    }) : [];
+
+    const addendumEventsByReport = new Map<string, {
+      latestAddendumPublishedAt: Date | null;
+      latestAddendumRemovedAt: Date | null;
+      addendumEvents: Array<{ type: 'published' | 'removed'; createdAt: Date }>;
+    }>();
+    for (const log of addendumAuditLogs as any[]) {
+      const key = String(log.reportId || '');
+      if (!key) continue;
+      const current = addendumEventsByReport.get(key) || {
+        latestAddendumPublishedAt: null,
+        latestAddendumRemovedAt: null,
+        addendumEvents: [],
+      };
+      if (log.action === 'adendo_finalizado' && !current.latestAddendumPublishedAt) current.latestAddendumPublishedAt = log.createdAt;
+      if (log.action === 'adendo_removido' && !current.latestAddendumRemovedAt) current.latestAddendumRemovedAt = log.createdAt;
+      if (log.action === 'adendo_finalizado') current.addendumEvents.push({ type: 'published', createdAt: log.createdAt });
+      if (log.action === 'adendo_removido') current.addendumEvents.push({ type: 'removed', createdAt: log.createdAt });
+      addendumEventsByReport.set(key, current);
+    }
+
+    const items = visibleRawItems.map((item: any) => {
+      const visible = resolvePatientVisibleReport(item);
+      const events = addendumEventsByReport.get(String(item.id));
+      return {
+        ...visible,
+        latestAddendumPublishedAt: events?.latestAddendumPublishedAt || null,
+        latestAddendumRemovedAt: events?.latestAddendumRemovedAt || null,
+        addendumEvents: (events?.addendumEvents || []).map((event) => ({
+          type: event.type,
+          createdAt: event.createdAt,
+        })),
+      };
+    });
 
     return { items, total: totalRaw };
+  });
+
+  app.get('/patient-portal/me/report-layout', {
+    schema: {
+      summary: 'Get patient report layout configuration',
+      tags: ['Auth'],
+      security: [{ bearerAuth: [] }],
+    },
+  }, async (request, reply) => {
+    const payload = await requirePatientPortalAuth(request, reply);
+    if (!payload || (payload as any).error) return;
+
+    const patient = await getPatientFromPayload(payload);
+    if (!patient) return reply.code(404).send({ error: 'Paciente não encontrado' });
+    if (!patient.branchId) return reply.code(404).send({ error: 'Filial do paciente não encontrada' });
+
+    const config = await prisma.reportConfig.findFirst({
+      where: { branchId: patient.branchId },
+      select: { reportLayout: true },
+    });
+
+    return {
+      branchId: patient.branchId,
+      reportLayout: (config as any)?.reportLayout || null,
+    };
   });
 
   app.post('/patient-portal/me/reports/:reportId/share-link', {
@@ -1923,10 +2162,17 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
           { appointment: { is: { patientCpf: patient.cpf } } },
         ],
       },
+      include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
+      },
     });
 
     if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
-    if (!isVisibleToPatientReport(report.status)) {
+    if (!isVisibleToPatientReport(report)) {
       return reply.code(400).send({ error: 'Laudo ainda não liberado para compartilhamento' });
     }
 
@@ -1983,6 +2229,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         ],
       },
       include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
         appointment: {
           select: {
             date: true,
@@ -1991,29 +2242,18 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
             doctorName: true,
           },
         },
+        addendums: {
+          where: { isActive: true, status: 'finalizado' },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
     if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
-    if (!isVisibleToPatientReport(report.status)) {
+    if (!isVisibleToPatientReport(report)) {
       return reply.code(400).send({ error: 'Laudo ainda não liberado para download' });
     }
-
-    const lines = [
-      `Paciente: ${patient.name || report.patientName || '-'}`,
-      `CPF: ${patient.cpf || report.cpf || '-'}`,
-      `Exame: ${report.exam || report.appointment?.specialty || '-'}`,
-      `Data/Hora: ${String(report.appointment?.date || '-')} ${String(report.appointment?.time || '')}`.trim(),
-      `Médico solicitante: ${report.requestingDoctor || '-'}`,
-      `Médico laudo: ${report.reportingDoctor || '-'}`,
-      `Status: ${report.status || '-'}`,
-      '---',
-      `Descrição: ${report.description || '-'}`,
-      `Conclusão: ${report.conclusion || '-'}`,
-      `Observações: ${report.notes || '-'}`,
-    ];
-
-    const pdf = buildSimplePdfBuffer('Laudo Médico - Saudy', lines);
+    const pdf = await buildPatientReportPdf(report, patient);
     const fileName = `laudo-${report.id}.pdf`;
     reply.header('Content-Type', 'application/pdf');
     reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
@@ -2076,6 +2316,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         ],
       },
       include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
         appointment: {
           select: {
             date: true,
@@ -2084,29 +2329,18 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
             doctorName: true,
           },
         },
+        addendums: {
+          where: { isActive: true, status: 'finalizado' },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
     if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
-    if (!isVisibleToPatientReport(report.status)) {
+    if (!isVisibleToPatientReport(report)) {
       return reply.code(400).send({ error: 'Laudo ainda não liberado para download' });
     }
-
-    const lines = [
-      `Paciente: ${patient.name || report.patientName || '-'}`,
-      `CPF: ${patient.cpf || report.cpf || '-'}`,
-      `Exame: ${report.exam || report.appointment?.specialty || '-'}`,
-      `Data/Hora: ${String(report.appointment?.date || '-')} ${String(report.appointment?.time || '')}`.trim(),
-      `Médico solicitante: ${report.requestingDoctor || '-'}`,
-      `Médico laudo: ${report.reportingDoctor || '-'}`,
-      `Status: ${report.status || '-'}`,
-      '---',
-      `Descrição: ${report.description || '-'}`,
-      `Conclusão: ${report.conclusion || '-'}`,
-      `Observações: ${report.notes || '-'}`,
-    ];
-
-    const pdf = buildSimplePdfBuffer('Laudo Médico - Saudy', lines);
+    const pdf = await buildPatientReportPdf(report, patient);
     const fileName = `laudo-${report.id}.pdf`;
     reply.header('Content-Type', 'application/pdf');
     reply.header('Content-Disposition', `attachment; filename="${fileName}"`);
@@ -2115,7 +2349,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     return reply.send(pdf);
   });
 
-  // ── DICOM helper: find worklist item owned by patient ──────────────────────
+  // â”€â”€ DICOM helper: find worklist item owned by patient â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function getPatientWorklistItem(patient: any, reportId: string) {
     const report = await prisma.report.findFirst({
       where: {
@@ -2131,6 +2365,12 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       select: {
         id: true,
         status: true,
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+          select: { id: true },
+        },
         worklistItem: { select: { id: true, dicomStudyUid: true } },
       },
     });
@@ -2153,7 +2393,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     const { reportId } = request.params as { reportId: string };
     const report = await getPatientWorklistItem(patient, reportId);
     if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
-    if (!isVisibleToPatientReport(report.status)) return reply.code(403).send({ error: 'Laudo não disponível' });
+    if (!isVisibleToPatientReport(report)) return reply.code(403).send({ error: 'Laudo não disponível' });
     if (!report.worklistItem) return reply.code(404).send({ error: 'Sem imagens DICOM para este laudo' });
 
     const files = await prisma.dicomFile.findMany({
@@ -2195,7 +2435,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     const { seriesUid } = request.query as { seriesUid?: string };
     const report = await getPatientWorklistItem(patient, reportId);
     if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
-    if (!isVisibleToPatientReport(report.status)) return reply.code(403).send({ error: 'Laudo não disponível' });
+    if (!isVisibleToPatientReport(report)) return reply.code(403).send({ error: 'Laudo não disponível' });
     if (!report.worklistItem) return reply.code(404).send({ error: 'Sem imagens DICOM para este laudo' });
 
     const resolvedSeries = seriesUid === '__NO_SERIES__' ? null : (seriesUid ?? undefined);
@@ -2238,7 +2478,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     const { reportId, fileId } = request.params as { reportId: string; fileId: string };
     const report = await getPatientWorklistItem(patient, reportId);
     if (!report) return reply.code(404).send({ error: 'Laudo não encontrado' });
-    if (!isVisibleToPatientReport(report.status)) return reply.code(403).send({ error: 'Laudo não disponível' });
+    if (!isVisibleToPatientReport(report)) return reply.code(403).send({ error: 'Laudo não disponível' });
     if (!report.worklistItem) return reply.code(404).send({ error: 'Sem imagens DICOM' });
 
     const dicomFile = await prisma.dicomFile.findFirst({
@@ -2343,6 +2583,11 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         ],
       },
       include: {
+        publications: {
+          where: { isActive: true },
+          orderBy: { version: 'desc' },
+          take: 1,
+        },
         appointment: {
           select: {
             date: true,
@@ -2357,7 +2602,7 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Laudo não encontrado para este paciente' });
     }
 
-    if (!isVisibleToPatientReport(report.status)) {
+    if (!isVisibleToPatientReport(report)) {
       return reply.code(400).send({ error: 'Este laudo ainda não está liberado para entrega' });
     }
 
