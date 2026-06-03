@@ -94,7 +94,7 @@ app.register(dicomWebProxyModule, { prefix: '/dicom-web' });
 app.register(proceduresModule, { prefix: '/procedures' });
 
 // start Orthanc poller (if configured)
-//startOrthancPoller();
+startOrthancPoller();
 startTemporaryDicomStudyCleanup();
 
 // start DICOM MWL SCP
