@@ -5,8 +5,9 @@ import prisma from '../../src/modules/care/lib/prisma';
 import WhatsAppMessageBuilder from '../../src/modules/care/lib/whatsapp-message-builder';
 import { syncBranchHsmTemplates } from '../../src/modules/care/lib/whatsapp-hsm-sync';
 
-vi.mock('uuid', () => ({
-  v4: vi.fn(() => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+vi.mock('crypto', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('crypto')>()),
+  randomUUID: vi.fn(() => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
 }));
 
 vi.mock('../../src/modules/care/lib/whatsapp-message-builder', () => ({

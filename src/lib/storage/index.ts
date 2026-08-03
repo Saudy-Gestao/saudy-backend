@@ -1,22 +1,24 @@
 /**
  * Storage Abstraction Layer
  * ─────────────────────────────────────────────────────────────────────────────
- * Suporta dois providers controlados pela variável de ambiente STORAGE_PROVIDER:
+ * Suporta múltiplos providers controlados pela variável de ambiente STORAGE_PROVIDER:
  *
- *   STORAGE_PROVIDER=gcs    → Google Cloud Storage (padrão)
- *   STORAGE_PROVIDER=local  → Sistema de arquivos local (/app/uploads/storage/)
+ *   STORAGE_PROVIDER=supabase → Supabase Storage (padrão)
+ *   STORAGE_PROVIDER=gcs      → Google Cloud Storage (legado)
+ *   STORAGE_PROVIDER=local    → Sistema de arquivos local (/app/uploads/storage/)
  *
  * A lógica de negócio usa StorageProvider sem saber qual driver está ativo.
  * Troca de provider: basta alterar a env e reiniciar o container.
  *
- * Banco DICOM   → GOOGLE_STORAGE_BUCKET_DICOM  / LOCAL_STORAGE_BASE_DIR
- * Banco Anexos  → GOOGLE_STORAGE_BUCKET_ANEXOS / LOCAL_STORAGE_BASE_DIR
+ * Banco DICOM   → SUPABASE_STORAGE_BUCKET_DICOM  / GOOGLE_STORAGE_BUCKET_DICOM  / LOCAL_STORAGE_BASE_DIR
+ * Banco Anexos  → SUPABASE_STORAGE_BUCKET_ANEXOS / GOOGLE_STORAGE_BUCKET_ANEXOS / LOCAL_STORAGE_BASE_DIR
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import { Readable } from 'stream';
 import { GcsStorageProvider } from './gcs-provider';
 import { LocalStorageProvider } from './local-provider';
+import { SupabaseStorageProvider } from './supabase-provider';
 
 export interface StorageUploadOptions {
   contentType?: string;
@@ -48,11 +50,19 @@ let _anexosProvider: StorageProvider | null = null;
 type BucketRole = 'dicom' | 'anexos';
 
 function buildProvider(role: BucketRole): StorageProvider {
-  const providerType = (process.env.STORAGE_PROVIDER || 'gcs').toLowerCase().trim();
+  const providerType = (process.env.STORAGE_PROVIDER || 'supabase').toLowerCase().trim();
 
   if (providerType === 'local') {
     const baseDir = process.env.LOCAL_STORAGE_BASE_DIR || '/app/uploads/storage';
     return new LocalStorageProvider(baseDir, role);
+  }
+
+  if (providerType === 'supabase') {
+    const bucketName = role === 'dicom'
+      ? (process.env.SUPABASE_STORAGE_BUCKET_DICOM || 'dicom')
+      : (process.env.SUPABASE_STORAGE_BUCKET_ANEXOS || 'anexos');
+
+    return new SupabaseStorageProvider(bucketName);
   }
 
   if (providerType === 'gcs') {
@@ -66,7 +76,7 @@ function buildProvider(role: BucketRole): StorageProvider {
     return new GcsStorageProvider(bucketName);
   }
 
-  throw new Error(`[storage] STORAGE_PROVIDER desconhecido: "${providerType}". Use "gcs" ou "local".`);
+  throw new Error(`[storage] STORAGE_PROVIDER desconhecido: "${providerType}". Use "supabase", "gcs" ou "local".`);
 }
 
 /** Retorna (e cria em lazy) o provider para arquivos DICOM. */

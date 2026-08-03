@@ -2,6 +2,7 @@ import app from './app';
 import prisma from './lib/prisma';
 import { syncAllBranchesHsmTemplates } from './modules/care/lib/whatsapp-hsm-sync';
 import WhatsAppSchedulerJob from './modules/care/lib/whatsapp-scheduler-job';
+import { startTemporaryDicomStudyCleanup } from './modules/dicom/temporary-prior-studies';
 
 const HSM_SYNC_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_HSM_SYNC_INTERVAL_MINUTES) || 15);
 const WHATSAPP_AUTOMATION_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_AUTOMATION_INTERVAL_MINUTES) || 5);
@@ -100,6 +101,7 @@ const start = async () => {
     startWhatsAppHsmAutoSync();
     startWhatsAppAutomation();
     startWhatsAppHumanTimeoutAutomation();
+    startTemporaryDicomStudyCleanup();
   } catch (error) {
     app.log.error(error);
     process.exit(1);

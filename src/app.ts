@@ -12,9 +12,7 @@ import whatsappWebhookRoutes from './modules/care/routes/whatsapp-webhook';
 import proceduresModule from './modules/procedures';
 import dicomModule from './modules/dicom';
 import dicomWebProxyModule from './modules/dicom-web-proxy';
-import { startOrthancPoller } from './modules/dicom/orthanc';
 import { MwlScp } from './modules/dicom/mwl';
-import { startTemporaryDicomStudyCleanup } from './modules/dicom/temporary-prior-studies';
 
 const app = fastify();
 
@@ -93,9 +91,11 @@ app.register(dicomModule, { prefix: '/dicom' });
 app.register(dicomWebProxyModule, { prefix: '/dicom-web' });
 app.register(proceduresModule, { prefix: '/procedures' });
 
-// start Orthanc poller (if configured)
-startOrthancPoller();
-startTemporaryDicomStudyCleanup();
+// Orthanc poller and the temporary DICOM cleanup are NOT started here on purpose:
+// this app now runs as a Vercel serverless function, which can't keep a setInterval
+// alive between requests. The DICOM cleanup runs via Vercel Cron (api/cron/dicom-cleanup.ts).
+// The Orthanc poller (10s interval) has no cron equivalent yet — see api/cron/ for the
+// pattern to follow if/when it needs to come back.
 
 // start DICOM MWL SCP
 const mwlScp = new MwlScp();

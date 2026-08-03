@@ -42,6 +42,26 @@ describe('storage index', () => {
     expect(dicom3).not.toBe(dicom1);
   });
 
+  it('defaults to and builds supabase providers with role-specific buckets', async () => {
+    process.env.SUPABASE_URL = 'https://project.supabase.co';
+    process.env.SUPABASE_SECRET_KEY = 'secret-key';
+    process.env.SUPABASE_STORAGE_BUCKET_DICOM = 'dicom-bucket';
+    process.env.SUPABASE_STORAGE_BUCKET_ANEXOS = 'anexos-bucket';
+
+    const mod = await import('../../src/lib/storage');
+
+    const dicom = mod.getDicomStorage();
+    const anexos = mod.getAnexosStorage();
+
+    expect((dicom as any).bucketName).toBe('dicom-bucket');
+    expect((anexos as any).bucketName).toBe('anexos-bucket');
+
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SECRET_KEY;
+    delete process.env.SUPABASE_STORAGE_BUCKET_DICOM;
+    delete process.env.SUPABASE_STORAGE_BUCKET_ANEXOS;
+  });
+
   it('builds gcs providers with role-specific buckets', async () => {
     process.env.STORAGE_PROVIDER = 'gcs';
     process.env.GOOGLE_STORAGE_BUCKET = 'fallback-bucket';
