@@ -49,10 +49,6 @@ function isBcryptHash(value: string) {
   return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value);
 }
 
-function isEtechdevDomain(email: string) {
-  return /@etechdev(?:\.[a-z0-9-]+)*$/i.test(email.trim());
-}
-
 async function validateUserPassword(userId: string, storedPassword: string, incomingPassword: string) {
   if (!storedPassword || !isBcryptHash(storedPassword)) {
     return false;
@@ -185,10 +181,6 @@ export default async function authRoutes(app: FastifyInstance) {
 
     if (!normalizedName || !normalizedEmail || !incomingPassword) {
       return reply.code(400).send({ error: 'Preencha todos os campos obrigatórios' });
-    }
-
-    if (!isEtechdevDomain(normalizedEmail)) {
-      return reply.code(400).send({ error: 'Apenas e-mails do domínio @etechdev são permitidos' });
     }
 
     if (!validateStrongPassword(incomingPassword)) {

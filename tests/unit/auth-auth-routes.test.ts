@@ -161,13 +161,6 @@ describe('auth routes', () => {
     });
     expect(required.statusCode).toBe(400);
 
-    const domain = await app.inject({
-      method: 'POST',
-      url: '/adm/request-register-code',
-      payload: { name: 'ADM', email: 'adm@gmail.com', password: 'Strong@123' },
-    });
-    expect(domain.statusCode).toBe(400);
-
     const weakPass = await app.inject({
       method: 'POST',
       url: '/adm/request-register-code',
