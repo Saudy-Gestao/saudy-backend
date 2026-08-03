@@ -120,7 +120,11 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
             isActive: true,
           },
           OR: [
-            { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED'] as any } },
+            // CONVERTED is included so therapies that already went through PIT
+            // conversion don't just disappear from this screen — they keep
+            // showing as authorized (see mappedStatuses below, which only
+            // counts a CONVERTED entry as AUTHORIZED if it actually was).
+            { status: { in: ['PENDING_AUTHORIZATION', 'AUTHORIZED', 'CONVERTED'] as any } },
             {
               AND: [
                 { status: 'CANCELED' as any },
@@ -192,6 +196,10 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
       const mappedStatuses = entries.map((item: any) => {
         const raw = String(item?.status || '').toUpperCase();
         if (raw === 'AUTHORIZED') return 'AUTHORIZED' as AuthorizationStatus;
+        // A converted reservation only reflects a real authorization if it actually
+        // went through that step (authorizedAt set) — conversion is also allowed
+        // straight from RESERVED, which was never authorized.
+        if (raw === 'CONVERTED' && item?.authorizedAt) return 'AUTHORIZED' as AuthorizationStatus;
         if (raw === 'CANCELED' && String(item?.notes || '').includes('[AUTH_DENIED]')) return 'DENIED' as AuthorizationStatus;
         return 'PENDING' as AuthorizationStatus;
       });
