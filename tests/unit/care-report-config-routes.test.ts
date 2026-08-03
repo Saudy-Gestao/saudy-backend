@@ -65,6 +65,13 @@ describe('care report-config routes', () => {
     let res = await app.inject({ method: 'PUT', url: '/report-config', payload: { requiresReviewer: 'yes' } });
     expect(res.statusCode).toBe(400);
 
+    // reportLayout must be an object (not string/null/array)
+    res = await app.inject({ method: 'PUT', url: '/report-config', payload: { reportLayout: 'invalid' } });
+    expect(res.statusCode).toBe(400);
+
+    res = await app.inject({ method: 'PUT', url: '/report-config', payload: { reportLayout: ['a', 'b'] } });
+    expect(res.statusCode).toBe(400);
+
     mockedPrisma.reportConfig.findFirst.mockResolvedValueOnce({ id: 'c-1', branchId: 'b-1', requiresReviewer: true });
     mockedPrisma.reportConfig.update.mockResolvedValueOnce({ id: 'c-1', branchId: 'b-1', requiresReviewer: false });
     res = await app.inject({ method: 'PUT', url: '/report-config', payload: { requiresReviewer: false } });

@@ -35,6 +35,7 @@ describe('server bootstrap', () => {
     const processNoShows = vi.fn().mockResolvedValue({ sent: 1 });
     const processConfirmations = vi.fn().mockResolvedValue({ sent: 2 });
     const processHumanConversationTimeouts = vi.fn().mockResolvedValue({ closed: 1 });
+    const startTemporaryDicomStudyCleanup = vi.fn();
 
     const setIntervalMock = vi.fn().mockReturnValue(123);
 
@@ -74,6 +75,10 @@ describe('server bootstrap', () => {
       },
     }));
 
+    vi.doMock('../../src/modules/dicom/temporary-prior-studies', () => ({
+      startTemporaryDicomStudyCleanup,
+    }));
+
     await import('../../src/server');
     await flushPromises();
 
@@ -84,6 +89,7 @@ describe('server bootstrap', () => {
     expect(processNoShows).toHaveBeenCalledTimes(1);
     expect(processConfirmations).toHaveBeenCalledTimes(1);
     expect(processHumanConversationTimeouts).toHaveBeenCalledTimes(1);
+    expect(startTemporaryDicomStudyCleanup).toHaveBeenCalledTimes(1);
 
     expect(setIntervalMock).toHaveBeenCalledTimes(3);
     expect(onHandlers.SIGINT).toBeTypeOf('function');

@@ -8,7 +8,11 @@ import { hasPermanentStudyReference, uploadTemporaryPriorStudy } from '../../src
 
 vi.mock('../../src/modules/care/lib/prisma', () => ({
   default: {
+    $transaction: vi.fn(),
     user: { findUnique: vi.fn() },
+    doctor: { findMany: vi.fn() },
+    reportConfig: { findFirst: vi.fn() },
+    reportPublication: { findFirst: vi.fn(), create: vi.fn() },
     report: {
       findMany: vi.fn(),
       count: vi.fn(),
@@ -19,6 +23,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     },
     reportAuditLog: {
       create: vi.fn(),
+      findFirst: vi.fn(),
     },
     temporaryDicomStudy: {
       findMany: vi.fn(),
@@ -66,8 +71,22 @@ describe('care reports routes', () => {
     vi.resetAllMocks();
     mockedNormalizeCpf.mockImplementation((value: string) => String(value || '').replace(/\D/g, ''));
     mockedIsValidCpf.mockReturnValue(true);
-    mockedPrisma.user.findUnique.mockResolvedValue({ id: 'u-1', name: 'Doc', sector: { branch: { id: 'b-1' } } });
+    mockedPrisma.user.findUnique.mockResolvedValue({
+      id: 'u-1',
+      name: 'Doc',
+      sector: { branch: { id: 'b-1' } },
+      doctor: { id: 'd-1', name: 'Doc Med' },
+    });
+    mockedPrisma.$transaction.mockImplementation(async (callback: any) => callback({
+      report: { update: mockedPrisma.report.update },
+      reportPublication: { create: mockedPrisma.reportPublication.create },
+    }));
+    mockedPrisma.doctor.findMany.mockResolvedValue([]);
+    mockedPrisma.reportConfig.findFirst.mockResolvedValue({ requiresReviewer: true, reportLayout: null });
+    mockedPrisma.reportPublication.findFirst.mockResolvedValue(null);
+    mockedPrisma.reportPublication.create.mockResolvedValue({ id: 'rp-1', version: 1 });
     mockedPrisma.reportAuditLog.create.mockResolvedValue({});
+    mockedPrisma.reportAuditLog.findFirst.mockResolvedValue(null);
     mockedPrisma.temporaryDicomStudy.findMany.mockResolvedValue([]);
     mockedPrisma.temporaryDicomStudy.findFirst.mockResolvedValue(null);
     mockedPrisma.temporaryDicomStudy.update.mockResolvedValue({});
@@ -377,7 +396,7 @@ describe('care reports routes', () => {
     expect(detailsWithDoctors.medicoEmissor).toBe('Dr Emissor');
     expect(detailsWithDoctors.medicoRevisor).toBe('Dr Revisor');
 
-    // issuerSignedAt truthy, reportingDoctor = null → fallback to userName
+    // issuerSignedAt truthy, reportingDoctor = null → medicoEmissor remains null
     mockedPrisma.report.findFirst.mockResolvedValueOnce({ id: 'r-1', status: 'rascunho', description: null, issuerSignedAt: null, reviewerSignedAt: null });
     mockedPrisma.report.update.mockResolvedValueOnce({
       ...baseUpdated,
@@ -389,7 +408,7 @@ describe('care reports routes', () => {
     res = await app.inject({ method: 'PUT', url: '/reports/r-1', payload: { issuerSignedAt: '2026-04-13T10:00:00Z', reviewerSignedAt: '2026-04-13T11:00:00Z' } });
     expect(res.statusCode).toBe(200);
     const detailsNoDoc = JSON.parse(mockedPrisma.reportAuditLog.create.mock.calls.at(-1)[0].data.details);
-    expect(detailsNoDoc.medicoEmissor).toBe('Doc');
+    expect(detailsNoDoc.medicoEmissor).toBeNull();
 
     // valid cpf on PUT → covers data.cpf = digits branch
     mockedPrisma.report.findFirst.mockResolvedValueOnce({ id: 'r-1', status: 'rascunho', description: null, issuerSignedAt: null, reviewerSignedAt: null });

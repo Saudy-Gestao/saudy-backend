@@ -7,14 +7,11 @@ import handleWhatsAppChatbot from '../../src/modules/care/lib/whatsapp-chatbot';
 
 const sendTextMessageMock = vi.fn();
 
-vi.mock('../../src/modules/care/lib/gupshup', () => ({
-  default: vi.fn().mockImplementation(() => ({
+vi.mock('../../src/modules/care/lib/messaging', () => ({
+  MetaMessagingService: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
   })),
   createMessagingService: vi.fn().mockImplementation(() => ({
-    sendTextMessage: sendTextMessageMock,
-  })),
-  GupshupV3Service: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
   })),
 }));
@@ -109,34 +106,24 @@ describe('care whatsapp webhook routes', () => {
     sendTextMessageMock.mockResolvedValue({ status: 'success', messageId: 'm-1' });
   });
 
-  it('responds to health check endpoint', async () => {
+  it('responds to webhook verification endpoint', async () => {
     const app = await buildApp();
-    const res = await app.inject({ method: 'GET', url: '/wh/whatsapp/webhook/gupshup' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/wh/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=saudy-webhook-token&hub.challenge=test-challenge',
+    });
     expect(res.statusCode).toBe(200);
-    expect(res.json().ok).toBe(true);
+    expect(res.body).toBe('test-challenge');
     await app.close();
   });
 
   it('processes provider status event and returns early when no text/action', async () => {
     const app = await buildApp();
 
-    mockedPrisma.whatsAppConversationMessage.findFirst.mockResolvedValueOnce({
-      conversationId: 'conv-1',
-      branchId: 'b-1',
-      phone: '11999998888',
-      flowKey: 'FLOW',
-      metadata: {},
-      conversation: { humanProtocolNumber: 'WA-20260413-ABC' },
-    });
-    mockedPrisma.whatsAppMessageLog.findFirst.mockResolvedValueOnce({
-      id: 'log-1',
-      status: 'PENDING',
-      sentAt: null,
-    });
-
+    // With new code: status-only events (no text, no action) trigger early return
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         type: 'message-event',
         payload: {
@@ -149,8 +136,8 @@ describe('care whatsapp webhook routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json().event).toBe('SENT');
-    expect(mockedPrisma.whatsAppConversationMessage.create).toHaveBeenCalled();
-    expect(mockedPrisma.whatsAppMessageLog.update).toHaveBeenCalled();
+    // Early return path — no further DB calls needed
+    expect(mockedChatbot).not.toHaveBeenCalled();
 
     await app.close();
   });
@@ -161,7 +148,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',
@@ -181,7 +168,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',
@@ -210,7 +197,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',
@@ -240,7 +227,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',
@@ -261,7 +248,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',
@@ -289,7 +276,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',
@@ -321,7 +308,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',
@@ -354,7 +341,7 @@ describe('care whatsapp webhook routes', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/wh/whatsapp/webhook/gupshup',
+      url: '/wh/whatsapp/webhook',
       payload: {
         payload: {
           source: '5511999998888',

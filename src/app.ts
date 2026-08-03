@@ -91,6 +91,12 @@ app.register(dicomModule, { prefix: '/dicom' });
 app.register(dicomWebProxyModule, { prefix: '/dicom-web' });
 app.register(proceduresModule, { prefix: '/procedures' });
 
+// Orthanc poller and the temporary DICOM cleanup are NOT started here on purpose:
+// this app now runs as a Vercel serverless function, which can't keep a setInterval
+// alive between requests. The DICOM cleanup runs via Vercel Cron (api/cron/dicom-cleanup.ts).
+// The Orthanc poller (10s interval) has no cron equivalent yet — see api/cron/ for the
+// pattern to follow if/when it needs to come back.
+
 // start DICOM MWL SCP
 const mwlScp = new MwlScp();
 mwlScp.start();

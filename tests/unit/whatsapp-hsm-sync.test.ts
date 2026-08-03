@@ -17,10 +17,26 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
 
 const mockedPrisma = prisma as any;
 
+// Helper to mock successful WABA ID lookup + templates fetch
+function mockWabaAndTemplates(templates: any[]) {
+  (globalThis.fetch as any)
+    // First call: getWabaId
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ whatsapp_business_account: { id: 'waba-1' } }),
+    })
+    // Second call: fetchMetaTemplates
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ data: templates, paging: {} }),
+    });
+}
+
 describe('whatsapp hsm sync', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (globalThis as any).fetch = vi.fn();
+    delete process.env.WHATSAPP_WABA_ID;
 
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValue({
       branchId: 'b-1',
@@ -54,30 +70,29 @@ describe('whatsapp hsm sync', () => {
     await expect(syncBranchHsmTemplates('b-1')).rejects.toThrow('Credenciais do WhatsApp');
   });
 
-  it('throws when gupshup list request fails', async () => {
-    (globalThis.fetch as any).mockResolvedValueOnce({ ok: false, text: async () => 'provider down' });
+  it('throws when meta list request fails', async () => {
+    // WABA ID lookup succeeds, but templates fetch fails
+    (globalThis.fetch as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ whatsapp_business_account: { id: 'waba-1' } }),
+      })
+      .mockResolvedValueOnce({ ok: false, text: async () => 'provider down' });
 
-    await expect(syncBranchHsmTemplates('b-1')).rejects.toThrow('Erro ao consultar Gupshup');
+    await expect(syncBranchHsmTemplates('b-1')).rejects.toThrow('Erro ao listar templates da Meta');
   });
 
   it('syncs templates by name, id and base-name variants', async () => {
-    (globalThis.fetch as any).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        status: 'success',
-        templates: [
-          { elementName: 'confirmacao_de_agendamento_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', id: 'remote-1', status: 'APPROVED' },
-          { elementName: 'resumo_de_agendamento_uuid', templateId: 'remote-2', status: 'REJECTED' },
-          { elementName: '', id: 'skip', status: 'APPROVED' },
-        ],
-      }),
-    });
+    mockWabaAndTemplates([
+      { name: 'confirmacao_de_agendamento_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', id: 'remote-1', status: 'APPROVED' },
+      { name: 'resumo_de_agendamento_uuid', id: 'remote-2', status: 'REJECTED' },
+    ]);
 
     const result = await syncBranchHsmTemplates('b-1');
 
     expect(result.updated).toBeGreaterThan(0);
     expect(result.synced).toBe(1);
-    expect(Object.keys(result.gupshupTemplates)).toContain('confirmacao_de_agendamento_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(Object.keys(result.metaTemplates)).toContain('confirmacao_de_agendamento_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     expect(mockedPrisma.whatsAppMessageTemplate.update).toHaveBeenCalled();
   });
 
@@ -88,13 +103,15 @@ describe('whatsapp hsm sync', () => {
       { branchId: null, appId: 'app-3', accountSid: 'api-key' },
     ]);
 
+    // mock for b-1 only (b-2 and null are skipped by the source)
+    process.env.WHATSAPP_WABA_ID = 'waba-env';
     (globalThis.fetch as any).mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        status: 'success',
-        templates: [
-          { elementName: 'confirmacao_de_agendamento_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', id: 'remote-1', status: 'APPROVED' },
+        data: [
+          { name: 'confirmacao_de_agendamento_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', id: 'remote-1', status: 'APPROVED' },
         ],
+        paging: {},
       }),
     });
 
@@ -102,6 +119,8 @@ describe('whatsapp hsm sync', () => {
 
     expect(result.branches).toBe(1);
     expect(result.synced).toBeGreaterThanOrEqual(0);
+
+    delete process.env.WHATSAPP_WABA_ID;
   });
 
   it('syncAllBranches continues when one branch fails', async () => {
@@ -110,15 +129,20 @@ describe('whatsapp hsm sync', () => {
       { branchId: 'b-2', appId: 'app-2', accountSid: 'api-key' },
     ]);
 
+    process.env.WHATSAPP_WABA_ID = 'waba-env';
     (globalThis.fetch as any)
+      // b-1 templates fetch fails
       .mockResolvedValueOnce({ ok: false, text: async () => 'fail-1' })
+      // b-2 templates fetch succeeds
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: 'success', templates: [] }),
+        json: async () => ({ data: [], paging: {} }),
       });
 
     const result = await syncAllBranchesHsmTemplates();
 
     expect(result.branches).toBe(1);
+
+    delete process.env.WHATSAPP_WABA_ID;
   });
 });

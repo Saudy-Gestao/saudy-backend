@@ -6,16 +6,12 @@ import prisma from '../../src/modules/care/lib/prisma';
 const sendTextMessageMock = vi.fn();
 const getMediaUrlMock = vi.fn();
 
-vi.mock('../../src/modules/care/lib/gupshup', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    sendTextMessage: sendTextMessageMock,
-    getMediaUrl: getMediaUrlMock,
-  })),
+vi.mock('../../src/modules/care/lib/messaging', () => ({
   createMessagingService: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
     getMediaUrl: getMediaUrlMock,
   })),
-  GupshupV3Service: vi.fn().mockImplementation(() => ({
+  MetaMessagingService: vi.fn().mockImplementation(() => ({
     sendTextMessage: sendTextMessageMock,
     getMediaUrl: getMediaUrlMock,
   })),

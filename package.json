@@ -21,6 +21,11 @@
     "start:with-seed:network": "pnpm exec prisma generate --schema prisma/schema.prisma && pnpm exec prisma migrate deploy && pnpm run seed && pnpm run dev:network"
   },
   "packageManager": "pnpm@10.24.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "puppeteer"
+    ]
+  },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
     "@fastify/jwt": "^10.0.0",
@@ -39,7 +44,8 @@
     "fastify": "^5.6.2",
     "nodemailer": "^8.0.1",
     "pg": "^8.16.3",
-    "prisma": "^7.1.0"
+    "prisma": "^7.1.0",
+    "puppeteer": "^24.10.2"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

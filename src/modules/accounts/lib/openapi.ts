@@ -23,6 +23,7 @@ export const swaggerComponents = {
         specialties: { type: 'array', items: { type: 'string' } },
         consultationFee: { type: 'number', nullable: true },
         biography: { type: 'string', nullable: true },
+        signatureImageBase64: { type: 'string', nullable: true },
         address: { type: 'string', nullable: true },
         addressNumber: { type: 'string', nullable: true },
         addressComplement: { type: 'string', nullable: true },
@@ -113,6 +114,7 @@ export const swaggerComponents = {
         specialties: { type: 'array', items: { type: 'string' } },
         consultationFee: { type: 'number' },
         biography: { type: 'string' },
+        signatureImageBase64: { type: 'string' },
         address: { type: 'string' },
         addressNumber: { type: 'string' },
         addressComplement: { type: 'string' },
@@ -171,6 +173,7 @@ export const swaggerComponents = {
         specialties: { type: 'array', items: { type: 'string' } },
         consultationFee: { type: 'number' },
         biography: { type: 'string' },
+        signatureImageBase64: { type: 'string' },
         address: { type: 'string' },
         addressNumber: { type: 'string' },
         addressComplement: { type: 'string' },
@@ -489,3 +492,4 @@ export const swaggerComponents = {
     },
   },
 };
+

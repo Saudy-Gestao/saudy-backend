@@ -3,9 +3,8 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import preSchedulingRoutes from '../../src/modules/care/routes/pre-scheduling';
 import prisma from '../../src/modules/care/lib/prisma';
 import { getAnexosStorage } from '../../src/lib/storage';
-import GupshupService, { createMessagingService } from '../../src/modules/care/lib/gupshup';
+import { createMessagingService } from '../../src/modules/care/lib/messaging';
 
-const mockedGupshupCtor = GupshupService as unknown as Mock;
 const mockedCreateMessagingService = createMessagingService as unknown as Mock;
 
 vi.mock('../../src/lib/storage', () => ({
@@ -16,14 +15,11 @@ vi.mock('../../src/lib/storage', () => ({
   })),
 }));
 
-vi.mock('../../src/modules/care/lib/gupshup', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
-  })),
+vi.mock('../../src/modules/care/lib/messaging', () => ({
   createMessagingService: vi.fn().mockImplementation(() => ({
     sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
   })),
-  GupshupV3Service: vi.fn().mockImplementation(() => ({
+  MetaMessagingService: vi.fn().mockImplementation(() => ({
     sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
   })),
 }));
@@ -32,13 +28,14 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
   default: {
     user: { findUnique: vi.fn() },
     appointment: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
-    patient: { findFirst: vi.fn() },
+    patient: { findFirst: vi.fn(), findUnique: vi.fn() },
     preSchedulingFlow: { findMany: vi.fn(), upsert: vi.fn(), update: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn() },
     preSchedulingDocument: { create: vi.fn() },
     preSchedulingAnamnesisAnswer: { deleteMany: vi.fn(), create: vi.fn() },
     preSchedulingAnamnesisResponse: { upsert: vi.fn(), findUnique: vi.fn() },
     procedure: { findMany: vi.fn() },
     branch: { findUnique: vi.fn(), findMany: vi.fn() },
+    branchSettings: { findUnique: vi.fn() },
     whatsAppConfig: { findUnique: vi.fn(), findMany: vi.fn() },
     whatsAppMessageLog: { create: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
@@ -61,9 +58,6 @@ async function buildApp(opts?: { unauthorized?: boolean }) {
 describe('care pre-scheduling routes', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mockedGupshupCtor.mockImplementation(() => ({
-      sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
-    }));
     mockedCreateMessagingService.mockImplementation(() => ({
       sendTextMessage: vi.fn().mockResolvedValue({ status: 'success', messageId: 'm-1' }),
     }));
@@ -111,6 +105,8 @@ describe('care pre-scheduling routes', () => {
       specialty: 'Clinica',
     });
     mockedPrisma.patient.findFirst.mockResolvedValue({ id: 'p-1', name: 'Maria', cpf: '12345678900', cellphone: '1199999' });
+    mockedPrisma.patient.findUnique.mockResolvedValue(null);
+    mockedPrisma.branchSettings.findUnique.mockResolvedValue(null);
     mockedPrisma.preSchedulingFlow.upsert.mockResolvedValue({ id: 'f-1', status: 'PENDING', guideNumber: null, preAuthorizedAt: null });
     mockedPrisma.preSchedulingFlow.update.mockResolvedValue({ id: 'f-1', status: 'PRE_AUTHORIZED' });
     mockedPrisma.preSchedulingFlow.findUnique.mockResolvedValue({ id: 'f-1', status: 'PENDING', documents: [], anamnesisResponse: null });
@@ -436,7 +432,7 @@ describe('care pre-scheduling routes', () => {
 
     const res = await app.inject({ method: 'POST', url: '/pre-scheduling/a-1/send-link', payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(res.json().whatsapp.provider).toBe('gupshup');
+    expect(res.json().whatsapp.provider).toBe('meta');
 
     // With anamnesis template
     mockedPrisma.preSchedulingFlow.findUnique.mockResolvedValueOnce({

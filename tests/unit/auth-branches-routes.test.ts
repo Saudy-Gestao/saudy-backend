@@ -26,6 +26,10 @@ function makeTx() {
       create: vi.fn(),
       update: vi.fn(),
     },
+    sector: {
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn().mockResolvedValue({}),
+    },
   };
 }
 

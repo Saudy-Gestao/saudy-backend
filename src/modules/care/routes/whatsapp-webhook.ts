@@ -824,6 +824,8 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
   }, async (request) => {
     const rawBody = request.body as any;
 
+    request.log.info({ rawBody: JSON.stringify(rawBody).slice(0, 500) }, '[webhook] POST received');
+
     // Detect and normalize Meta v3 (Cloud API passthrough) format
     const isV3 = rawBody?.object === 'whatsapp_business_account';
     let body = rawBody;
@@ -1071,7 +1073,7 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
     }
 
     if (!action || !originatingLog?.appointmentId || !originatingLog.branchId) {
-      if (source && (inboundText || inboundMedia.summary)) {
+      if (source && inboundText) {
         const chatbotBranchHint = await resolveBranchHintFromPayload(body, source);
         const chatbotResult = await handleWhatsAppChatbot({
           phone: source,

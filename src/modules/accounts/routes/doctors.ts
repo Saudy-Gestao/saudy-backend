@@ -290,8 +290,10 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
     const normalizedPhone = String(data.phone || '').trim();
     const normalizedCellphone = String(data.cellphone || '').trim();
+    const normalizedSignatureImageBase64 = String(data.signatureImageBase64 || '').trim();
     data.phone = normalizedPhone || normalizedCellphone;
     data.cellphone = normalizedCellphone || null;
+    data.signatureImageBase64 = normalizedSignatureImageBase64 || null;
 
     const roomIds = normalizeRoomIds(data?.roomIds);
     if (roomIds.length > 0) {
@@ -471,6 +473,10 @@ export default async function doctorRoutes(app: FastifyInstance) {
       }
       if (data?.email !== undefined) {
         data.email = normalizedEmail || null;
+      }
+      if (data?.signatureImageBase64 !== undefined) {
+        const normalizedSignatureImageBase64 = String(data.signatureImageBase64 || '').trim();
+        data.signatureImageBase64 = normalizedSignatureImageBase64 || null;
       }
 
       let workingSchedulesData = undefined;
@@ -656,3 +662,4 @@ export default async function doctorRoutes(app: FastifyInstance) {
     return Array.from(specialtiesSet).sort();
   });
 }
+

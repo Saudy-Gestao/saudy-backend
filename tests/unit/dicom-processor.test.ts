@@ -29,7 +29,10 @@ const { parseDicomMock, prismaMock, uploadDicomToGcsMock } = vi.hoisted(() => ({
   uploadDicomToGcsMock: vi.fn(),
 }));
 
-vi.mock('uuid', () => ({ v4: vi.fn(() => 'uuid-1') }));
+vi.mock('crypto', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('crypto')>()),
+  randomUUID: vi.fn(() => 'uuid-1'),
+}));
 
 vi.mock('dicom-parser', () => ({
   default: {

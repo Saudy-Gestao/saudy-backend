@@ -17,6 +17,7 @@ import {
   sendAdminRegisterCodeEmail,
   sendPasswordResetCodeEmail,
   sendPatientPortalAccessCodeEmail,
+  sendPreSchedulingVerificationEmail,
   sendWelcomeEmail,
 } from '../../src/modules/auth/lib/mailer';
 
@@ -156,6 +157,33 @@ describe('auth mailer lib', () => {
     expect(warnSpy).toHaveBeenCalledTimes(3);
     expect(sendMail).not.toHaveBeenCalled();
 
+    warnSpy.mockRestore();
+  });
+
+  it('sends pre-scheduling verification email with appointment info', async () => {
+    process.env.SMTP_HOST = 'smtp.example.com';
+    process.env.SMTP_USER = 'mailer@example.com';
+    process.env.SMTP_PASS = 'pass';
+
+    sendMail.mockResolvedValue({});
+
+    const ok = await sendPreSchedulingVerificationEmail({
+      to: 'patient@mail.com',
+      code: '555666',
+      userName: 'José Silva',
+      appointmentInfo: 'Consulta - Cardiologia - 20/04/2026',
+    });
+
+    expect(ok).toBe(true);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(sendMail.mock.calls[0][0].subject).toContain('Código de confirmação de identidade');
+    expect(sendMail.mock.calls[0][0].html).toContain('555666');
+  });
+
+  it('returns false for pre-scheduling when smtp is not configured', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(sendPreSchedulingVerificationEmail({ to: 'x', code: '111111' })).resolves.toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 });

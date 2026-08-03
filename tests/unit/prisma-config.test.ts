@@ -11,14 +11,24 @@ describe('prisma.config', () => {
     vi.resetModules();
     vi.clearAllMocks();
     delete process.env.DATABASE_URL;
+    delete process.env.DIRECT_URL;
   });
 
-  it('uses DATABASE_URL when provided', async () => {
-    process.env.DATABASE_URL = 'postgresql://custom-db-url';
+  it('prefers DIRECT_URL over DATABASE_URL when both are provided', async () => {
+    process.env.DATABASE_URL = 'postgresql://pooled-db-url';
+    process.env.DIRECT_URL = 'postgresql://direct-db-url';
 
     const mod = await import('../../prisma.config');
 
     expect(defineConfigMock).toHaveBeenCalledTimes(1);
+    expect((mod.default as any).datasource.url).toBe('postgresql://direct-db-url');
+  });
+
+  it('falls back to DATABASE_URL when DIRECT_URL is missing', async () => {
+    process.env.DATABASE_URL = 'postgresql://custom-db-url';
+
+    const mod = await import('../../prisma.config');
+
     expect((mod.default as any).datasource.url).toBe('postgresql://custom-db-url');
   });
 
