@@ -983,11 +983,15 @@ export default async function biRoutes(app: FastifyInstance) {
           },
         },
       }),
+      // Same reasoning as the /authorizations endpoint: authorization activity
+      // is tied to when it was requested/decided (createdAt), not the appointment's
+      // scheduled date — using `date` here excluded future-dated appointments
+      // that were already authorized (or still pending) well ahead of time.
       prisma.appointment.count({
         where: {
           ...branchWhere,
           isActive: true,
-          date: { gte: startKey, lte: endKey },
+          createdAt: createdAtWhere,
           authorizationStatus: 'PENDING',
         },
       }),
@@ -995,7 +999,7 @@ export default async function biRoutes(app: FastifyInstance) {
         where: {
           ...branchWhere,
           isActive: true,
-          date: { gte: startKey, lte: endKey },
+          createdAt: createdAtWhere,
           authorizationStatus: 'DENIED',
         },
       }),
@@ -1175,8 +1179,6 @@ export default async function biRoutes(app: FastifyInstance) {
     const now = new Date();
     const startDate = parseDateBoundary(query.startDate, addDays(now, -29));
     const endDate = parseDateBoundary(query.endDate, now, true);
-    const startKey = formatDateKey(startDate);
-    const endKey = formatDateKey(endDate);
     const branchId = String(query.branchId || context.branchId || '').trim();
     const insuranceId = String(query.insuranceId || '').trim().toLowerCase();
     const branchWhere = branchId ? { branchId } : {};
@@ -1185,7 +1187,12 @@ export default async function biRoutes(app: FastifyInstance) {
       where: {
         ...branchWhere,
         isActive: true,
-        date: { gte: startKey, lte: endKey },
+        // Authorization activity is tied to when the request was created/decided,
+        // not to the therapy/consultation's scheduled date — appointments are
+        // routinely authorized well ahead of the date they'll actually happen
+        // (e.g. a recurring TEA PIT scheduled weeks out), so filtering by `date`
+        // silently excluded most future-dated, already-authorized appointments.
+        createdAt: { gte: startDate, lte: endDate },
       },
       select: {
         id: true,
