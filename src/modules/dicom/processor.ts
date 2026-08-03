@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import dicomParser from 'dicom-parser';
 import prisma from './lib/prisma';
 import { uploadDicomToGcs } from './gcs';
@@ -55,7 +55,7 @@ export async function processDicomBuffer(
 
   // always upload to GCS, grouped by accession number (folder-like prefix)
   const accessionFolder = sanitizeObjectPathSegment(accessionNumber) || 'sem-accession-number';
-  const objectName = `${accessionFolder}/${uuidv4()}.dcm`;
+  const objectName = `${accessionFolder}/${randomUUID()}.dcm`;
   await uploadDicomToGcs(objectName, buffer);
   const fullPath = objectName; // store object name in database
 

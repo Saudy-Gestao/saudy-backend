@@ -12,9 +12,7 @@ import whatsappWebhookRoutes from './modules/care/routes/whatsapp-webhook';
 import proceduresModule from './modules/procedures';
 import dicomModule from './modules/dicom';
 import dicomWebProxyModule from './modules/dicom-web-proxy';
-import { startOrthancPoller } from './modules/dicom/orthanc';
 import { MwlScp } from './modules/dicom/mwl';
-import { startTemporaryDicomStudyCleanup } from './modules/dicom/temporary-prior-studies';
 
 const app = fastify();
 
@@ -92,10 +90,6 @@ app.register(careModule, { prefix: '/care' });
 app.register(dicomModule, { prefix: '/dicom' });
 app.register(dicomWebProxyModule, { prefix: '/dicom-web' });
 app.register(proceduresModule, { prefix: '/procedures' });
-
-// start Orthanc poller (if configured)
-//startOrthancPoller();
-startTemporaryDicomStudyCleanup();
 
 // start DICOM MWL SCP
 const mwlScp = new MwlScp();

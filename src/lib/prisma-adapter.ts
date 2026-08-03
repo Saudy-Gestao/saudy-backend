@@ -9,6 +9,9 @@ export function createPrismaAdapter() {
   const pool = new Pool({
     connectionString: dbUrl,
     ssl: isSslEnabled ? { rejectUnauthorized: false } : undefined,
+    // Supabase's pgbouncer (transaction mode) already multiplexes connections —
+    // each serverless invocation should hold very few of its own.
+    max: Number(process.env.DATABASE_POOL_MAX) || 3,
   });
 
   pool.on('connect', (client: PoolClient) => {

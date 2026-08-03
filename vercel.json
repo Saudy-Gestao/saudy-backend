@@ -1,0 +1,17 @@
+{
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm run prisma:generate",
+  "rewrites": [
+    { "source": "/((?!api/).*)", "destination": "/api/index" }
+  ],
+  "functions": {
+    "api/index.ts": { "maxDuration": 60 },
+    "api/cron/*.ts": { "maxDuration": 60 }
+  },
+  "crons": [
+    { "path": "/api/cron/whatsapp-hsm-sync", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/whatsapp-automation", "schedule": "5 3 * * *" },
+    { "path": "/api/cron/whatsapp-human-timeout", "schedule": "10 3 * * *" },
+    { "path": "/api/cron/dicom-cleanup", "schedule": "15 3 * * *" }
+  ]
+}

@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import prisma from '../lib/prisma';
 import WhatsAppMessageBuilder from '../lib/whatsapp-message-builder';
 import { ACTIVE_TEMPLATE_TYPES, DEFAULT_TEMPLATES } from '../lib/whatsapp-default-templates';
@@ -25,7 +25,7 @@ const normalizeTemplateBaseName = (value: string) => {
   return normalized || 'template_whatsapp';
 };
 
-const generateHsmTemplateName = (value: string) => `${normalizeTemplateBaseName(value)}_${uuidv4().replace(/-/g, '')}`;
+const generateHsmTemplateName = (value: string) => `${normalizeTemplateBaseName(value)}_${randomUUID().replace(/-/g, '')}`;
 
 const validateTemplateBusinessRules = (data: { message?: string; hsmTemplateName?: string | null }) => {
   const message = String(data.message || '').trim();
