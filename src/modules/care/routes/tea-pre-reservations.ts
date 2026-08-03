@@ -3226,6 +3226,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               type: 'RETORNO TEA',
               status: appointmentStatus,
               observations: body?.observation || `Agendamento convertido da pré-reserva TEA ${reservation.id}`,
+              // The PIT/pre-reservation authorization step already happened before conversion
+              // is even allowed (see the checklist gate) — carry that over instead of
+              // defaulting to PENDING and losing the fact that it was already authorized.
+              authorizationStatus: reservation.authorizedAt ? 'AUTHORIZED' : 'PENDING',
+              authorizedAt: reservation.authorizedAt || null,
             },
           });
 
@@ -3369,6 +3374,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           type: 'RETORNO TEA',
           status: appointmentStatus,
           observations: body?.observation || `Agendamento convertido da pré-reserva TEA ${preReservation.id}`,
+          authorizationStatus: preReservation.authorizedAt ? 'AUTHORIZED' : 'PENDING',
+          authorizedAt: preReservation.authorizedAt || null,
         },
       });
 
