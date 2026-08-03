@@ -182,7 +182,16 @@ const modules = [
     description: 'Triagens e preparos por procedimento',
     icon: 'ClipboardCheck',
     category: 'cadastros',
-  }
+  },
+
+  // Sistema
+  {
+    name: 'configuracoes',
+    label: 'Configurações',
+    description: 'Gestão de setores, acessos, filiais e configurações da empresa',
+    icon: 'Settings',
+    category: 'sistema',
+  },
 ];
 
 const defaultAccessTemplates = [
@@ -194,6 +203,7 @@ const defaultAccessTemplates = [
       'entrega', 'estoque', 'financeiro', 'faturamento', 'bi-gestao', 'whatsapp-config', 'conversas',
       'cadastro-medico', 'cadastro-procedimento', 'cadastro-convenio', 'cadastro-paciente',
       'cadastro-sala', 'cadastro-equipamento', 'cadastro-anamnese', 'cadastro-enfermagem',
+      'configuracoes',
     ],
   },
   {
