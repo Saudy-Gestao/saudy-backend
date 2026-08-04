@@ -83,10 +83,13 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     const searchText = String(search || '').trim().toLowerCase();
 
     const doctors = await prisma.doctor.findMany({
+      // `roomId` is an optional physical-room assignment, not how doctors are
+      // actually scoped to a branch elsewhere in the app — filtering on
+      // `room.branchId` silently dropped any doctor without a room set, which
+      // then made every one of their appointments/TEA reservations disappear
+      // from this screen (professionalDoctorId never matched `doctorIds`).
       where: {
-        room: {
-          branchId,
-        },
+        branchId,
       },
       select: {
         id: true,
