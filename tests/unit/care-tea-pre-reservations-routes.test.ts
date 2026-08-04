@@ -266,6 +266,53 @@ describe('care tea-pre-reservations routes', () => {
     await app.close();
   });
 
+  it('does not stack same-day suggestions closer together than the procedure duration', async () => {
+    const app = await buildApp();
+    mockedPrisma.teaPitTherapy.findFirst.mockResolvedValueOnce({
+      id: 'pit-1',
+      isActive: true,
+      professionalDoctorId: 'd-1',
+      preferredWeekdays: ['SEGUNDA'],
+      preferredShift: 'MANHA',
+      durationMinutes: 45,
+      therapyType: 'Psicomotricidade',
+      pit: { teaProfile: { patient: { id: 'p-1', name: 'Davi', cpf: '11144477735' } } },
+    });
+    mockedPrisma.doctor.findFirst.mockResolvedValueOnce({
+      id: 'd-1',
+      name: 'Dra. Beatriz',
+      isActive: true,
+      workingDays: ['SEGUNDA'],
+      workingHoursStart: '08:00',
+      workingHoursEnd: '12:00',
+      workingSchedules: [],
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/tpr/pit-1/suggestions?daysAhead=7&limit=10' });
+
+    expect(res.statusCode).toBe(200);
+    const items = res.json().items as Array<{ date: string; time: string }>;
+    const byDate = new Map<string, string[]>();
+    items.forEach((item) => {
+      const times = byDate.get(item.date) || [];
+      times.push(item.time);
+      byDate.set(item.date, times);
+    });
+
+    const toMinutes = (t: string) => {
+      const [h, m] = t.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    byDate.forEach((times) => {
+      const sorted = [...times].sort();
+      for (let i = 1; i < sorted.length; i += 1) {
+        expect(toMinutes(sorted[i]) - toMinutes(sorted[i - 1])).toBeGreaterThanOrEqual(45);
+      }
+    });
+    await app.close();
+  });
+
   it('returns suggestions when therapy has no preferred shift and doctor has no explicit working window', async () => {
     const app = await buildApp();
     mockedPrisma.teaPitTherapy.findFirst.mockResolvedValueOnce({

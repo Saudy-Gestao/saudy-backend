@@ -1542,6 +1542,14 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             doctorName: doctor.name,
             procedureName: therapy.therapyType || null,
           });
+
+          // Block out the session's own duration so the next candidate times in this
+          // same loop don't get suggested as if this slot were still free — without
+          // this, a 45min procedure would happily stack suggestions every 15min.
+          buildCoveredTimeSlots(time, slotDurationMinutes).forEach((coveredTime) => {
+            occupied.add(`${date}#${coveredTime}`);
+            occupied.add(`${suggestionIso}#${coveredTime}`);
+          });
         }
       }
     }
