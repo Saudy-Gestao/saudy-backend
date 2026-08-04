@@ -1453,6 +1453,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       procedureName: string | null;
     }> = [];
     const seenSuggestions = new Set<string>();
+    // A therapy is a single weekly-recurring session, not several — never suggest
+    // the same therapy twice on the same calendar day, regardless of which
+    // doctor/time it ends up on.
+    const usedDates = new Set<string>();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -1524,6 +1528,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         }
         const suggestionIso = formatDateAsIso(suggestionDateObj);
 
+        // Already have a session for this therapy on this day — a weekly-recurring
+        // therapy runs once a day, so skip straight to the next candidate date
+        // instead of trying more times on the same one.
+        if (usedDates.has(suggestionIso)) continue;
+
         for (const time of filteredSlots) {
           const originalSignature = `${date}#${time}`;
           const suggestionSignature = `${suggestionIso}#${time}`;
@@ -1535,6 +1544,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           if (seenSuggestions.has(suggestionKey)) continue;
 
           seenSuggestions.add(suggestionKey);
+          usedDates.add(suggestionIso);
           suggestions.push({
             date: suggestionIso,
             time,
@@ -1550,6 +1560,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             occupied.add(`${date}#${coveredTime}`);
             occupied.add(`${suggestionIso}#${coveredTime}`);
           });
+
+          // One suggestion per day for this therapy — move on to the next date
+          // instead of trying later times on the same one.
+          break;
         }
       }
     }

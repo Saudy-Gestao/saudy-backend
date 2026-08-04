@@ -313,6 +313,39 @@ describe('care tea-pre-reservations routes', () => {
     await app.close();
   });
 
+  it('never suggests the same therapy twice on the same day, even when frequency exceeds preferred weekdays', async () => {
+    const app = await buildApp();
+    mockedPrisma.teaPitTherapy.findFirst.mockResolvedValueOnce({
+      id: 'pit-1',
+      isActive: true,
+      professionalDoctorId: 'd-1',
+      preferredWeekdays: ['QUARTA'],
+      preferredShift: 'MANHA',
+      durationMinutes: 45,
+      therapyType: 'Psicomotricidade',
+      pit: { teaProfile: { patient: { id: 'p-1', name: 'Davi', cpf: '11144477735' } } },
+    });
+    mockedPrisma.doctor.findFirst.mockResolvedValueOnce({
+      id: 'd-1',
+      name: 'Dra. Beatriz',
+      isActive: true,
+      workingDays: ['SEGUNDA', 'TERCA', 'QUARTA', 'QUINTA', 'SEXTA'],
+      workingHoursStart: '08:00',
+      workingHoursEnd: '12:00',
+      workingSchedules: [],
+    });
+
+    // Requesting more suggestions (4, matching a "4x/semana" PIT) than the single
+    // preferred weekday (QUARTA) can satisfy on its own.
+    const res = await app.inject({ method: 'GET', url: '/tpr/pit-1/suggestions?daysAhead=21&limit=4' });
+
+    expect(res.statusCode).toBe(200);
+    const items = res.json().items as Array<{ date: string; time: string }>;
+    const dates = items.map((item) => item.date);
+    expect(new Set(dates).size).toBe(dates.length);
+    await app.close();
+  });
+
   it('returns suggestions when therapy has no preferred shift and doctor has no explicit working window', async () => {
     const app = await buildApp();
     mockedPrisma.teaPitTherapy.findFirst.mockResolvedValueOnce({
