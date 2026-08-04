@@ -522,11 +522,13 @@ export default async function convenioAuthorizationRoutes(app: FastifyInstance) 
     }
 
     if (source === 'TEA') {
+      // Same fix as the list endpoint: scope by the doctor's actual branchId,
+      // not the optional room assignment — otherwise authorizing/denying a
+      // therapy whose professional has no room set fails with a false
+      // "not found", even though the reservation is right there.
       const doctors = await prisma.doctor.findMany({
         where: {
-          room: {
-            branchId,
-          },
+          branchId,
         },
         select: { id: true },
       });
