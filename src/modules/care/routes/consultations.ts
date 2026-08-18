@@ -770,7 +770,7 @@ const resolveBillingItem = async (params: {
         isActive: true,
         appointmentType: { in: ['EXAME', 'EXAM'] },
       },
-      select: { id: true, name: true, price: true, tussCode: true, tussTableCode: true },
+      select: { id: true, name: true, price: true },
       take: 200,
     });
 
@@ -785,8 +785,8 @@ const resolveBillingItem = async (params: {
     return {
       procedureId: picked?.id || null,
       procedureName: String(picked?.name || specialty || 'EXAME').trim(),
-      tussCode: String(picked?.tussCode || '').trim() || null,
-      tableCode: String(picked?.tussTableCode || '').trim() || '22',
+      tussCode: null,
+      tableCode: '22',
       quantity: 1,
       executedAt,
       unitValue,
@@ -800,7 +800,7 @@ const resolveBillingItem = async (params: {
       isActive: true,
       appointmentType: { in: ['CONSULTA', 'CONSULTATION'] },
     },
-    select: { id: true, name: true, price: true, tussCode: true, tussTableCode: true },
+    select: { id: true, name: true, price: true },
     take: 200,
   });
 
@@ -817,8 +817,8 @@ const resolveBillingItem = async (params: {
     return {
       procedureId: consultationPicked.id,
       procedureName: String(consultationPicked.name || specialty || 'CONSULTA').trim(),
-      tussCode: String(consultationPicked.tussCode || '').trim() || null,
-      tableCode: String(consultationPicked.tussTableCode || '').trim() || '22',
+      tussCode: null,
+      tableCode: '22',
       quantity: 1,
       executedAt,
       unitValue,
