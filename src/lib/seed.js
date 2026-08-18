@@ -129,8 +129,8 @@ const modules = [
   // Cadastros
   {
     name: 'cadastro-medico',
-    label: 'Cadastro de Médico',
-    description: 'Registro de médicos',
+    label: 'Cadastro de Profissional',
+    description: 'Registro de profissionais',
     icon: 'UserPlus',
     category: 'cadastros',
   },
@@ -170,6 +170,20 @@ const modules = [
     category: 'cadastros',
   },
   {
+    name: 'cadastro-modalidade',
+    label: 'Cadastro de Modalidades',
+    description: 'Tipos de exame (Tomografia, RM, US...)',
+    icon: 'Tag',
+    category: 'cadastros',
+  },
+  {
+    name: 'cadastro-especialidade',
+    label: 'Cadastro de Especialidades',
+    description: 'Especialidades e métodos por modalidade',
+    icon: 'Layers3',
+    category: 'cadastros',
+  },
+  {
     name: 'cadastro-anamnese',
     label: 'Cadastro de Anamnese',
     description: 'Perguntas de anamnese por procedimento',
@@ -202,7 +216,7 @@ const defaultAccessTemplates = [
       'consulta', 'execucao-exames', 'laudo', 'autorizacao-convenio',
       'entrega', 'estoque', 'financeiro', 'faturamento', 'bi-gestao', 'whatsapp-config', 'conversas',
       'cadastro-medico', 'cadastro-procedimento', 'cadastro-convenio', 'cadastro-paciente',
-      'cadastro-sala', 'cadastro-equipamento', 'cadastro-anamnese', 'cadastro-enfermagem',
+      'cadastro-sala', 'cadastro-equipamento', 'cadastro-modalidade', 'cadastro-especialidade', 'cadastro-anamnese', 'cadastro-enfermagem',
       'configuracoes',
     ],
   },
@@ -241,7 +255,7 @@ const defaultAccessTemplates = [
   {
     description: 'Auxiliar Administrativo',
     moduleNames: [
-      'estoque', 'entrega', 'cadastro-procedimento', 'cadastro-sala', 'cadastro-equipamento',
+      'estoque', 'entrega', 'cadastro-procedimento', 'cadastro-sala', 'cadastro-equipamento', 'cadastro-modalidade', 'cadastro-especialidade',
     ],
   },
 ];

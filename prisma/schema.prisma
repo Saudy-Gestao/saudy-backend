@@ -283,6 +283,12 @@ model Doctor {
     workingHoursStart String?
     workingHoursEnd   String?
     workingSchedules  String   @default("[]") @db.Text
+    especialidadeIds     String[] @default([])
+    modalidadeIds        String[] @default([])
+    metodos              String[] @default([])
+    cbo                  String?
+    branchIds            String[] @default([])
+    appointmentDurations Int[]    @default([])
     createdAt         DateTime @default(now())
     updatedAt         DateTime @updatedAt
 
@@ -1373,6 +1379,76 @@ model ReportAuditLog {
     @@map("report_audit_logs")
 }
 
+model Modalidade {
+    id              String   @id @default(uuid())
+    branchId        String?
+    name            String
+    description     String?
+    isActive        Boolean  @default(true)
+    createdByUserId String?
+    createdByName   String?
+    updatedByUserId String?
+    updatedByName   String?
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    especialidades  Especialidade[]
+    procedures      Procedure[]
+
+    @@index([branchId])
+    @@map("modalidades")
+}
+
+model ModalidadeAuditLog {
+    id                String   @id @default(uuid())
+    branchId          String
+    modalidadeId      String?
+    action            String
+    performedByUserId String?
+    performedByName   String?
+    details           String?
+    createdAt         DateTime @default(now())
+
+    @@index([branchId, createdAt])
+    @@index([modalidadeId])
+    @@map("modalidade_audit_logs")
+}
+
+model Especialidade {
+    id              String   @id @default(uuid())
+    branchId        String?
+    modalidadeId    String
+    modalidade      Modalidade @relation(fields: [modalidadeId], references: [id], onDelete: Cascade)
+    name            String
+    metodos         String[] @default([])
+    isActive        Boolean  @default(true)
+    createdByUserId String?
+    createdByName   String?
+    updatedByUserId String?
+    updatedByName   String?
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    @@index([branchId])
+    @@index([modalidadeId])
+    @@map("especialidades")
+}
+
+model EspecialidadeAuditLog {
+    id                String   @id @default(uuid())
+    branchId          String
+    especialidadeId   String?
+    action            String
+    performedByUserId String?
+    performedByName   String?
+    details           String?
+    createdAt         DateTime @default(now())
+
+    @@index([branchId, createdAt])
+    @@index([especialidadeId])
+    @@map("especialidade_audit_logs")
+}
+
 model ReportTemplate {
     id        String   @id @default(uuid())
     branchId  String?
@@ -1461,8 +1537,9 @@ model Procedure {
     price              Decimal?          @db.Decimal(10, 2)
     durationMinutes    Int?
     modalities         String[]          @default([])
-    tussCode           String?
-    tussTableCode      String?
+    modalidadeId       String?
+    modalidade         Modalidade?       @relation(fields: [modalidadeId], references: [id])
+    branchIds          String[]          @default([])
     isActive           Boolean           @default(true)
     createdAt          DateTime          @default(now())
     updatedAt          DateTime          @updatedAt
@@ -1477,6 +1554,7 @@ model Procedure {
     insurances         InsuranceProcedure[]
 
     @@index([branchId])
+    @@index([modalidadeId])
     @@map("procedures")
 }
 

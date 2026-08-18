@@ -102,7 +102,7 @@ describe('procedures routes', () => {
     res = await app.inject({
       method: 'POST',
       url: '/procedures',
-      payload: { name: 'USG', appointmentType: 'EXAME', acceptsInsurance: false, modalities: ['XR'] },
+      payload: { name: 'USG', appointmentType: 'EXAME', acceptsInsurance: false, modalities: ['XR'], modalidadeId: 'm-1', branchIds: ['b-1'] },
     });
     expect(res.statusCode).toBe(201);
 
@@ -128,7 +128,7 @@ describe('procedures routes', () => {
     res = await app.inject({ method: 'PUT', url: '/procedures/p-1', payload: { name: 'novo', doctors: [{ doctorId: 'd-1', doctorName: 'Dr' }], procedureMaterials: [{ inventoryItemId: 'i-1', quantity: 1 }], acceptsInsurance: false } });
     expect(res.statusCode).toBe(400);
 
-    res = await app.inject({ method: 'PUT', url: '/procedures/p-1', payload: { name: 'novo', doctorIds: ['d-1'], tussCode: '12.34', tussTableCode: '99', durationMinutes: '' } });
+    res = await app.inject({ method: 'PUT', url: '/procedures/p-1', payload: { name: 'novo', doctorIds: ['d-1'], modalidadeId: 'm-1', branchIds: ['b-1', 'b-2'], durationMinutes: '' } });
     expect(res.statusCode).toBe(200);
 
     res = await app.inject({ method: 'DELETE', url: '/procedures/p-1' });

@@ -54,7 +54,7 @@ export default async function insuranceProcedureRoutes(app: FastifyInstance) {
       orderBy: { procedure: { name: "asc" } },
       include: {
         procedure: {
-          select: { id: true, name: true, tussCode: true, tussTableCode: true, appointmentType: true },
+          select: { id: true, name: true, appointmentType: true },
         },
         subInsurance: { select: { id: true, name: true } },
       },
@@ -105,7 +105,7 @@ export default async function insuranceProcedureRoutes(app: FastifyInstance) {
         },
         include: {
           procedure: {
-            select: { id: true, name: true, tussCode: true, tussTableCode: true, appointmentType: true },
+            select: { id: true, name: true, appointmentType: true },
           },
           subInsurance: { select: { id: true, name: true } },
         },
@@ -157,7 +157,7 @@ export default async function insuranceProcedureRoutes(app: FastifyInstance) {
       data: updateData,
       include: {
         procedure: {
-          select: { id: true, name: true, tussCode: true, tussTableCode: true, appointmentType: true },
+          select: { id: true, name: true, appointmentType: true },
         },
         subInsurance: { select: { id: true, name: true } },
       },

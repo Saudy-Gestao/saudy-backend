@@ -282,7 +282,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
     if (!data?.birthDate || isNaN(Date.parse(String(data.birthDate)))) fieldErrors.birthDate = 'Data de nascimento inválida';
     else if (new Date(String(data.birthDate)) > new Date()) fieldErrors.birthDate = 'Data de nascimento inválida';
     if (!data?.gender || !['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
-    if (!data?.specialty || String(data.specialty).trim() === '') fieldErrors.specialty = 'Especialidade é obrigatória';
+    data.specialty = String(data?.specialty || '').trim();
 
     if (Object.keys(fieldErrors).length > 0) {
       return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });

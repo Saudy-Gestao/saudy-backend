@@ -104,11 +104,6 @@ const normalizeProcedureAppointmentType = (value: unknown): string => {
   return normalized === 'EXAME' ? 'EXAME' : 'CONSULTA';
 };
 
-const normalizeDigitsCode = (value: unknown) => {
-  const digits = String(value || '').replace(/\D/g, '').trim();
-  return digits || null;
-};
-
 export default async function procedureRoutes(app: FastifyInstance) {
   const getLoggedBranchId = async (request: any) => {
     const userId = (request.user as any)?.id;
@@ -166,6 +161,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         skip: offset,
         orderBy: { createdAt: "desc" },
         include: {
+          modalidade: { select: { id: true, name: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {
@@ -210,6 +206,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const item = await prisma.procedure.findFirst({
       where: { id, branchId },
       include: {
+        modalidade: { select: { id: true, name: true } },
         doctors: true,
         materials: { include: { inventoryItem: true } },
         kitBindings: {
@@ -251,9 +248,9 @@ export default async function procedureRoutes(app: FastifyInstance) {
           appointmentType: { type: "string", enum: ["CONSULTA", "EXAME"] },
           price: { type: ["number", "string"] },
           durationMinutes: { type: "number" },
-          tussCode: { type: "string" },
-          tussTableCode: { type: "string" },
           modalities: { type: "array", items: { type: "string" } },
+          modalidadeId: { type: "string" },
+          branchIds: { type: "array", items: { type: "string" } },
           doctorIds: { type: "array", items: { type: "string" } },
           doctors: {
             type: "array",
@@ -311,7 +308,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         },
       },
       response: {
-        201: { type: "object" },
+        201: { type: "object", additionalProperties: true },
         400: { type: "object", additionalProperties: true },
       },
     },
@@ -325,6 +322,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const procedureMaterialKits = normalizeProcedureMaterialKits(data) || [];
     const procedureKitBindings = normalizeProcedureKitBindings(data) || [];
     const modalities = normalizeStringArray(data.modalities) || [];
+    const branchIds = normalizeStringArray(data.branchIds) || [];
     const appointmentType = normalizeProcedureAppointmentType(data.appointmentType);
 
     try {
@@ -338,8 +336,8 @@ export default async function procedureRoutes(app: FastifyInstance) {
           durationMinutes: data.durationMinutes !== undefined && data.durationMinutes !== null
             ? Number(data.durationMinutes)
             : null,
-          tussCode: data.tussCode !== undefined ? normalizeDigitsCode(data.tussCode) : null,
-          tussTableCode: data.tussTableCode !== undefined ? normalizeDigitsCode(data.tussTableCode) : null,
+          modalidadeId: data.modalidadeId || null,
+          branchIds,
           modalities,
           doctors: doctorLinks.length
             ? {
@@ -386,6 +384,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
             : undefined,
         },
         include: {
+          modalidade: { select: { id: true, name: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {
@@ -425,7 +424,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
       params: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       body: { type: "object" },
       response: {
-        200: { type: "object" },
+        200: { type: "object", additionalProperties: true },
         400: { type: "object", additionalProperties: true },
         404: { type: "object", additionalProperties: true },
       },
@@ -457,16 +456,14 @@ export default async function procedureRoutes(app: FastifyInstance) {
           ? null
           : Number(data.durationMinutes);
       }
-      if (data.tussCode !== undefined) {
-        updateData.tussCode = normalizeDigitsCode(data.tussCode);
-      }
-      if (data.tussTableCode !== undefined) {
-        updateData.tussTableCode = normalizeDigitsCode(data.tussTableCode);
-      }
+      if (data.modalidadeId !== undefined) updateData.modalidadeId = data.modalidadeId || null;
       if (data.isActive !== undefined) updateData.isActive = Boolean(data.isActive);
 
       const modalities = normalizeStringArray(data.modalities);
       if (modalities !== undefined) updateData.modalities = modalities;
+
+      const branchIds = normalizeStringArray(data.branchIds);
+      if (branchIds !== undefined) updateData.branchIds = branchIds;
 
       const actions: any[] = [
         prisma.procedure.update({ where: { id }, data: { ...updateData, branchId } }),
@@ -567,6 +564,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
       const item = await prisma.procedure.findFirst({
         where: { id, branchId },
         include: {
+          modalidade: { select: { id: true, name: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {
