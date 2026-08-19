@@ -88,7 +88,10 @@ export default async function especialidadeRoutes(app: FastifyInstance) {
     }
   };
 
-  const modalidadeInclude = { modalidade: { select: { id: true, name: true } } } as const;
+  const modalidadeInclude = {
+    modalidade: { select: { id: true, name: true } },
+    cbo: { select: { id: true, code: true, title: true } },
+  } as const;
 
   app.addHook("onRequest", async (request, reply) => {
     try {
@@ -204,6 +207,7 @@ export default async function especialidadeRoutes(app: FastifyInstance) {
           modalidadeId: { type: "string" },
           name: { type: "string" },
           metodos: { type: "array", items: { type: "string" } },
+          cboId: { type: "string", nullable: true },
           force: { type: "boolean" },
         },
       },
@@ -225,6 +229,13 @@ export default async function especialidadeRoutes(app: FastifyInstance) {
     const modalidade = await prisma.modalidade.findUnique({ where: { id: data.modalidadeId } });
     if (!modalidade) return reply.code(404).send({ error: "Modalidade not found" });
     if (!canAccessRecord(modalidade.branchId, branchId)) return reply.code(404).send({ error: "Modalidade not found" });
+
+    let cboId: string | null = null;
+    if (data.cboId) {
+      const cbo = await prisma.cbo.findUnique({ where: { id: data.cboId } });
+      if (!cbo || !cbo.isActive) return reply.code(404).send({ error: "Cbo not found" });
+      cboId = cbo.id;
+    }
 
     const metodos = normalizeMetodos(data.metodos) || [];
     const normalizedNew = normalizeForCompare(name);
@@ -266,6 +277,7 @@ export default async function especialidadeRoutes(app: FastifyInstance) {
           modalidadeId: data.modalidadeId,
           name,
           metodos,
+          cboId,
           isActive: true,
           createdByUserId: userId,
           createdByName: userName,
@@ -348,9 +360,15 @@ export default async function especialidadeRoutes(app: FastifyInstance) {
       }
     }
 
+    if (data.cboId !== undefined && data.cboId !== null) {
+      const cbo = await prisma.cbo.findUnique({ where: { id: data.cboId } });
+      if (!cbo || !cbo.isActive) return reply.code(404).send({ error: "Cbo not found" });
+    }
+
     const updateData: any = { updatedByUserId: userId, updatedByName: userName };
     if (data.name !== undefined) updateData.name = nextName;
     if (data.metodos !== undefined) updateData.metodos = normalizeMetodos(data.metodos) || [];
+    if (data.cboId !== undefined) updateData.cboId = data.cboId || null;
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
 
     const changeDescriptions: string[] = [];

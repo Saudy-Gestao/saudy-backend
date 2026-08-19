@@ -286,7 +286,6 @@ model Doctor {
     especialidadeIds     String[] @default([])
     modalidadeIds        String[] @default([])
     metodos              String[] @default([])
-    cbo                  String?
     branchIds            String[] @default([])
     appointmentDurations Int[]    @default([])
     createdAt         DateTime @default(now())
@@ -1421,6 +1420,8 @@ model Especialidade {
     modalidade      Modalidade @relation(fields: [modalidadeId], references: [id], onDelete: Cascade)
     name            String
     metodos         String[] @default([])
+    cboId           String?
+    cbo             Cbo?     @relation(fields: [cboId], references: [id], onDelete: SetNull)
     isActive        Boolean  @default(true)
     createdByUserId String?
     createdByName   String?
@@ -1431,7 +1432,21 @@ model Especialidade {
 
     @@index([branchId])
     @@index([modalidadeId])
+    @@index([cboId])
     @@map("especialidades")
+}
+
+model Cbo {
+    id        String   @id @default(uuid())
+    code      String   @unique
+    title     String
+    isActive  Boolean  @default(true)
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    especialidades Especialidade[]
+
+    @@map("cbos")
 }
 
 model EspecialidadeAuditLog {

@@ -6,6 +6,9 @@ const mockPrismaInstance = {
     deleteMany: vi.fn(),
     findMany: vi.fn(),
   },
+  cbo: {
+    upsert: vi.fn(),
+  },
   access: {
     findFirst: vi.fn(),
     create: vi.fn(),
@@ -33,6 +36,7 @@ describe('seed lib', () => {
     mockPrismaInstance.module.upsert.mockResolvedValue({});
     mockPrismaInstance.module.deleteMany.mockResolvedValue({ count: 0 });
     mockPrismaInstance.module.findMany.mockResolvedValue([]);
+    mockPrismaInstance.cbo.upsert.mockResolvedValue({});
     mockPrismaInstance.access.findFirst.mockResolvedValue(null);
     mockPrismaInstance.access.create.mockResolvedValue({});
     mockPrismaInstance.access.update.mockResolvedValue({});
