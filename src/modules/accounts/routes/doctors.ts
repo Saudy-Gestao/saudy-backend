@@ -51,6 +51,7 @@ const mapDoctorResponse = (doctor: any) => {
     roomIds,
     rooms: normalizedLinks,
     workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
+    especialidadeGroups: doctor.especialidadeGroups ? JSON.parse(doctor.especialidadeGroups) : [],
   };
 };
 
@@ -331,6 +332,10 @@ export default async function doctorRoutes(app: FastifyInstance) {
         ]);
       }
 
+      const especialidadeGroupsData = Array.isArray(data.especialidadeGroups)
+        ? JSON.stringify(data.especialidadeGroups)
+        : '[]';
+
       const doctor = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const createData: any = {
           ...data,
@@ -341,6 +346,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
           specialties: data.specialties || [],
           workingDays: data.workingDays || [],
           workingSchedules: workingSchedulesData || '[]',
+          especialidadeGroups: especialidadeGroupsData,
         };
         delete createData.roomIds;
 
@@ -497,10 +503,14 @@ export default async function doctorRoutes(app: FastifyInstance) {
       const updateData: any = { ...data, branchId };
       delete updateData.workingSchedules;
       delete updateData.roomIds;
+      delete updateData.especialidadeGroups;
       if (workingSchedulesData !== undefined) {
         updateData.workingSchedules = workingSchedulesData;
       } else if (Array.isArray(data.workingSchedules) && data.workingSchedules.length === 0) {
         updateData.workingSchedules = '[]';
+      }
+      if (data.especialidadeGroups !== undefined) {
+        updateData.especialidadeGroups = Array.isArray(data.especialidadeGroups) ? JSON.stringify(data.especialidadeGroups) : '[]';
       }
 
       const doctor = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {

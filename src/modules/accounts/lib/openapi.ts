@@ -56,9 +56,18 @@ export const swaggerComponents = {
         workingDays: { type: 'array', items: { type: 'string' } },
         workingHoursStart: { type: 'string', nullable: true },
         workingHoursEnd: { type: 'string', nullable: true },
-        especialidadeIds: { type: 'array', items: { type: 'string' } },
-        modalidadeIds: { type: 'array', items: { type: 'string' } },
-        metodos: { type: 'array', items: { type: 'string' } },
+        especialidadeGroups: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              modalidadeId: { type: 'string', nullable: true },
+              especialidadeId: { type: 'string', nullable: true },
+              metodos: { type: 'array', items: { type: 'string' } },
+              procedimentoIds: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
         branchIds: { type: 'array', items: { type: 'string' } },
         appointmentDurations: { type: 'array', items: { type: 'number' } },
         workingSchedules: {

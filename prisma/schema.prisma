@@ -283,9 +283,7 @@ model Doctor {
     workingHoursStart String?
     workingHoursEnd   String?
     workingSchedules  String   @default("[]") @db.Text
-    especialidadeIds     String[] @default([])
-    modalidadeIds        String[] @default([])
-    metodos              String[] @default([])
+    especialidadeGroups  String   @default("[]") @db.Text
     branchIds            String[] @default([])
     appointmentDurations Int[]    @default([])
     createdAt         DateTime @default(now())
