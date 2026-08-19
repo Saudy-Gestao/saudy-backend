@@ -171,11 +171,18 @@ model Sector {
     workingDays String[] @default([])
     workingHoursStart String?
     workingHoursEnd String?
+    modalidadeId    String?
+    modalidade      Modalidade? @relation(fields: [modalidadeId], references: [id], onDelete: SetNull)
+    especialidadeId String?
+    especialidade   Especialidade? @relation(fields: [especialidadeId], references: [id], onDelete: SetNull)
+    capacity        Int?
     users       User[]
     doctors     Doctor[]
     doctorRooms DoctorRoom[]
     medicalEquipments MedicalEquipment[]
 
+    @@index([modalidadeId])
+    @@index([especialidadeId])
     @@map("sectors")
 }
 
@@ -1392,6 +1399,7 @@ model Modalidade {
 
     especialidades  Especialidade[]
     procedures      Procedure[]
+    sectors         Sector[]
 
     @@index([branchId])
     @@map("modalidades")
@@ -1428,6 +1436,8 @@ model Especialidade {
     updatedByName   String?
     createdAt       DateTime @default(now())
     updatedAt       DateTime @updatedAt
+
+    sectors         Sector[]
 
     @@index([branchId])
     @@index([modalidadeId])

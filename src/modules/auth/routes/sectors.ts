@@ -80,13 +80,16 @@ export default async function sectorRoutes(app: FastifyInstance) {
       response: { 200: { $ref: 'Sector#' }, 400: { type: 'object' }, 403: { type: 'object' } },
     },
   }, async (request, reply) => {
-    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd } = request.body as {
+    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd, modalidadeId, especialidadeId, capacity } = request.body as {
       branchId: string;
       name: string;
       description: string;
       workingDays?: string[];
       workingHoursStart?: string;
       workingHoursEnd?: string;
+      modalidadeId?: string | null;
+      especialidadeId?: string | null;
+      capacity?: number | null;
     };
 
     const userId = (request.user as any).id;
@@ -126,6 +129,20 @@ export default async function sectorRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Hora final da sala deve ser maior que a inicial' });
     }
 
+    let resolvedEspecialidadeId: string | null = null;
+    if (especialidadeId) {
+      const especialidade = await prisma.especialidade.findUnique({ where: { id: especialidadeId } });
+      if (!especialidade || (modalidadeId && especialidade.modalidadeId !== modalidadeId)) {
+        return reply.code(400).send({ error: 'Especialidade inválida para a modalidade selecionada' });
+      }
+      resolvedEspecialidadeId = especialidade.id;
+    }
+
+    const normalizedCapacity = capacity !== undefined && capacity !== null ? Number(capacity) : null;
+    if (normalizedCapacity !== null && (!Number.isInteger(normalizedCapacity) || normalizedCapacity < 1)) {
+      return reply.code(400).send({ error: 'Capacidade de slots deve ser um número inteiro maior que zero' });
+    }
+
     const sector = await prisma.sector.create({
       data: {
         branchId: targetBranchId,
@@ -134,6 +151,9 @@ export default async function sectorRoutes(app: FastifyInstance) {
         workingDays: normalizedWorkingDays,
         workingHoursStart: normalizedWorkingHoursStart,
         workingHoursEnd: normalizedWorkingHoursEnd,
+        modalidadeId: modalidadeId || null,
+        especialidadeId: resolvedEspecialidadeId,
+        capacity: normalizedCapacity,
       },
     });
     return sector;
@@ -147,7 +167,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
       tags: ['Sectors'],
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-      response: { 200: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object', additionalProperties: true }, 403: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -180,17 +200,20 @@ export default async function sectorRoutes(app: FastifyInstance) {
       security: [{ bearerAuth: [] }],
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object' },
-      response: { 200: { type: 'object' }, 400: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
+      response: { 200: { type: 'object', additionalProperties: true }, 400: { type: 'object' }, 403: { type: 'object' }, 404: { type: 'object' } },
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd } = request.body as {
+    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd, modalidadeId, especialidadeId, capacity } = request.body as {
       branchId?: string;
       name?: string;
       description?: string;
       workingDays?: string[];
       workingHoursStart?: string;
       workingHoursEnd?: string;
+      modalidadeId?: string | null;
+      especialidadeId?: string | null;
+      capacity?: number | null;
     };
 
     const userId = (request.user as any).id;
@@ -245,6 +268,28 @@ export default async function sectorRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Hora final da sala deve ser maior que a inicial' });
       }
 
+      let resolvedEspecialidadeId: string | null | undefined;
+      if (especialidadeId !== undefined) {
+        if (especialidadeId) {
+          const targetModalidadeId = modalidadeId !== undefined ? modalidadeId : current.modalidadeId;
+          const especialidade = await prisma.especialidade.findUnique({ where: { id: especialidadeId } });
+          if (!especialidade || (targetModalidadeId && especialidade.modalidadeId !== targetModalidadeId)) {
+            return reply.code(400).send({ error: 'Especialidade inválida para a modalidade selecionada' });
+          }
+          resolvedEspecialidadeId = especialidade.id;
+        } else {
+          resolvedEspecialidadeId = null;
+        }
+      }
+
+      let normalizedCapacity: number | null | undefined;
+      if (capacity !== undefined) {
+        normalizedCapacity = capacity === null ? null : Number(capacity);
+        if (normalizedCapacity !== null && (!Number.isInteger(normalizedCapacity) || normalizedCapacity < 1)) {
+          return reply.code(400).send({ error: 'Capacidade de slots deve ser um número inteiro maior que zero' });
+        }
+      }
+
       const sector = await prisma.sector.update({
         where: { id },
         data: {
@@ -254,6 +299,9 @@ export default async function sectorRoutes(app: FastifyInstance) {
           ...(normalizedWorkingDays !== undefined ? { workingDays: normalizedWorkingDays } : {}),
           ...(normalizedWorkingHoursStart !== undefined ? { workingHoursStart: normalizedWorkingHoursStart } : {}),
           ...(normalizedWorkingHoursEnd !== undefined ? { workingHoursEnd: normalizedWorkingHoursEnd } : {}),
+          ...(modalidadeId !== undefined ? { modalidadeId: modalidadeId || null } : {}),
+          ...(resolvedEspecialidadeId !== undefined ? { especialidadeId: resolvedEspecialidadeId } : {}),
+          ...(normalizedCapacity !== undefined ? { capacity: normalizedCapacity } : {}),
         },
       });
       return sector;
