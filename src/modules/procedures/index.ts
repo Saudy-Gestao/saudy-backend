@@ -7,6 +7,7 @@ import procedureAnamnesisTemplateRoutes from './routes/procedure-anamnesis-templ
 import procedureNursingTemplateRoutes from './routes/procedure-nursing-templates';
 import modalidadeRoutes from './routes/modalidades';
 import especialidadeRoutes from './routes/especialidades';
+import cboRoutes from './routes/cbos';
 
 export default async function proceduresModule(app: FastifyInstance) {
   app.register(procedureRoutes, { prefix: '/procedures' });
@@ -17,4 +18,5 @@ export default async function proceduresModule(app: FastifyInstance) {
   app.register(procedureNursingTemplateRoutes, { prefix: '/nursing-templates' });
   app.register(modalidadeRoutes, { prefix: '/modalidades' });
   app.register(especialidadeRoutes, { prefix: '/especialidades' });
+  app.register(cboRoutes, { prefix: '/cbos' });
 }

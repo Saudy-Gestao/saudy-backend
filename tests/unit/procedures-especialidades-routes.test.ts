@@ -9,6 +9,9 @@ vi.mock('../../src/modules/procedures/lib/prisma', () => ({
     modalidade: {
       findUnique: vi.fn(),
     },
+    cbo: {
+      findUnique: vi.fn(),
+    },
     especialidade: {
       findMany: vi.fn(),
       count: vi.fn(),
@@ -111,10 +114,21 @@ describe('procedures especialidades routes', () => {
     expect(res.json().error).toBe('MODALIDADE_ALREADY_HAS_ESPECIALIDADE');
 
     mockedPrisma.especialidade.findMany.mockResolvedValueOnce([]);
+    mockedPrisma.cbo.findUnique.mockResolvedValueOnce(null);
     res = await app.inject({
       method: 'POST',
       url: '/especialidades',
-      payload: { modalidadeId: 'm-1', name: 'TC Tórax', metodos: ['Com contraste', 'Com contraste', ' '] },
+      payload: { modalidadeId: 'm-1', name: 'TC Tórax', cboId: 'cbo-x' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('Cbo not found');
+
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([]);
+    mockedPrisma.cbo.findUnique.mockResolvedValueOnce({ id: 'cbo-1', code: '2251-25', title: 'Médico clínico', isActive: true });
+    res = await app.inject({
+      method: 'POST',
+      url: '/especialidades',
+      payload: { modalidadeId: 'm-1', name: 'TC Tórax', metodos: ['Com contraste', 'Com contraste', ' '], cboId: 'cbo-1' },
     });
     expect(res.statusCode).toBe(201);
 
@@ -169,10 +183,24 @@ describe('procedures especialidades routes', () => {
       id: 'e-1', branchId: 'b-1', name: 'TC Crânio', modalidadeId: 'm-1', isActive: true, metodos: ['Com contraste'],
     });
     mockedPrisma.especialidade.findMany.mockResolvedValueOnce([]);
+    mockedPrisma.cbo.findUnique.mockResolvedValueOnce(null);
     res = await app.inject({
       method: 'PUT',
       url: '/especialidades/e-1',
-      payload: { name: 'TC Crânio Simples', metodos: ['Sem contraste'], isActive: false, force: true },
+      payload: { name: 'TC Crânio Simples', metodos: ['Sem contraste'], isActive: false, force: true, cboId: 'cbo-x' },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('Cbo not found');
+
+    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({
+      id: 'e-1', branchId: 'b-1', name: 'TC Crânio', modalidadeId: 'm-1', isActive: true, metodos: ['Com contraste'],
+    });
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([]);
+    mockedPrisma.cbo.findUnique.mockResolvedValueOnce({ id: 'cbo-1', code: '2251-25', title: 'Médico clínico', isActive: true });
+    res = await app.inject({
+      method: 'PUT',
+      url: '/especialidades/e-1',
+      payload: { name: 'TC Crânio Simples', metodos: ['Sem contraste'], isActive: false, force: true, cboId: 'cbo-1' },
     });
     expect(res.statusCode).toBe(200);
 
