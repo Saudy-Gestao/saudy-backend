@@ -7,6 +7,7 @@ vi.mock('../../src/modules/auth/lib/prisma', () => ({
   default: {
     user: { findUnique: vi.fn() },
     branch: { findMany: vi.fn(), findFirst: vi.fn() },
+    especialidade: { findUnique: vi.fn() },
     sector: {
       findMany: vi.fn(),
       create: vi.fn(),
@@ -75,6 +76,46 @@ describe('auth sectors routes', () => {
     await app.close();
   });
 
+  it('validates modalidade/especialidade/capacity on create', async () => {
+    mockedPrisma.branch.findFirst.mockResolvedValue({ id: 'b1' });
+    mockedPrisma.sector.create.mockResolvedValue({ id: 's1' });
+
+    const app = await buildApp();
+
+    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce(null);
+    let res = await app.inject({
+      method: 'POST',
+      url: '/sectors',
+      payload: { branchId: 'b1', name: 'Sala 1', description: 'x', especialidadeId: 'e1' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm-other' });
+    res = await app.inject({
+      method: 'POST',
+      url: '/sectors',
+      payload: { branchId: 'b1', name: 'Sala 1', description: 'x', modalidadeId: 'm1', especialidadeId: 'e1' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/sectors',
+      payload: { branchId: 'b1', name: 'Sala 1', description: 'x', capacity: 0 },
+    });
+    expect(res.statusCode).toBe(400);
+
+    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm1' });
+    res = await app.inject({
+      method: 'POST',
+      url: '/sectors',
+      payload: { branchId: 'b1', name: 'Sala 1', description: 'x', modalidadeId: 'm1', especialidadeId: 'e1', capacity: 3 },
+    });
+    expect(res.statusCode).toBe(200);
+
+    await app.close();
+  });
+
   it('gets sector by id with ownership checks', async () => {
     mockedPrisma.sector.findUnique
       .mockResolvedValueOnce(null)
@@ -123,6 +164,29 @@ describe('auth sectors routes', () => {
 
     res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { name: 'C' } });
     expect(res.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it('validates modalidade/especialidade/capacity on update', async () => {
+    mockedPrisma.sector.findUnique.mockResolvedValue({ id: 's1', branchId: 'b1', modalidadeId: 'm1', branch: { companyId: 'c1' } });
+    mockedPrisma.sector.update.mockResolvedValue({ id: 's1' });
+
+    const app = await buildApp();
+
+    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm-other' });
+    let res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { especialidadeId: 'e1' } });
+    expect(res.statusCode).toBe(400);
+
+    res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { capacity: -1 } });
+    expect(res.statusCode).toBe(400);
+
+    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm1' });
+    res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { especialidadeId: 'e1', capacity: 2 } });
+    expect(res.statusCode).toBe(200);
+
+    res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { especialidadeId: null, capacity: null } });
+    expect(res.statusCode).toBe(200);
 
     await app.close();
   });
