@@ -106,6 +106,46 @@ describe('auth branches routes', () => {
     await app.close();
   });
 
+  it('normalizes cnpjs on create, picking a primary and rejecting invalid values', async () => {
+    const tx = makeTx();
+    tx.branch.create.mockImplementation(async ({ data }: any) => ({ id: 'b1', isMatriz: true, cnpjs: data.cnpjs }));
+    mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockedPrisma.branch.findFirst.mockResolvedValue(null);
+
+    const app = await buildApp();
+
+    let res = await app.inject({
+      method: 'POST',
+      url: '/branches',
+      payload: {
+        companyId: 'c1',
+        tradeName: 'Matriz',
+        address: 'A',
+        phone: '1',
+        cnpjs: [
+          { cnpj: '11.222.333/0001-81', label: 'Exames' },
+          { cnpj: '11222333000181' },
+          { cnpj: '11444777000161', label: 'Consultas', isPrimary: true },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.cnpjs).toEqual([
+      { cnpj: '11222333000181', label: 'Exames', isPrimary: false },
+      { cnpj: '11444777000161', label: 'Consultas', isPrimary: true },
+    ]);
+
+    res = await app.inject({
+      method: 'POST',
+      url: '/branches',
+      payload: { companyId: 'c1', tradeName: 'Matriz', address: 'A', phone: '1', cnpjs: [{ cnpj: '11111111111111' }] },
+    });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+  });
+
   it('gets branch by id', async () => {
     mockedPrisma.branch.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'b1' });
 
@@ -149,6 +189,9 @@ describe('auth branches routes', () => {
 
     res = await app.inject({ method: 'PUT', url: '/branches/b1', payload: { tradeName: 'Y' } });
     expect(res.statusCode).toBe(404);
+
+    res = await app.inject({ method: 'PUT', url: '/branches/b1', payload: { cnpjs: [{ cnpj: '00000000000000' }] } });
+    expect(res.statusCode).toBe(400);
 
     await app.close();
   });
