@@ -108,12 +108,7 @@ describe('procedures especialidades routes', () => {
     mockedPrisma.especialidade.findMany.mockResolvedValueOnce([{ id: 'e-1', name: 'TC Crânio' }]);
     res = await app.inject({ method: 'POST', url: '/especialidades', payload: { modalidadeId: 'm-1', name: 'tc crânio' } });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('DUPLICATE_EXACT');
-
-    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([{ id: 'e-1', name: 'TC Crânio' }]);
-    res = await app.inject({ method: 'POST', url: '/especialidades', payload: { modalidadeId: 'm-1', name: 'TC Crnio' } });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('SIMILAR_EXISTS');
+    expect(res.json().error).toBe('MODALIDADE_ALREADY_HAS_ESPECIALIDADE');
 
     mockedPrisma.especialidade.findMany.mockResolvedValueOnce([]);
     res = await app.inject({

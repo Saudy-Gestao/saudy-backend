@@ -237,6 +237,10 @@ export default async function especialidadeRoutes(app: FastifyInstance) {
       },
     });
 
+    if (activeItems.length > 0) {
+      return reply.code(409).send({ error: "MODALIDADE_ALREADY_HAS_ESPECIALIDADE", existing: activeItems[0] });
+    }
+
     const exactMatch = activeItems.find((item: any) => normalizeForCompare(item.name) === normalizedNew);
     if (exactMatch) {
       return reply.code(409).send({ error: "DUPLICATE_EXACT", existing: exactMatch });
