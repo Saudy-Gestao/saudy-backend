@@ -53,6 +53,17 @@ export const swaggerComponents = {
         address: { type: 'string' },
         phone: { type: 'string' },
         isMatriz: { type: 'boolean' },
+        cnpjs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              cnpj: { type: 'string' },
+              label: { type: 'string' },
+              isPrimary: { type: 'boolean' },
+            },
+          },
+        },
       },
       example: {
         id: '6b2f4e6b-3b6a-4f1a-b0d6-abcdef123456',
@@ -61,6 +72,7 @@ export const swaggerComponents = {
         address: 'Av. Central, 1',
         phone: '+55 11 98888-8888',
         isMatriz: true,
+        cnpjs: [{ cnpj: '12345678000190', label: 'Exames', isPrimary: true }],
       },
     },
     BranchCreate: {
@@ -72,6 +84,17 @@ export const swaggerComponents = {
         phone: { type: 'string' },
         isMatriz: { type: 'boolean' },
         type: { type: 'string', enum: ['Filial', 'Matriz'] },
+        cnpjs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              cnpj: { type: 'string' },
+              label: { type: 'string' },
+              isPrimary: { type: 'boolean' },
+            },
+          },
+        },
       },
       required: ['companyId', 'tradeName'],
       example: {
@@ -92,6 +115,17 @@ export const swaggerComponents = {
         phone: { type: 'string' },
         isMatriz: { type: 'boolean' },
         type: { type: 'string', enum: ['Filial', 'Matriz'] },
+        cnpjs: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              cnpj: { type: 'string' },
+              label: { type: 'string' },
+              isPrimary: { type: 'boolean' },
+            },
+          },
+        },
       },
       example: {
         companyId: '9a2f4e6b-3b6a-4f1a-b0d6-123456789abc',
@@ -395,6 +429,17 @@ export const ajvSchemas: Record<string, any> = {
       address: { type: 'string' },
       phone: { type: 'string' },
       isMatriz: { type: 'boolean' },
+      cnpjs: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            cnpj: { type: 'string' },
+            label: { type: 'string' },
+            isPrimary: { type: 'boolean' },
+          },
+        },
+      },
     },
   },
   BranchCreate: {
@@ -406,6 +451,17 @@ export const ajvSchemas: Record<string, any> = {
       phone: { type: 'string' },
       isMatriz: { type: 'boolean' },
       type: { type: 'string', enum: ['Filial', 'Matriz'] },
+      cnpjs: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            cnpj: { type: 'string' },
+            label: { type: 'string' },
+            isPrimary: { type: 'boolean' },
+          },
+        },
+      },
     },
     required: ['companyId', 'tradeName'],
   },
@@ -418,6 +474,17 @@ export const ajvSchemas: Record<string, any> = {
       phone: { type: 'string' },
       isMatriz: { type: 'boolean' },
       type: { type: 'string', enum: ['Filial', 'Matriz'] },
+      cnpjs: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            cnpj: { type: 'string' },
+            label: { type: 'string' },
+            isPrimary: { type: 'boolean' },
+          },
+        },
+      },
     },
   },
   BranchCreateForRegister: {

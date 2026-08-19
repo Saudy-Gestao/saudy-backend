@@ -76,6 +76,7 @@ model Branch {
     address    String
     phone      String
     isMatriz   Boolean         @default(false)
+    cnpjs      String          @default("[]") @db.Text
     sectors    Sector[]
     settings   BranchSettings?
 
