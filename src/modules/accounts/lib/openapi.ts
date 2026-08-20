@@ -6,8 +6,10 @@ export const swaggerComponents = {
     // Doctor schemas
     Doctor: {
       type: 'object',
+      additionalProperties: true,
       properties: {
         id: { type: 'string' },
+        branchId: { type: 'string', nullable: true },
         crmType: { type: 'string' },
         crm: { type: 'string' },
         crmState: { type: 'string' },
