@@ -197,6 +197,13 @@ const modules = [
     icon: 'ClipboardCheck',
     category: 'cadastros',
   },
+  {
+    name: 'cadastro-agenda',
+    label: 'Cadastro de Agendas',
+    description: 'Agendas de profissionais por unidade, dia e turno',
+    icon: 'CalendarClock',
+    category: 'cadastros',
+  },
 
   // Sistema
   {
@@ -216,7 +223,7 @@ const defaultAccessTemplates = [
       'consulta', 'execucao-exames', 'laudo', 'autorizacao-convenio',
       'entrega', 'estoque', 'financeiro', 'faturamento', 'bi-gestao', 'whatsapp-config', 'conversas',
       'cadastro-medico', 'cadastro-procedimento', 'cadastro-convenio', 'cadastro-paciente',
-      'cadastro-sala', 'cadastro-equipamento', 'cadastro-modalidade', 'cadastro-especialidade', 'cadastro-anamnese', 'cadastro-enfermagem',
+      'cadastro-sala', 'cadastro-equipamento', 'cadastro-modalidade', 'cadastro-especialidade', 'cadastro-anamnese', 'cadastro-enfermagem', 'cadastro-agenda',
       'configuracoes',
     ],
   },
@@ -255,7 +262,7 @@ const defaultAccessTemplates = [
   {
     description: 'Auxiliar Administrativo',
     moduleNames: [
-      'estoque', 'entrega', 'cadastro-procedimento', 'cadastro-sala', 'cadastro-equipamento', 'cadastro-modalidade', 'cadastro-especialidade',
+      'estoque', 'entrega', 'cadastro-procedimento', 'cadastro-sala', 'cadastro-equipamento', 'cadastro-modalidade', 'cadastro-especialidade', 'cadastro-agenda',
     ],
   },
 ];

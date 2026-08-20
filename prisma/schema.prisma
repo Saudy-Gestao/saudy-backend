@@ -79,6 +79,7 @@ model Branch {
     cnpjs      String          @default("[]") @db.Text
     sectors    Sector[]
     settings   BranchSettings?
+    agendas    Agenda[]
 
     @@map("branches")
 }
@@ -180,10 +181,48 @@ model Sector {
     doctors     Doctor[]
     doctorRooms DoctorRoom[]
     medicalEquipments MedicalEquipment[]
+    agendas     Agenda[]
 
     @@index([modalidadeId])
     @@index([especialidadeId])
     @@map("sectors")
+}
+
+enum AgendaStatus {
+    ATIVA
+    INATIVA
+    BLOQUEADA
+}
+
+model Agenda {
+    id              String   @id @default(uuid())
+    branchId        String
+    branch          Branch   @relation(fields: [branchId], references: [id])
+    doctorId        String
+    doctor          Doctor   @relation(fields: [doctorId], references: [id])
+    weekday         String
+    shiftStart      String
+    shiftEnd        String
+    especialidadeId String?
+    especialidade   Especialidade? @relation(fields: [especialidadeId], references: [id], onDelete: SetNull)
+    roomId          String?
+    room            Sector?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
+    startDate       DateTime?
+    endDate         DateTime?
+    status          AgendaStatus @default(ATIVA)
+    createdByUserId String?
+    createdByName   String?
+    updatedByUserId String?
+    updatedByName   String?
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+
+    @@index([branchId])
+    @@index([doctorId])
+    @@index([roomId])
+    @@index([especialidadeId])
+    @@index([doctorId, weekday])
+    @@map("agendas")
 }
 
 model Access {
@@ -302,6 +341,7 @@ model Doctor {
     reportsAsReportingDoctor Report[] @relation("reporting_doctor")
     reportsAsReviewingDoctor Report[] @relation("reviewing_doctor")
     reportsAsFinalizedDoctor Report[] @relation("finalized_doctor")
+    agendas        Agenda[]
 
     @@unique([crm, crmState])
     @@index([branchId])
@@ -1438,6 +1478,7 @@ model Especialidade {
     updatedAt       DateTime @updatedAt
 
     sectors         Sector[]
+    agendas         Agenda[]
 
     @@index([branchId])
     @@index([modalidadeId])
