@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import preAttendanceRoutes from './routes/pre-attendances';
 import appointmentRoutes from './routes/appointments';
+import agendaRoutes from './routes/agendas';
 import consultationRoutes from './routes/consultations';
 import reportRoutes from './routes/reports';
 import reportWorklistRoutes from './routes/report-worklist';
@@ -36,6 +37,7 @@ export default async function careModule(app: FastifyInstance) {
   app.register(teleconsultationLinksRoutes, { prefix: '/teleconsultation-links' });
   app.register(preAttendanceRoutes, { prefix: '/pre-attendances' });
   app.register(appointmentRoutes, { prefix: '/appointments' });
+  app.register(agendaRoutes, { prefix: '/agendas' });
   app.register(consultationRoutes, { prefix: '/consultations' });
   app.register(reportRoutes, { prefix: '/reports' });
   app.register(reportWorklistRoutes, { prefix: '/report-worklist' });
