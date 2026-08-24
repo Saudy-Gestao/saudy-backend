@@ -1,0 +1,2 @@
+ALTER TABLE "procedure_doctors"
+ADD COLUMN IF NOT EXISTS "branchIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

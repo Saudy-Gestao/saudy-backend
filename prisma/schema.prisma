@@ -1921,6 +1921,8 @@ model ProcedureDoctor {
     procedureId String
     doctorId    String
     doctorName  String?
+    durationMinutes Int?
+    branchIds   String[] @default([])
     createdAt   DateTime @default(now())
 
     procedure Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
@@ -2415,4 +2417,3 @@ model CodeChunk {
     @@index([repo, filePath])
     @@map("code_chunks")
 }
-

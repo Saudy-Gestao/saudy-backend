@@ -15,6 +15,9 @@ const normalizeDoctorLinks = (data: any) => {
       .map((doctor: any) => ({
         doctorId: String(doctor.doctorId),
         doctorName: doctor.doctorName ? String(doctor.doctorName) : null,
+        durationMinutes: Number.isFinite(Number(doctor.durationMinutes)) && Number(doctor.durationMinutes) > 0
+          ? Math.round(Number(doctor.durationMinutes))
+          : null,
       }));
   }
 
@@ -22,7 +25,7 @@ const normalizeDoctorLinks = (data: any) => {
     return data.doctorIds
       .map((doctorId: any) => String(doctorId).trim())
       .filter((doctorId: string) => doctorId.length > 0)
-      .map((doctorId: string) => ({ doctorId, doctorName: null }));
+      .map((doctorId: string) => ({ doctorId, doctorName: null, durationMinutes: null }));
   }
 
   return null;
@@ -259,6 +262,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
               properties: {
                 doctorId: { type: "string" },
                 doctorName: { type: "string" },
+                durationMinutes: { type: "number", nullable: true },
               },
             },
           },
@@ -342,9 +346,10 @@ export default async function procedureRoutes(app: FastifyInstance) {
           doctors: doctorLinks.length
             ? {
                 createMany: {
-                  data: doctorLinks.map((doctor: { doctorId: any; doctorName: any; }) => ({
-                    doctorId: doctor.doctorId,
-                    doctorName: doctor.doctorName,
+                  data: doctorLinks.map((doctor: { doctorId: any; doctorName: any; durationMinutes?: number | null }) => ({
+                  doctorId: doctor.doctorId,
+                  doctorName: doctor.doctorName,
+                  durationMinutes: doctor.durationMinutes,
                   })),
                   skipDuplicates: true,
                 },
@@ -470,14 +475,26 @@ export default async function procedureRoutes(app: FastifyInstance) {
       ];
 
       if (doctorLinks !== null) {
+        const existingDoctorLinks = await prisma.procedureDoctor.findMany({
+          where: { procedureId: id },
+          select: { doctorId: true, durationMinutes: true, branchIds: true },
+        });
+        const existingDurationByDoctorId = new Map(
+          existingDoctorLinks.map((link: { doctorId: string; durationMinutes: number | null }) => [link.doctorId, link.durationMinutes]),
+        );
+        const existingBranchIdsByDoctorId = new Map(
+          existingDoctorLinks.map((link: { doctorId: string; branchIds: string[] }) => [link.doctorId, link.branchIds]),
+        );
         actions.push(prisma.procedureDoctor.deleteMany({ where: { procedureId: id } }));
         if (doctorLinks.length) {
           actions.push(
             prisma.procedureDoctor.createMany({
-              data: doctorLinks.map((doctor: { doctorId: any; doctorName: any; }) => ({
+              data: doctorLinks.map((doctor: { doctorId: any; doctorName: any; durationMinutes?: number | null }) => ({
                 procedureId: id,
                 doctorId: doctor.doctorId,
                 doctorName: doctor.doctorName,
+                durationMinutes: doctor.durationMinutes ?? existingDurationByDoctorId.get(doctor.doctorId) ?? null,
+                branchIds: existingBranchIdsByDoctorId.get(doctor.doctorId) ?? [],
               })),
               skipDuplicates: true,
             }),

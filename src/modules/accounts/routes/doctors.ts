@@ -24,7 +24,67 @@ const normalizeRoomIds = (value: unknown): string[] => {
   );
 };
 
-const mapDoctorResponse = (doctor: any) => {
+const normalizeEspecialidadeGroups = (
+  value: unknown,
+  fallback: { registrationType?: unknown; registrationNumber?: unknown; registrationState?: unknown },
+) => {
+  if (!Array.isArray(value)) return [];
+
+  const fallbackType = String(fallback.registrationType || 'CRM').trim() || 'CRM';
+  const fallbackNumber = String(fallback.registrationNumber || '').trim();
+  const fallbackState = String(fallback.registrationState || '').trim().toUpperCase();
+
+  return value.map((item) => {
+    const group = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    return {
+      ...group,
+      registrationType: String(group.registrationType || fallbackType).trim() || fallbackType,
+      registrationNumber: String(group.registrationNumber || fallbackNumber).trim(),
+      registrationState: String(group.registrationState || fallbackState).trim().toUpperCase(),
+    };
+  });
+};
+
+const normalizeProcedureDurations = (value: unknown) => {
+  if (!Array.isArray(value)) return [];
+
+  const byProcedure = new Map<string, { procedureId: string; durationMinutes: number; branchIds: string[] }>();
+  value.forEach((item) => {
+    const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const procedureId = String(record.procedureId || '').trim();
+    const durationMinutes = Number(record.durationMinutes);
+    if (!procedureId || !Number.isFinite(durationMinutes) || durationMinutes <= 0) return;
+    const branchIds = Array.isArray(record.branchIds)
+      ? Array.from(new Set(record.branchIds.map((branchId) => String(branchId || '').trim()).filter(Boolean)))
+      : [];
+    byProcedure.set(procedureId, { procedureId, durationMinutes: Math.round(durationMinutes), branchIds });
+  });
+  return Array.from(byProcedure.values());
+};
+
+const getProcedureDurationLinks = async (doctorId: string) => {
+  if (!prisma.procedureDoctor?.findMany) return [];
+
+  const links = await prisma.procedureDoctor.findMany({
+    where: { doctorId },
+    include: {
+      procedure: {
+        select: { id: true, name: true, durationMinutes: true, modalidadeId: true },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  return links.map((link: any) => ({
+    procedureId: link.procedureId,
+    procedureName: link.procedure?.name || '',
+    modalidadeId: link.procedure?.modalidadeId || null,
+    durationMinutes: link.durationMinutes ?? link.procedure?.durationMinutes ?? null,
+    branchIds: Array.isArray(link.branchIds) ? link.branchIds : [],
+  }));
+};
+
+const mapDoctorResponse = (doctor: any, procedureDurations: unknown[] = []) => {
   const roomLinks = Array.isArray(doctor?.roomLinks) ? doctor.roomLinks : [];
   const normalizedLinks = roomLinks
     .map((link: any) => ({
@@ -46,12 +106,19 @@ const mapDoctorResponse = (doctor: any) => {
     roomIds.unshift(fallbackRoomId);
   }
 
+  const parsedGroups = doctor.especialidadeGroups ? JSON.parse(doctor.especialidadeGroups) : [];
+
   return {
     ...doctor,
     roomIds,
     rooms: normalizedLinks,
     workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
-    especialidadeGroups: doctor.especialidadeGroups ? JSON.parse(doctor.especialidadeGroups) : [],
+    especialidadeGroups: normalizeEspecialidadeGroups(parsedGroups, {
+      registrationType: doctor.crmType,
+      registrationNumber: doctor.crm,
+      registrationState: doctor.crmState,
+    }),
+    procedureDurations,
   };
 };
 
@@ -143,7 +210,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       orderBy: { name: 'asc' },
     });
 
-    return doctors.map(mapDoctorResponse);
+    return Promise.all(doctors.map(async (doctor: any) => mapDoctorResponse(doctor, await getProcedureDurationLinks(doctor.id))));
   });
 
   // Get doctor by ID
@@ -192,7 +259,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Doctor not found' });
     }
 
-    return mapDoctorResponse(doctor);
+    return mapDoctorResponse(doctor, await getProcedureDurationLinks(doctor.id));
   });
 
   // Get doctor by CRM
@@ -242,7 +309,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Doctor not found' });
     }
 
-     return mapDoctorResponse(doctor);
+    return mapDoctorResponse(doctor, await getProcedureDurationLinks(doctor.id));
   });
 
   // Create new doctor
@@ -302,6 +369,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       if (rooms.length !== roomIds.length) {
         return reply.code(400).send({ error: 'Validation failed', fields: { roomIds: 'Uma ou mais salas sao invalidas' } });
       }
+
       data.roomId = roomIds[0];
     } else if (data?.roomId !== undefined) {
       const roomId = String(data.roomId || '').trim();
@@ -313,6 +381,17 @@ export default async function doctorRoutes(app: FastifyInstance) {
         data.roomId = roomId;
       } else {
         data.roomId = null;
+      }
+    }
+
+    const procedureDurations = normalizeProcedureDurations(data?.procedureDurations);
+    if (procedureDurations.length > 0) {
+      const procedures = await prisma.procedure.findMany({
+        where: { id: { in: procedureDurations.map((item) => item.procedureId) }, branchId },
+        select: { id: true },
+      });
+      if (procedures.length !== procedureDurations.length) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { procedureDurations: 'Um ou mais procedimentos são inválidos' } });
       }
     }
 
@@ -333,7 +412,11 @@ export default async function doctorRoutes(app: FastifyInstance) {
       }
 
       const especialidadeGroupsData = Array.isArray(data.especialidadeGroups)
-        ? JSON.stringify(data.especialidadeGroups)
+        ? JSON.stringify(normalizeEspecialidadeGroups(data.especialidadeGroups, {
+          registrationType: data.crmType,
+          registrationNumber: data.crm,
+          registrationState: data.crmState,
+        }))
         : '[]';
 
       const doctor = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -368,6 +451,22 @@ export default async function doctorRoutes(app: FastifyInstance) {
           });
         }
 
+        if (data.procedureDurations !== undefined) {
+          await tx.procedureDoctor.deleteMany({ where: { doctorId: createdDoctor.id } });
+          if (procedureDurations.length > 0) {
+            await tx.procedureDoctor.createMany({
+              data: procedureDurations.map((item) => ({
+                procedureId: item.procedureId,
+                doctorId: createdDoctor.id,
+                doctorName: createdDoctor.name,
+                durationMinutes: item.durationMinutes,
+                branchIds: item.branchIds,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+
         return tx.doctor.findUniqueOrThrow({
           where: { id: createdDoctor.id },
           include: {
@@ -383,7 +482,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
         });
       });
 
-      const doctorResponse = mapDoctorResponse(doctor);
+      const doctorResponse = mapDoctorResponse(doctor, await getProcedureDurationLinks(doctor.id));
 
       return reply.code(201).send(doctorResponse);
     } catch (error: any) {
@@ -469,6 +568,17 @@ export default async function doctorRoutes(app: FastifyInstance) {
       }
     }
 
+    const procedureDurations = normalizeProcedureDurations(data?.procedureDurations);
+    if (data.procedureDurations !== undefined && procedureDurations.length > 0) {
+      const procedures = await prisma.procedure.findMany({
+        where: { id: { in: procedureDurations.map((item) => item.procedureId) }, branchId },
+        select: { id: true },
+      });
+      if (procedures.length !== procedureDurations.length) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { procedureDurations: 'Um ou mais procedimentos são inválidos' } });
+      }
+    }
+
     if (data?.birthDate !== undefined && data.birthDate) {
       data.birthDate = new Date(String(data.birthDate));
     }
@@ -510,7 +620,13 @@ export default async function doctorRoutes(app: FastifyInstance) {
         updateData.workingSchedules = '[]';
       }
       if (data.especialidadeGroups !== undefined) {
-        updateData.especialidadeGroups = Array.isArray(data.especialidadeGroups) ? JSON.stringify(data.especialidadeGroups) : '[]';
+        updateData.especialidadeGroups = Array.isArray(data.especialidadeGroups)
+          ? JSON.stringify(normalizeEspecialidadeGroups(data.especialidadeGroups, {
+            registrationType: data.crmType ?? existing.crmType,
+            registrationNumber: data.crm ?? existing.crm,
+            registrationState: data.crmState ?? existing.crmState,
+          }))
+          : '[]';
       }
 
       const doctor = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -537,6 +653,22 @@ export default async function doctorRoutes(app: FastifyInstance) {
           }
         }
 
+        if (data.procedureDurations !== undefined) {
+          await tx.procedureDoctor.deleteMany({ where: { doctorId: id } });
+          if (procedureDurations.length > 0) {
+            await tx.procedureDoctor.createMany({
+              data: procedureDurations.map((item) => ({
+                procedureId: item.procedureId,
+                doctorId: id,
+                doctorName: existing.name,
+                durationMinutes: item.durationMinutes,
+                branchIds: item.branchIds,
+              })),
+              skipDuplicates: true,
+            });
+          }
+        }
+
         return tx.doctor.findUniqueOrThrow({
           where: { id },
           include: {
@@ -552,7 +684,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
         });
       });
 
-      return mapDoctorResponse(doctor);
+      return mapDoctorResponse(doctor, await getProcedureDurationLinks(doctor.id));
     } catch (error: any) {
       if (error.code === 'P2002') {
         const { field, message } = resolveUniqueField(error.meta?.target);
@@ -672,4 +804,3 @@ export default async function doctorRoutes(app: FastifyInstance) {
     return Array.from(specialtiesSet).sort();
   });
 }
-

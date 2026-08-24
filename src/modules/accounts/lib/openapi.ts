@@ -65,13 +65,30 @@ export const swaggerComponents = {
             properties: {
               modalidadeId: { type: 'string', nullable: true },
               especialidadeId: { type: 'string', nullable: true },
+              registrationType: { type: 'string' },
+              registrationNumber: { type: 'string' },
+              registrationState: { type: 'string' },
               metodos: { type: 'array', items: { type: 'string' } },
               procedimentoIds: { type: 'array', items: { type: 'string' } },
+              branchIds: { type: 'array', items: { type: 'string' } },
             },
           },
         },
         branchIds: { type: 'array', items: { type: 'string' } },
         appointmentDurations: { type: 'array', items: { type: 'number' } },
+        procedureDurations: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              procedureId: { type: 'string' },
+              procedureName: { type: 'string' },
+              modalidadeId: { type: 'string', nullable: true },
+              durationMinutes: { type: 'number', nullable: true },
+              branchIds: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
         workingSchedules: {
           type: 'array',
           items: {
@@ -508,4 +525,3 @@ export const swaggerComponents = {
     },
   },
 };
-
