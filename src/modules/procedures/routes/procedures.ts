@@ -165,6 +165,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         orderBy: { createdAt: "desc" },
         include: {
           modalidade: { select: { id: true, name: true } },
+          especialidade: { select: { id: true, name: true, modalidadeId: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {
@@ -210,6 +211,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
       where: { id, branchId },
       include: {
         modalidade: { select: { id: true, name: true } },
+        especialidade: { select: { id: true, name: true, modalidadeId: true } },
         doctors: true,
         materials: { include: { inventoryItem: true } },
         kitBindings: {
@@ -253,6 +255,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
           durationMinutes: { type: "number" },
           modalities: { type: "array", items: { type: "string" } },
           modalidadeId: { type: "string" },
+          especialidadeId: { type: "string" },
           branchIds: { type: "array", items: { type: "string" } },
           doctorIds: { type: "array", items: { type: "string" } },
           doctors: {
@@ -341,6 +344,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
             ? Number(data.durationMinutes)
             : null,
           modalidadeId: data.modalidadeId || null,
+          especialidadeId: data.especialidadeId || null,
           branchIds,
           modalities,
           doctors: doctorLinks.length
@@ -390,6 +394,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         },
         include: {
           modalidade: { select: { id: true, name: true } },
+          especialidade: { select: { id: true, name: true, modalidadeId: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {
@@ -462,6 +467,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
           : Number(data.durationMinutes);
       }
       if (data.modalidadeId !== undefined) updateData.modalidadeId = data.modalidadeId || null;
+      if (data.especialidadeId !== undefined) updateData.especialidadeId = data.especialidadeId || null;
       if (data.isActive !== undefined) updateData.isActive = Boolean(data.isActive);
 
       const modalities = normalizeStringArray(data.modalities);
@@ -582,6 +588,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         where: { id, branchId },
         include: {
           modalidade: { select: { id: true, name: true } },
+          especialidade: { select: { id: true, name: true, modalidadeId: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {

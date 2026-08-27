@@ -1479,6 +1479,7 @@ model Especialidade {
 
     sectors         Sector[]
     agendas         Agenda[]
+    procedures      Procedure[]
 
     @@index([branchId])
     @@index([modalidadeId])
@@ -1604,6 +1605,8 @@ model Procedure {
     modalities         String[]          @default([])
     modalidadeId       String?
     modalidade         Modalidade?       @relation(fields: [modalidadeId], references: [id])
+    especialidadeId    String?
+    especialidade      Especialidade?    @relation(fields: [especialidadeId], references: [id], onDelete: SetNull)
     branchIds          String[]          @default([])
     isActive           Boolean           @default(true)
     createdAt          DateTime          @default(now())
@@ -1620,6 +1623,7 @@ model Procedure {
 
     @@index([branchId])
     @@index([modalidadeId])
+    @@index([especialidadeId])
     @@map("procedures")
 }
 
