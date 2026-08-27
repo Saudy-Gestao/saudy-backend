@@ -94,7 +94,7 @@ describe('procedures especialidades routes', () => {
     await app.close();
   });
 
-  it('creates especialidade, validating modalidade and blocking duplicates/similar names', async () => {
+  it('creates especialidade, validating modalidade and blocking duplicate/similar names', async () => {
     const app = await buildApp();
 
     let res = await app.inject({ method: 'POST', url: '/especialidades', payload: { modalidadeId: 'm-1', name: '' } });
@@ -111,7 +111,7 @@ describe('procedures especialidades routes', () => {
     mockedPrisma.especialidade.findMany.mockResolvedValueOnce([{ id: 'e-1', name: 'TC Crânio' }]);
     res = await app.inject({ method: 'POST', url: '/especialidades', payload: { modalidadeId: 'm-1', name: 'tc crânio' } });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('MODALIDADE_ALREADY_HAS_ESPECIALIDADE');
+    expect(res.json().error).toBe('DUPLICATE_EXACT');
 
     mockedPrisma.especialidade.findMany.mockResolvedValueOnce([]);
     mockedPrisma.cbo.findUnique.mockResolvedValueOnce(null);

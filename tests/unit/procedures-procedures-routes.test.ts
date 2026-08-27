@@ -15,6 +15,7 @@ vi.mock('../../src/modules/procedures/lib/prisma', () => ({
       delete: vi.fn(),
     },
     procedureDoctor: {
+      findMany: vi.fn(),
       deleteMany: vi.fn(),
       createMany: vi.fn(),
     },
@@ -55,6 +56,7 @@ describe('procedures routes', () => {
     mockedPrisma.procedureDoctor.createMany.mockResolvedValue({ count: 1 });
     mockedPrisma.procedureMaterial.deleteMany.mockResolvedValue({ count: 1 });
     mockedPrisma.procedureMaterial.createMany.mockResolvedValue({ count: 1 });
+    mockedPrisma.procedureDoctor.findMany.mockResolvedValue([]);
 
     mockedPrisma.$transaction.mockImplementation(async (arg: any) => {
       if (Array.isArray(arg)) return arg;
