@@ -80,7 +80,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
       response: { 200: { $ref: 'Sector#' }, 400: { type: 'object' }, 403: { type: 'object' } },
     },
   }, async (request, reply) => {
-    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd, modalidadeId, especialidadeId, capacity } = request.body as {
+    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd, modalidadeId, especialidadeId, especialidadeIds, capacity } = request.body as {
       branchId: string;
       name: string;
       description: string;
@@ -89,6 +89,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
       workingHoursEnd?: string;
       modalidadeId?: string | null;
       especialidadeId?: string | null;
+      especialidadeIds?: string[];
       capacity?: number | null;
     };
 
@@ -129,13 +130,15 @@ export default async function sectorRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Hora final da sala deve ser maior que a inicial' });
     }
 
-    let resolvedEspecialidadeId: string | null = null;
-    if (especialidadeId) {
-      const especialidade = await prisma.especialidade.findUnique({ where: { id: especialidadeId } });
-      if (!especialidade || (modalidadeId && especialidade.modalidadeId !== modalidadeId)) {
+    const normalizedEspecialidadeIds = Array.from(new Set([
+      ...(Array.isArray(especialidadeIds) ? especialidadeIds : []),
+      ...(especialidadeId ? [especialidadeId] : []),
+    ].map((id) => String(id || '').trim()).filter(Boolean)));
+    const especialidades = normalizedEspecialidadeIds.length
+      ? await prisma.especialidade.findMany({ where: { id: { in: normalizedEspecialidadeIds } } })
+      : [];
+    if (especialidades.length !== normalizedEspecialidadeIds.length || especialidades.some((item: any) => modalidadeId && item.modalidadeId !== modalidadeId)) {
         return reply.code(400).send({ error: 'Especialidade inválida para a modalidade selecionada' });
-      }
-      resolvedEspecialidadeId = especialidade.id;
     }
 
     const normalizedCapacity = capacity !== undefined && capacity !== null ? Number(capacity) : null;
@@ -152,7 +155,8 @@ export default async function sectorRoutes(app: FastifyInstance) {
         workingHoursStart: normalizedWorkingHoursStart,
         workingHoursEnd: normalizedWorkingHoursEnd,
         modalidadeId: modalidadeId || null,
-        especialidadeId: resolvedEspecialidadeId,
+        especialidadeId: normalizedEspecialidadeIds[0] || null,
+        especialidadeIds: normalizedEspecialidadeIds,
         capacity: normalizedCapacity,
       },
     });
@@ -204,7 +208,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
     },
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd, modalidadeId, especialidadeId, capacity } = request.body as {
+    const { branchId, name, description, workingDays, workingHoursStart, workingHoursEnd, modalidadeId, especialidadeId, especialidadeIds, capacity } = request.body as {
       branchId?: string;
       name?: string;
       description?: string;
@@ -213,6 +217,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
       workingHoursEnd?: string;
       modalidadeId?: string | null;
       especialidadeId?: string | null;
+      especialidadeIds?: string[];
       capacity?: number | null;
     };
 
@@ -269,17 +274,21 @@ export default async function sectorRoutes(app: FastifyInstance) {
       }
 
       let resolvedEspecialidadeId: string | null | undefined;
-      if (especialidadeId !== undefined) {
-        if (especialidadeId) {
-          const targetModalidadeId = modalidadeId !== undefined ? modalidadeId : current.modalidadeId;
-          const especialidade = await prisma.especialidade.findUnique({ where: { id: especialidadeId } });
-          if (!especialidade || (targetModalidadeId && especialidade.modalidadeId !== targetModalidadeId)) {
+      let resolvedEspecialidadeIds: string[] | undefined;
+      if (especialidadeIds !== undefined || especialidadeId !== undefined) {
+        const targetModalidadeId = modalidadeId !== undefined ? modalidadeId : current.modalidadeId;
+        const normalizedIds = Array.from(new Set([
+          ...(Array.isArray(especialidadeIds) ? especialidadeIds : []),
+          ...(especialidadeId ? [especialidadeId] : []),
+        ].map((id) => String(id || '').trim()).filter(Boolean)));
+        const especialidades = normalizedIds.length
+          ? await prisma.especialidade.findMany({ where: { id: { in: normalizedIds } } })
+          : [];
+        if (especialidades.length !== normalizedIds.length || especialidades.some((item: any) => targetModalidadeId && item.modalidadeId !== targetModalidadeId)) {
             return reply.code(400).send({ error: 'Especialidade inválida para a modalidade selecionada' });
-          }
-          resolvedEspecialidadeId = especialidade.id;
-        } else {
-          resolvedEspecialidadeId = null;
         }
+        resolvedEspecialidadeIds = normalizedIds;
+        resolvedEspecialidadeId = normalizedIds[0] || null;
       }
 
       let normalizedCapacity: number | null | undefined;
@@ -301,6 +310,7 @@ export default async function sectorRoutes(app: FastifyInstance) {
           ...(normalizedWorkingHoursEnd !== undefined ? { workingHoursEnd: normalizedWorkingHoursEnd } : {}),
           ...(modalidadeId !== undefined ? { modalidadeId: modalidadeId || null } : {}),
           ...(resolvedEspecialidadeId !== undefined ? { especialidadeId: resolvedEspecialidadeId } : {}),
+          ...(resolvedEspecialidadeIds !== undefined ? { especialidadeIds: resolvedEspecialidadeIds } : {}),
           ...(normalizedCapacity !== undefined ? { capacity: normalizedCapacity } : {}),
         },
       });

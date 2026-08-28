@@ -176,6 +176,7 @@ model Sector {
     modalidadeId    String?
     modalidade      Modalidade? @relation(fields: [modalidadeId], references: [id], onDelete: SetNull)
     especialidadeId String?
+    especialidadeIds String[] @default([])
     especialidade   Especialidade? @relation(fields: [especialidadeId], references: [id], onDelete: SetNull)
     capacity        Int?
     users       User[]
