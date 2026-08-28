@@ -100,7 +100,7 @@ export default async function userRoutes(app: FastifyInstance) {
     const { branchId, sectorId, accessIds, doctorId, name, birthDate, email, password, phone, address } = request.body as {
       branchId: string;
       sectorId: string;
-      accessIds: string[];
+      accessIds?: string[];
       doctorId?: string;
       name: string;
       birthDate: string;
@@ -113,6 +113,7 @@ export default async function userRoutes(app: FastifyInstance) {
     const requestUserId = (request.user as any).id as string;
     const loggedContext = await getLoggedContext(requestUserId);
     const normalizedEmail = normalizeEmail(email);
+    const normalizedAccessIds = Array.from(new Set(Array.isArray(accessIds) ? accessIds.filter(Boolean) : []));
 
     if (!loggedContext?.companyId) {
       return reply.code(403).send({ error: 'User not associated with a company' });
@@ -135,6 +136,28 @@ export default async function userRoutes(app: FastifyInstance) {
 
     if (!isValidEmail(normalizedEmail)) {
       return reply.code(400).send({ error: 'Email inválido' });
+    }
+
+    const emailAlreadyInUse = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true, email: true },
+    });
+
+    if (emailAlreadyInUse?.email) {
+      return reply.code(409).send({ error: 'Já existe um usuário cadastrado com este e-mail' });
+    }
+
+    if (normalizedAccessIds.length > 0 && prisma.access?.findMany) {
+      const existingAccesses = await prisma.access.findMany({
+        where: { id: { in: normalizedAccessIds } },
+        select: { id: true },
+      });
+      const existingAccessIds = new Set(existingAccesses.map((access: { id: string }) => access.id));
+      const invalidAccessIds = normalizedAccessIds.filter((id) => !existingAccessIds.has(id));
+
+      if (invalidAccessIds.length > 0) {
+        return reply.code(400).send({ error: 'Um ou mais acessos selecionados são inválidos ou foram removidos' });
+      }
     }
 
     const sector = await prisma.sector.findFirst({
@@ -173,20 +196,35 @@ export default async function userRoutes(app: FastifyInstance) {
     // A senha é opcional no cadastro; quando omitida, uma senha temporária é enviada no e-mail de boas-vindas.
     const initialPassword = password?.trim() || randomBytes(32).toString('hex');
     const hashedPassword = await bcrypt.hash(initialPassword, 10);
-    const user = await prisma.user.create({
-      data: {
-        sectorId,
-        doctorId: validatedDoctorId,
-        accesses: { connect: accessIds.map((id) => ({ id })) },
-        name,
-        birthDate: new Date(birthDate),
-        email: normalizedEmail,
-        password: hashedPassword,
-        phone,
-        address,
-      },
-      include: userInclude,
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          sectorId,
+          doctorId: validatedDoctorId,
+          accesses: { connect: normalizedAccessIds.map((id) => ({ id })) },
+          name,
+          birthDate: new Date(birthDate),
+          email: normalizedEmail,
+          password: hashedPassword,
+          phone: phone || '',
+          address: address || '',
+        },
+        include: userInclude,
+      });
+    } catch (error: any) {
+      request.log.error({ err: error, email: normalizedEmail }, 'Falha ao criar usuário');
+
+      if (error?.code === 'P2002') {
+        return reply.code(409).send({ error: 'Já existe um registro com um dos dados informados' });
+      }
+
+      if (error?.code === 'P2003') {
+        return reply.code(400).send({ error: 'Um dos vínculos informados não é válido' });
+      }
+
+      return reply.code(500).send({ error: 'Não foi possível criar o usuário. Tente novamente.' });
+    }
 
     // Envia e-mail de boas-vindas com login (sem senha — usuário define via "Esqueci minha senha").
     try {
