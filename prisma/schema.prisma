@@ -80,6 +80,7 @@ model Branch {
     sectors    Sector[]
     settings   BranchSettings?
     agendas    Agenda[]
+    interns    Intern[]
 
     @@map("branches")
 }
@@ -342,6 +343,7 @@ model Doctor {
     reportsAsReviewingDoctor Report[] @relation("reviewing_doctor")
     reportsAsFinalizedDoctor Report[] @relation("finalized_doctor")
     agendas        Agenda[]
+    interns         InternDoctor[]
 
     @@unique([crm, crmState])
     @@index([branchId])
@@ -360,6 +362,40 @@ model DoctorRoom {
     @@index([doctorId])
     @@index([roomId])
     @@map("doctor_rooms")
+}
+
+model Intern {
+    id           String   @id @default(uuid())
+    branchId     String
+    branch       Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+    name         String
+    cpf          String?
+    email        String?
+    phone        String?
+    institution  String?
+    course       String?
+    startDate    DateTime?
+    endDate      DateTime?
+    isActive     Boolean  @default(true)
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
+    doctors      InternDoctor[]
+
+    @@index([branchId, isActive])
+    @@index([name])
+    @@map("interns")
+}
+
+model InternDoctor {
+    id       String @id @default(uuid())
+    internId String
+    doctorId String
+    intern   Intern @relation(fields: [internId], references: [id], onDelete: Cascade)
+    doctor   Doctor @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+    @@unique([internId, doctorId])
+    @@index([doctorId])
+    @@map("intern_doctors")
 }
 
 model Patient {

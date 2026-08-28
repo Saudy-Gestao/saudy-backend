@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import doctorRoutes from './routes/doctors';
 import patientRoutes from './routes/patients';
 import medicalRecordRoutes from './routes/medical-records';
+import internRoutes from './routes/interns';
 import { swaggerComponents } from './lib/openapi';
 
 function stripExamples(obj: any) {
@@ -21,4 +22,5 @@ export default async function accountsModule(app: FastifyInstance) {
   app.register(doctorRoutes, { prefix: '/doctors' });
   app.register(patientRoutes, { prefix: '/patients' });
   app.register(medicalRecordRoutes, { prefix: '/medical-records' });
+  app.register(internRoutes, { prefix: '/interns' });
 }

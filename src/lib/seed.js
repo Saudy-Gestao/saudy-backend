@@ -135,6 +135,13 @@ const modules = [
     category: 'cadastros',
   },
   {
+    name: 'cadastro-estagiario',
+    label: 'Cadastro de Estagiários',
+    description: 'Estagiários e profissionais responsáveis',
+    icon: 'GraduationCap',
+    category: 'cadastros',
+  },
+  {
     name: 'cadastro-procedimento',
     label: 'Cadastro de Procedimentos',
     description: 'Procedimentos e modalidades',
@@ -223,6 +230,7 @@ const defaultAccessTemplates = [
       'consulta', 'execucao-exames', 'laudo', 'autorizacao-convenio',
       'entrega', 'estoque', 'financeiro', 'faturamento', 'bi-gestao', 'whatsapp-config', 'conversas',
       'cadastro-medico', 'cadastro-procedimento', 'cadastro-convenio', 'cadastro-paciente',
+      'cadastro-estagiario',
       'cadastro-sala', 'cadastro-equipamento', 'cadastro-modalidade', 'cadastro-especialidade', 'cadastro-anamnese', 'cadastro-enfermagem', 'cadastro-agenda',
       'configuracoes',
     ],
