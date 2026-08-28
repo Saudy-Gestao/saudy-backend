@@ -104,7 +104,10 @@ const normalizeProcedureKitBindings = (data: any) => {
 
 const normalizeProcedureAppointmentType = (value: unknown): string => {
   const normalized = String(value || '').trim().toUpperCase();
-  return normalized === 'EXAME' ? 'EXAME' : 'CONSULTA';
+  if (normalized === 'EXAME') return 'EXAME';
+  if (normalized === 'CONSULTA_TERAPIAS' || normalized === 'CONSULTA TERAPIAS') return 'CONSULTA_TERAPIAS';
+  if (normalized === 'CONSULTA_CLINICA' || normalized === 'CONSULTA CLINICA') return 'CONSULTA_CLINICA';
+  return 'CONSULTA_CLINICA';
 };
 
 export default async function procedureRoutes(app: FastifyInstance) {
@@ -166,6 +169,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         include: {
           modalidade: { select: { id: true, name: true } },
           especialidade: { select: { id: true, name: true, modalidadeId: true } },
+          cbo: { select: { id: true, code: true, title: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {
@@ -212,6 +216,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
       include: {
         modalidade: { select: { id: true, name: true } },
         especialidade: { select: { id: true, name: true, modalidadeId: true } },
+        cbo: { select: { id: true, code: true, title: true } },
         doctors: true,
         materials: { include: { inventoryItem: true } },
         kitBindings: {
@@ -250,12 +255,13 @@ export default async function procedureRoutes(app: FastifyInstance) {
         properties: {
           name: { type: "string" },
           description: { type: "string" },
-          appointmentType: { type: "string", enum: ["CONSULTA", "EXAME"] },
+          appointmentType: { type: "string", enum: ["CONSULTA_CLINICA", "CONSULTA_TERAPIAS", "EXAME"] },
           price: { type: ["number", "string"] },
           durationMinutes: { type: "number" },
           modalities: { type: "array", items: { type: "string" } },
           modalidadeId: { type: "string" },
           especialidadeId: { type: "string" },
+          cboId: { type: "string", nullable: true },
           branchIds: { type: "array", items: { type: "string" } },
           doctorIds: { type: "array", items: { type: "string" } },
           doctors: {
@@ -317,6 +323,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
       response: {
         201: { type: "object", additionalProperties: true },
         400: { type: "object", additionalProperties: true },
+        404: { type: "object", additionalProperties: true },
       },
     },
   }, async (request, reply) => {
@@ -332,6 +339,11 @@ export default async function procedureRoutes(app: FastifyInstance) {
     const branchIds = normalizeStringArray(data.branchIds) || [];
     const appointmentType = normalizeProcedureAppointmentType(data.appointmentType);
 
+    if (data.cboId) {
+      const cbo = await prisma.cbo.findUnique({ where: { id: data.cboId } });
+      if (!cbo || !cbo.isActive) return reply.code(404).send({ error: "Cbo not found" });
+    }
+
     try {
       const item = await prisma.procedure.create({
         data: {
@@ -345,6 +357,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
             : null,
           modalidadeId: data.modalidadeId || null,
           especialidadeId: data.especialidadeId || null,
+          cboId: data.cboId || null,
           branchIds,
           modalities,
           doctors: doctorLinks.length
@@ -395,6 +408,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         include: {
           modalidade: { select: { id: true, name: true } },
           especialidade: { select: { id: true, name: true, modalidadeId: true } },
+          cbo: { select: { id: true, code: true, title: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {
@@ -468,6 +482,13 @@ export default async function procedureRoutes(app: FastifyInstance) {
       }
       if (data.modalidadeId !== undefined) updateData.modalidadeId = data.modalidadeId || null;
       if (data.especialidadeId !== undefined) updateData.especialidadeId = data.especialidadeId || null;
+      if (data.cboId !== undefined) {
+        if (data.cboId) {
+          const cbo = await prisma.cbo.findUnique({ where: { id: data.cboId } });
+          if (!cbo || !cbo.isActive) return reply.code(404).send({ error: "Cbo not found" });
+        }
+        updateData.cboId = data.cboId || null;
+      }
       if (data.isActive !== undefined) updateData.isActive = Boolean(data.isActive);
 
       const modalities = normalizeStringArray(data.modalities);
@@ -589,6 +610,7 @@ export default async function procedureRoutes(app: FastifyInstance) {
         include: {
           modalidade: { select: { id: true, name: true } },
           especialidade: { select: { id: true, name: true, modalidadeId: true } },
+          cbo: { select: { id: true, code: true, title: true } },
           doctors: true,
           materials: { include: { inventoryItem: true } },
           kitBindings: {

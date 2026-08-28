@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { randomBytes } from 'crypto';
 import prisma from '../lib/prisma';
 import bcrypt from 'bcryptjs';
 import { isValidEmail, normalizeEmail } from '../../../lib/email';
@@ -169,7 +170,9 @@ export default async function userRoutes(app: FastifyInstance) {
       doctorEmailForWelcome = String(doctor.email || '').trim() || null;
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // A senha é opcional no cadastro; quando omitida, uma senha temporária é enviada no e-mail de boas-vindas.
+    const initialPassword = password?.trim() || randomBytes(32).toString('hex');
+    const hashedPassword = await bcrypt.hash(initialPassword, 10);
     const user = await prisma.user.create({
       data: {
         sectorId,
@@ -192,6 +195,7 @@ export default async function userRoutes(app: FastifyInstance) {
         await sendWelcomeEmail({
           to: recipientEmail,
           login: normalizedEmail,
+          password: initialPassword,
           userName: user.name,
         });
       }

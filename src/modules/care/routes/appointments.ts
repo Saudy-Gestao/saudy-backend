@@ -16,7 +16,7 @@ const normalizeAppointmentType = (value?: string | null): 'CONSULTA' | 'EXAME' |
   const normalized = String(value || '').trim().toUpperCase();
   if (!normalized) return null;
   if (normalized === 'EXAME' || normalized === 'EXAM') return 'EXAME';
-  if (normalized === 'CONSULTA' || normalized === 'CONSULTATION') return 'CONSULTA';
+  if (normalized === 'CONSULTA' || normalized === 'CONSULTATION' || normalized === 'CONSULTA_CLINICA' || normalized === 'CONSULTA_TERAPIAS') return 'CONSULTA';
   return null;
 };
 

@@ -28,6 +28,7 @@ type PreSchedulingVerificationMailParams = {
 type WelcomeMailParams = {
   to: string;
   login: string;
+  password?: string;
   userName?: string;
 };
 
@@ -275,7 +276,7 @@ function buildPreSchedulingVerificationHtml(code: string, userName?: string, app
   `;
 }
 
-function buildWelcomeHtml(login: string, userName?: string) {
+function buildWelcomeHtml(login: string, userName?: string, password?: string) {
   const firstName = userName?.trim()?.split(' ')[0] || 'usuário';
 
   return `
@@ -295,11 +296,12 @@ function buildWelcomeHtml(login: string, userName?: string) {
           </p>
 
           <div style="margin:0 0 20px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;">
-            <p style="margin:0;font-size:14px;"><strong>Login:</strong> ${login}</p>
+            <p style="margin:0 0 ${password ? 8 : 0}px;font-size:14px;"><strong>Login:</strong> ${login}</p>
+            ${password ? `<p style="margin:0;font-size:14px;"><strong>Senha:</strong> ${password}</p>` : ''}
           </div>
 
           <p style="margin:0 0 12px;font-size:13px;color:#475569;">
-            Para definir sua senha, clique em <strong>"Esqueci minha senha"</strong> na tela de login e siga as instruções enviadas para este e-mail.
+            ${password ? 'Por segurança, altere sua senha após o primeiro acesso.' : 'Para definir sua senha, clique em <strong>"Esqueci minha senha"</strong> na tela de login e siga as instruções enviadas para este e-mail.'}
           </p>
         </td>
       </tr>
@@ -334,7 +336,7 @@ export async function sendPreSchedulingVerificationEmail({ to, code, userName, a
   return true;
 }
 
-export async function sendWelcomeEmail({ to, login, userName }: WelcomeMailParams) {
+export async function sendWelcomeEmail({ to, login, password, userName }: WelcomeMailParams) {
   const transporter = getTransporter();
 
   if (!transporter) {
@@ -348,8 +350,10 @@ export async function sendWelcomeEmail({ to, login, userName }: WelcomeMailParam
     from,
     to,
     subject: 'Saudy | Bem-vindo(a) ao sistema',
-    text: `Seu acesso ao Saudy foi criado. Login: ${login}. Para definir sua senha, use a opção "Esqueci minha senha" na tela de login.`,
-    html: buildWelcomeHtml(login, userName),
+    text: password
+      ? `Seu acesso ao Saudy foi criado. Login: ${login}. Senha temporária: ${password}. Altere sua senha após o primeiro acesso.`
+      : `Seu acesso ao Saudy foi criado. Login: ${login}. Para definir sua senha, use a opção "Esqueci minha senha" na tela de login.`,
+    html: buildWelcomeHtml(login, userName, password),
   });
 
   return true;

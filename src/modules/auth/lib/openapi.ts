@@ -581,7 +581,7 @@ export const ajvSchemas: Record<string, any> = {
       phone: { type: 'string' },
       address: { type: 'string' },
     },
-    required: ['branchId', 'sectorId', 'name', 'birthDate', 'email', 'password'],
+    required: ['branchId', 'sectorId', 'name', 'birthDate', 'email'],
   },
   UserUpdate: {
     type: 'object',

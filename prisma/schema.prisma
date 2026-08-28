@@ -1467,8 +1467,6 @@ model Especialidade {
     modalidade      Modalidade @relation(fields: [modalidadeId], references: [id], onDelete: Cascade)
     name            String
     metodos         String[] @default([])
-    cboId           String?
-    cbo             Cbo?     @relation(fields: [cboId], references: [id], onDelete: SetNull)
     isActive        Boolean  @default(true)
     createdByUserId String?
     createdByName   String?
@@ -1483,7 +1481,6 @@ model Especialidade {
 
     @@index([branchId])
     @@index([modalidadeId])
-    @@index([cboId])
     @@map("especialidades")
 }
 
@@ -1495,7 +1492,7 @@ model Cbo {
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
 
-    especialidades Especialidade[]
+    procedures      Procedure[]
 
     @@map("cbos")
 }
@@ -1607,6 +1604,8 @@ model Procedure {
     modalidade         Modalidade?       @relation(fields: [modalidadeId], references: [id])
     especialidadeId    String?
     especialidade      Especialidade?    @relation(fields: [especialidadeId], references: [id], onDelete: SetNull)
+    cboId              String?
+    cbo                Cbo?             @relation(fields: [cboId], references: [id], onDelete: SetNull)
     branchIds          String[]          @default([])
     isActive           Boolean           @default(true)
     createdAt          DateTime          @default(now())
@@ -1624,6 +1623,7 @@ model Procedure {
     @@index([branchId])
     @@index([modalidadeId])
     @@index([especialidadeId])
+    @@index([cboId])
     @@map("procedures")
 }
 
