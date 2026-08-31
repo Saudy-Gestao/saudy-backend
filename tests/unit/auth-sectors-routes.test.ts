@@ -7,7 +7,7 @@ vi.mock('../../src/modules/auth/lib/prisma', () => ({
   default: {
     user: { findUnique: vi.fn() },
     branch: { findMany: vi.fn(), findFirst: vi.fn() },
-    especialidade: { findUnique: vi.fn() },
+    especialidade: { findUnique: vi.fn(), findMany: vi.fn() },
     sector: {
       findMany: vi.fn(),
       create: vi.fn(),
@@ -82,7 +82,7 @@ describe('auth sectors routes', () => {
 
     const app = await buildApp();
 
-    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce(null);
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([]);
     let res = await app.inject({
       method: 'POST',
       url: '/sectors',
@@ -90,7 +90,7 @@ describe('auth sectors routes', () => {
     });
     expect(res.statusCode).toBe(400);
 
-    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm-other' });
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([{ id: 'e1', modalidadeId: 'm-other' }]);
     res = await app.inject({
       method: 'POST',
       url: '/sectors',
@@ -105,7 +105,7 @@ describe('auth sectors routes', () => {
     });
     expect(res.statusCode).toBe(400);
 
-    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm1' });
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([{ id: 'e1', modalidadeId: 'm1' }]);
     res = await app.inject({
       method: 'POST',
       url: '/sectors',
@@ -174,14 +174,14 @@ describe('auth sectors routes', () => {
 
     const app = await buildApp();
 
-    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm-other' });
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([{ id: 'e1', modalidadeId: 'm-other' }]);
     let res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { especialidadeId: 'e1' } });
     expect(res.statusCode).toBe(400);
 
     res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { capacity: -1 } });
     expect(res.statusCode).toBe(400);
 
-    mockedPrisma.especialidade.findUnique.mockResolvedValueOnce({ id: 'e1', modalidadeId: 'm1' });
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([{ id: 'e1', modalidadeId: 'm1' }]);
     res = await app.inject({ method: 'PUT', url: '/sectors/s1', payload: { especialidadeId: 'e1', capacity: 2 } });
     expect(res.statusCode).toBe(200);
 

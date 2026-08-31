@@ -1,7 +1,7 @@
 {
   "regions": ["gru1"],
   "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm run prisma:generate",
+  "buildCommand": "pnpm prisma migrate deploy --schema prisma/schema.prisma && pnpm run prisma:generate",
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/api/index" }
   ],

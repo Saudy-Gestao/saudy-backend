@@ -1314,12 +1314,17 @@ export default async function consultationRoutes(app: FastifyInstance) {
       include: {
         sector: { include: { branch: true } },
         doctor: { select: { id: true, name: true } },
+        accesses: { include: { modules: { select: { name: true } } } },
       },
     });
+    const canViewConsultationModule = Boolean(
+      user?.accesses?.some((access: any) => access.modules?.some((module: any) => module.name === 'consulta')),
+    );
     return {
       branchId: user?.sector?.branch?.id || null,
       doctorId: user?.doctor?.id || null,
       doctorName: user?.doctor?.name || null,
+      canViewConsultationModule,
     };
   };
 
@@ -1696,9 +1701,9 @@ export default async function consultationRoutes(app: FastifyInstance) {
     const branchId = context?.branchId;
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
-    // Only doctors can access their own history
-    if (!context?.doctorId && !context?.doctorName) {
-      return (reply as any).code(403).send({ error: 'Apenas médicos podem acessar o histórico de atendimentos' });
+    // Doctors see their own history; authorized clinical staff can see the branch history.
+    if (!context?.doctorId && !context?.doctorName && !context?.canViewConsultationModule) {
+      return (reply as any).code(403).send({ error: 'Usuário sem acesso ao histórico de atendimentos' });
     }
 
     const { search, type, startDate, endDate, limit = 20, offset = 0 } = request.query as any;
@@ -1706,14 +1711,17 @@ export default async function consultationRoutes(app: FastifyInstance) {
     const where: any = {
       isActive: true,
       branchId,
-      OR: [
-        ...(context.doctorId ? [{ doctorId: context.doctorId }] : []),
-        ...(context.doctorName ? [{ doctorName: context.doctorName }] : []),
-      ],
       appointment: {
         status: { in: ['REALIZADO', 'FINALIZADO', 'COMPLETED', 'ATENDIDO'] },
       },
     };
+
+    if (context.doctorId || context.doctorName) {
+      where.OR = [
+        ...(context.doctorId ? [{ doctorId: context.doctorId }] : []),
+        ...(context.doctorName ? [{ doctorName: context.doctorName }] : []),
+      ];
+    }
 
     if (search) {
       where.AND = [
