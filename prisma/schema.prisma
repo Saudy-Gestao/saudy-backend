@@ -369,6 +369,8 @@ model Intern {
     id           String   @id @default(uuid())
     branchId     String
     branch       Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+    especialidadeId String?
+    especialidade Especialidade? @relation(fields: [especialidadeId], references: [id], onDelete: SetNull)
     name         String
     cpf          String?
     email        String?
@@ -378,11 +380,16 @@ model Intern {
     startDate    DateTime?
     endDate      DateTime?
     isActive     Boolean  @default(true)
+    workingDays        String[] @default([])
+    workingHoursStart String?
+    workingHoursEnd   String?
+    workingSchedules   String   @default("[]") @db.Text
     createdAt    DateTime @default(now())
     updatedAt    DateTime @updatedAt
     doctors      InternDoctor[]
 
     @@index([branchId, isActive])
+    @@index([especialidadeId])
     @@index([name])
     @@map("interns")
 }
@@ -1515,6 +1522,7 @@ model Especialidade {
     sectors         Sector[]
     agendas         Agenda[]
     procedures      Procedure[]
+    interns          Intern[]
 
     @@index([branchId])
     @@index([modalidadeId])

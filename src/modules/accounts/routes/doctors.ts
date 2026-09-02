@@ -133,6 +133,21 @@ export default async function doctorRoutes(app: FastifyInstance) {
     return user?.sector?.branch?.id || null;
   };
 
+  const resolveListBranchId = async (request: any, requestedBranchId?: string) => {
+    const userId = (request.user as any)?.id;
+    if (!userId) return null;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { sector: { include: { branch: true } } },
+    });
+    const currentBranch = user?.sector?.branch;
+    if (!currentBranch) return null;
+    if (!requestedBranchId) return currentBranch.id;
+    const branchId = String(requestedBranchId).trim();
+    const branch = await prisma.branch.findFirst({ where: { id: branchId, companyId: currentBranch.companyId }, select: { id: true } });
+    return branch?.id || null;
+  };
+
   // Auth hook for all routes in this plugin
   app.addHook('onRequest', async (request, reply) => {
     try {
@@ -154,6 +169,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
           specialty: { type: 'string' },
           isActive: { type: 'boolean' },
           search: { type: 'string' },
+          branchId: { type: 'string' },
         },
       },
       response: {
@@ -164,7 +180,8 @@ export default async function doctorRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
+    const { branchId: requestedBranchId } = request.query as { branchId?: string };
+    const branchId = await resolveListBranchId(request, requestedBranchId);
     if (!branchId) return (reply as any).code(403).send({ error: 'User not associated with a branch' });
 
     const { specialty, isActive, search } = request.query as {
