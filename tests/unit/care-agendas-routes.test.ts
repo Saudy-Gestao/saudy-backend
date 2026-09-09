@@ -143,6 +143,15 @@ describe('care agendas routes', () => {
     res = await app.inject({ method: 'PUT', url: '/a-1', payload: { status: 'INATIVA' } });
     expect(res.statusCode).toBe(200);
 
+    mockedPrisma.agenda.findMany.mockResolvedValueOnce([{ id: 'a-other', shiftStart: '08:00', shiftEnd: '12:00', startDate: null, endDate: null }]);
+    res = await app.inject({ method: 'PUT', url: '/a-1', payload: { shiftStart: '09:00', shiftEnd: '11:00' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('AGENDA_OVERLAP');
+
+    mockedPrisma.agenda.update.mockRejectedValueOnce(new Error('boom'));
+    res = await app.inject({ method: 'PUT', url: '/a-1', payload: { status: 'ATIVA' } });
+    expect(res.statusCode).toBe(400);
+
     mockedPrisma.agenda.findUnique.mockResolvedValueOnce(null);
     res = await app.inject({ method: 'DELETE', url: '/a-1' });
     expect(res.statusCode).toBe(404);

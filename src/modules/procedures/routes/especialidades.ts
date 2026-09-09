@@ -1,7 +1,12 @@
 import { FastifyInstance } from "fastify";
 import prisma from "../lib/prisma";
 
-const SIMILARITY_THRESHOLD = 0.75;
+// 0.75 gerava falsos positivos entre especialidades legitimamente distintas que só
+// compartilham um sufixo comum (ex.: "Musicoterapia" x "Fisioterapia" = 76,9% de
+// similaridade, "Musicoterapia" x "Psicoterapia" = 84,6%). 0.85 ainda pega erros de
+// digitação reais (ex.: "Fisoterapia", "Psicologa", "TC Trax" para "TC Tórax") sem
+// bloquear nomes diferentes que só rimam.
+const SIMILARITY_THRESHOLD = 0.85;
 
 function normalizeForCompare(value: string) {
   return String(value || "")

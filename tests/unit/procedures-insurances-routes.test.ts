@@ -124,6 +124,7 @@ describe('procedures insurances routes', () => {
       .mockResolvedValueOnce({ id: 'i-1', branchId: 'other' })
       .mockResolvedValueOnce({ id: 'i-1', branchId: '' })
       .mockResolvedValueOnce({ id: 'i-1', branchId: 'b-1' })
+      .mockResolvedValueOnce({ id: 'i-1', branchId: 'b-1' })
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'i-1', branchId: 'other' })
       .mockResolvedValueOnce({ id: 'i-1', branchId: 'b-1' });
@@ -141,6 +142,16 @@ describe('procedures insurances routes', () => {
 
     res = await app.inject({ method: 'PUT', url: '/insurances/i-1', payload: { name: 'X', subInsurances: [] } });
     expect(res.statusCode).toBe(200);
+
+    res = await app.inject({ method: 'PUT', url: '/insurances/i-1', payload: { name: 'X', subInsurances: ['Plano Ouro', 'Plano Prata'] } });
+    expect(res.statusCode).toBe(200);
+    expect(tx.subInsurance.createMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.arrayContaining([
+        expect.objectContaining({ name: 'Plano Ouro', isActive: true }),
+        expect.objectContaining({ name: 'Plano Prata', isActive: true }),
+      ]),
+      skipDuplicates: true,
+    }));
 
     res = await app.inject({ method: 'DELETE', url: '/insurances/i-1' });
     expect(res.statusCode).toBe(404);

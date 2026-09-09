@@ -1,7 +1,11 @@
 import { FastifyInstance } from "fastify";
 import prisma from "../lib/prisma";
 
-const SIMILARITY_THRESHOLD = 0.75;
+// Mesmo ajuste feito em routes/especialidades.ts: 0.75 gerava falsos positivos entre
+// nomes legitimamente distintos que só compartilham um sufixo/prefixo comum. 0.85
+// ainda pega erros de digitação reais (ex.: "Tomogrfia" para "Tomografia") sem
+// bloquear nomes diferentes que só rimam.
+const SIMILARITY_THRESHOLD = 0.85;
 
 function normalizeForCompare(value: string) {
   return String(value || "")
