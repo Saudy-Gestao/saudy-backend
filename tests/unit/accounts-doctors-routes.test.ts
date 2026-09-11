@@ -15,6 +15,12 @@ vi.mock('../../src/modules/accounts/lib/prisma', () => ({
       findMany: vi.fn(),
       findUnique: vi.fn(),
     },
+    procedure: {
+      findMany: vi.fn(),
+    },
+    procedureDoctor: {
+      findMany: vi.fn(),
+    },
     appointment: {
       count: vi.fn(),
     },
@@ -32,6 +38,10 @@ function buildTxMock() {
       findUniqueOrThrow: vi.fn(),
     },
     doctorRoom: {
+      createMany: vi.fn(),
+      deleteMany: vi.fn(),
+    },
+    procedureDoctor: {
       createMany: vi.fn(),
       deleteMany: vi.fn(),
     },
@@ -56,6 +66,7 @@ describe('accounts doctors routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedPrisma.user.findUnique.mockResolvedValue({ sector: { branch: { id: 'b1' } } });
+    mockedPrisma.procedureDoctor.findMany.mockResolvedValue([]);
   });
 
   it('returns 403 when user has no branch', async () => {
@@ -173,6 +184,48 @@ describe('accounts doctors routes', () => {
     expect(res.statusCode).toBe(201);
     expect(tx.doctor.create).toHaveBeenCalled();
     expect(tx.doctorRoom.createMany).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('keeps procedure durations out of the doctor create payload and persists their links', async () => {
+    const tx = buildTxMock();
+    tx.doctor.create.mockResolvedValue({ id: 'd1', name: 'Dra Ana', roomId: null });
+    tx.doctor.findUniqueOrThrow.mockResolvedValue({ id: 'd1', roomLinks: [], workingSchedules: '[]' });
+    mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    mockedPrisma.procedure.findMany.mockResolvedValue([{ id: 'p1' }]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/doctors',
+      payload: {
+        name: 'Dra Ana',
+        crm: '12345',
+        crmState: 'SP',
+        email: 'ana-procedures@mail.com',
+        cellphone: '11999999999',
+        cpf: '529.982.247-25',
+        birthDate: '1990-01-01',
+        gender: 'female',
+        specialty: 'Fonoaudiologia',
+        procedureDurations: [{ procedureId: 'p1', durationMinutes: 45 }],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(tx.doctor.create).toHaveBeenCalled();
+    expect(tx.doctor.create.mock.calls[0][0].data).not.toHaveProperty('procedureDurations');
+    expect(tx.procedureDoctor.createMany).toHaveBeenCalledWith({
+      data: [{
+        procedureId: 'p1',
+        doctorId: 'd1',
+        doctorName: 'Dra Ana',
+        durationMinutes: 45,
+        branchIds: [],
+      }],
+      skipDuplicates: true,
+    });
 
     await app.close();
   });

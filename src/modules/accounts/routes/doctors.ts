@@ -449,6 +449,9 @@ export default async function doctorRoutes(app: FastifyInstance) {
           especialidadeGroups: especialidadeGroupsData,
         };
         delete createData.roomIds;
+        // Procedure durations are stored in ProcedureDoctor, not in Doctor.
+        // Keep them out of the Prisma create payload after syncing the links below.
+        delete createData.procedureDurations;
 
         const createdDoctor = await tx.doctor.create({
           data: createData,
@@ -631,6 +634,8 @@ export default async function doctorRoutes(app: FastifyInstance) {
       delete updateData.workingSchedules;
       delete updateData.roomIds;
       delete updateData.especialidadeGroups;
+      // Procedure durations are stored in ProcedureDoctor, not in Doctor.
+      delete updateData.procedureDurations;
       if (workingSchedulesData !== undefined) {
         updateData.workingSchedules = workingSchedulesData;
       } else if (Array.isArray(data.workingSchedules) && data.workingSchedules.length === 0) {
