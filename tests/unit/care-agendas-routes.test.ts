@@ -116,6 +116,43 @@ describe('care agendas routes', () => {
     await app.close();
   });
 
+  it('persists all specialties selected for the same agenda slot', async () => {
+    mockedPrisma.doctor.findUnique.mockResolvedValueOnce({
+      ...doctor,
+      especialidadeGroups: JSON.stringify([
+        { modalidadeId: 'm-1', especialidadeId: 'e-1' },
+        { modalidadeId: 'm-2', especialidadeId: 'e-2' },
+      ]),
+    });
+    mockedPrisma.especialidade.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      modalidadeId: where.id === 'e-2' ? 'm-2' : 'm-1',
+    }));
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/',
+      payload: {
+        branchId: 'b-1',
+        doctorId: 'd-1',
+        weekday: 'segunda',
+        shiftStart: '08:00',
+        shiftEnd: '12:00',
+        especialidadeIds: ['e-1', 'e-2'],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(mockedPrisma.agenda.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        especialidadeId: 'e-1',
+        especialidadeIds: ['e-1', 'e-2'],
+      }),
+    }));
+    await app.close();
+  });
+
   it('gets, updates and deletes an agenda with company ownership checks', async () => {
     const app = await buildApp();
 

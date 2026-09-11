@@ -28,6 +28,17 @@ function dateRangesOverlap(startA?: Date | null, endA?: Date | null, startB?: Da
   return true;
 }
 
+function normalizeEspecialidadeIds(data: { especialidadeIds?: unknown; especialidadeId?: unknown } | null | undefined): string[] {
+  const ids = [
+    ...(Array.isArray(data?.especialidadeIds) ? data.especialidadeIds : []),
+    data?.especialidadeId,
+  ];
+
+  return Array.from(new Set(ids
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)));
+}
+
 export default async function agendaRoutes(app: FastifyInstance) {
   const getLoggedContext = async (userId: string) => {
     const user = await prisma.user.findUnique({
@@ -136,20 +147,29 @@ export default async function agendaRoutes(app: FastifyInstance) {
     if (!shiftStart || !shiftEnd) return { error: "Turno deve ter início e fim no formato HH:mm" };
     if (shiftEnd <= shiftStart) return { error: "O fim do turno deve ser maior que o início" };
 
-    let especialidadeId: string | null = null;
-    if (data.especialidadeId) {
-      const especialidade = await prisma.especialidade.findUnique({ where: { id: data.especialidadeId } });
-      if (!especialidade) return { error: "Especialidade inválida" };
-      let groups: any[] = [];
+    const especialidadeIds = normalizeEspecialidadeIds(data);
+    let especialidadeId: string | null = especialidadeIds[0] || null;
+    if (especialidadeIds.length > 0) {
+      const especialidades = await Promise.all(especialidadeIds.map((id) => (
+        prisma.especialidade.findUnique({ where: { id } })
+      )));
+      if (especialidades.some((especialidade) => !especialidade)) return { error: "Especialidade inválida" };
+      let groups: Array<{ especialidadeId?: unknown; especialidadeIds?: unknown }> = [];
       try {
         const parsed = JSON.parse(doctor.especialidadeGroups || "[]");
         groups = Array.isArray(parsed) ? parsed : [];
       } catch {
         groups = [];
       }
-      const belongsToDoctor = groups.some((g: any) => g?.especialidadeId === especialidade.id);
-      if (!belongsToDoctor) return { error: "Especialidade não vinculada a esse profissional" };
-      especialidadeId = especialidade.id;
+      const doctorEspecialidadeIds = new Set(
+        groups.flatMap((group) => [
+          group?.especialidadeId,
+          ...(Array.isArray(group?.especialidadeIds) ? group.especialidadeIds : []),
+        ]).map((id: unknown) => String(id || '').trim()).filter(Boolean),
+      );
+      if (especialidadeIds.some((id) => !doctorEspecialidadeIds.has(id))) {
+        return { error: "Especialidade não vinculada a esse profissional" };
+      }
     }
 
     let roomId: string | null = null;
@@ -170,7 +190,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
 
     return {
       value: {
-        branchId, doctorId, weekday, shiftStart, shiftEnd, especialidadeId, roomId, startDate, endDate, status,
+        branchId, doctorId, weekday, shiftStart, shiftEnd, especialidadeId, especialidadeIds, roomId, startDate, endDate, status,
       },
     };
   };
@@ -205,6 +225,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
           shiftStart: { type: "string" },
           shiftEnd: { type: "string" },
           especialidadeId: { type: "string", nullable: true },
+          especialidadeIds: { type: "array", items: { type: "string" } },
           roomId: { type: "string", nullable: true },
           startDate: { type: "string", nullable: true },
           endDate: { type: "string", nullable: true },
@@ -277,13 +298,17 @@ export default async function agendaRoutes(app: FastifyInstance) {
     if (!branch) return reply.code(404).send({ error: "Agenda not found" });
 
     const data = request.body as any;
+    const hasEspecialidadeIds = data.especialidadeIds !== undefined;
     const merged = {
       branchId: data.branchId !== undefined ? data.branchId : existing.branchId,
       doctorId: data.doctorId !== undefined ? data.doctorId : existing.doctorId,
       weekday: data.weekday !== undefined ? data.weekday : existing.weekday,
       shiftStart: data.shiftStart !== undefined ? data.shiftStart : existing.shiftStart,
       shiftEnd: data.shiftEnd !== undefined ? data.shiftEnd : existing.shiftEnd,
-      especialidadeId: data.especialidadeId !== undefined ? data.especialidadeId : existing.especialidadeId,
+      especialidadeId: hasEspecialidadeIds
+        ? (Array.isArray(data.especialidadeIds) ? data.especialidadeIds[0] || null : null)
+        : (data.especialidadeId !== undefined ? data.especialidadeId : existing.especialidadeId),
+      especialidadeIds: hasEspecialidadeIds ? data.especialidadeIds : existing.especialidadeIds,
       roomId: data.roomId !== undefined ? data.roomId : existing.roomId,
       startDate: data.startDate !== undefined ? data.startDate : existing.startDate,
       endDate: data.endDate !== undefined ? data.endDate : existing.endDate,

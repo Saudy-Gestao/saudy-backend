@@ -206,6 +206,7 @@ model Agenda {
     shiftStart      String
     shiftEnd        String
     especialidadeId String?
+    especialidadeIds String[] @default([])
     especialidade   Especialidade? @relation(fields: [especialidadeId], references: [id], onDelete: SetNull)
     roomId          String?
     room            Sector?  @relation(fields: [roomId], references: [id], onDelete: SetNull)
