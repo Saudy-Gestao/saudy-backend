@@ -7,10 +7,28 @@ import { isValidEmail, normalizeEmail } from '../../../lib/email';
 const resolveUniqueField = (target: string | string[] | undefined): { field: string; message: string } => {
   const raw = Array.isArray(target) ? target[0] : (target ?? '');
   // Prisma may return index name (e.g. "doctors_email_key") or field name ("email")
-  if (raw.includes('email')) return { field: 'email', message: 'Este e-mail já está em uso' };
-  if (raw.includes('cpf')) return { field: 'cpf', message: 'CPF já cadastrado' };
-  if (raw.includes('crm')) return { field: 'crm', message: 'CRM já cadastrado' };
+  if (raw.includes('email')) return { field: 'email', message: 'Este e-mail já está cadastrado.' };
+  if (raw.includes('cpf')) return { field: 'cpf', message: 'Este CPF já está cadastrado.' };
+  if (raw.includes('crm')) return { field: 'crm', message: 'Este registro profissional já está cadastrado.' };
   return { field: raw, message: `${raw} já existe` };
+};
+
+const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+const getWorkingScheduleErrors = (value: unknown): Record<string, string> => {
+  if (!Array.isArray(value)) return {};
+
+  const errors: Record<string, string> = {};
+  value.forEach((item, index) => {
+    const schedule = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    (['hoursStart', 'hoursEnd'] as const).forEach((field) => {
+      const raw = String(schedule[field] || '').trim();
+      if (raw && !TIME_PATTERN.test(raw)) {
+        errors[`workingSchedules.${index}.${field}`] = 'Informe um horário válido no formato HH:mm';
+      }
+    });
+  });
+  return errors;
 };
 
 const normalizeRoomIds = (value: unknown): string[] => {
@@ -36,8 +54,23 @@ const normalizeEspecialidadeGroups = (
 
   return value.map((item) => {
     const group = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    // `especialidadeIds` is the canonical representation. Keep the singular
+    // field only as a compatibility alias for older consumers and always
+    // derive it from the first selected specialty. When the array is present,
+    // an intentionally empty array must remain empty instead of falling back
+    // to a stale singular value.
+    const rawEspecialidadeIds = Array.isArray(group.especialidadeIds)
+      ? group.especialidadeIds
+      : [group.especialidadeId];
+    const especialidadeIds = Array.from(new Set(
+      rawEspecialidadeIds
+        .map((id) => String(id || '').trim())
+        .filter(Boolean),
+    ));
     return {
       ...group,
+      especialidadeId: especialidadeIds[0] || null,
+      especialidadeIds,
       registrationType: String(group.registrationType || fallbackType).trim() || fallbackType,
       registrationNumber: String(group.registrationNumber || fallbackNumber).trim(),
       registrationState: String(group.registrationState || fallbackState).trim().toUpperCase(),
@@ -69,7 +102,14 @@ const getProcedureDurationLinks = async (doctorId: string) => {
     where: { doctorId },
     include: {
       procedure: {
-        select: { id: true, name: true, durationMinutes: true, modalidadeId: true },
+        select: {
+          id: true,
+          name: true,
+          durationMinutes: true,
+          modalidadeId: true,
+          especialidadeId: true,
+          especialidade: { select: { id: true, name: true } },
+        },
       },
     },
     orderBy: { createdAt: 'asc' },
@@ -79,6 +119,8 @@ const getProcedureDurationLinks = async (doctorId: string) => {
     procedureId: link.procedureId,
     procedureName: link.procedure?.name || '',
     modalidadeId: link.procedure?.modalidadeId || null,
+    especialidadeId: link.procedure?.especialidadeId || link.procedure?.especialidade?.id || null,
+    especialidadeName: link.procedure?.especialidade?.name || '',
     durationMinutes: link.durationMinutes ?? link.procedure?.durationMinutes ?? null,
     branchIds: Array.isArray(link.branchIds) ? link.branchIds : [],
   }));
@@ -369,6 +411,14 @@ export default async function doctorRoutes(app: FastifyInstance) {
     if (!data?.gender || !['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
     data.specialty = String(data?.specialty || '').trim();
 
+    Object.assign(fieldErrors, getWorkingScheduleErrors(data?.workingSchedules));
+    if (data?.workingHoursStart && !TIME_PATTERN.test(String(data.workingHoursStart).trim())) {
+      fieldErrors.workingHoursStart = 'Informe um horário válido no formato HH:mm';
+    }
+    if (data?.workingHoursEnd && !TIME_PATTERN.test(String(data.workingHoursEnd).trim())) {
+      fieldErrors.workingHoursEnd = 'Informe um horário válido no formato HH:mm';
+    }
+
     if (Object.keys(fieldErrors).length > 0) {
       return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
     }
@@ -565,6 +615,14 @@ export default async function doctorRoutes(app: FastifyInstance) {
     if (data?.cpf !== undefined && !isValidCpf(normalizedCpf)) fieldErrors.cpf = 'CPF inválido';
     if (data?.birthDate !== undefined && (isNaN(Date.parse(String(data.birthDate))) || new Date(String(data.birthDate)) > new Date())) fieldErrors.birthDate = 'Data de nascimento inválida';
     if (data?.gender !== undefined && data.gender && !['MALE','FEMALE','OTHER'].includes(String(data.gender).toUpperCase())) fieldErrors.gender = 'Gênero inválido';
+
+    Object.assign(fieldErrors, getWorkingScheduleErrors(data?.workingSchedules));
+    if (data?.workingHoursStart && !TIME_PATTERN.test(String(data.workingHoursStart).trim())) {
+      fieldErrors.workingHoursStart = 'Informe um horário válido no formato HH:mm';
+    }
+    if (data?.workingHoursEnd && !TIME_PATTERN.test(String(data.workingHoursEnd).trim())) {
+      fieldErrors.workingHoursEnd = 'Informe um horário válido no formato HH:mm';
+    }
 
     if (Object.keys(fieldErrors).length > 0) return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
 

@@ -65,6 +65,7 @@ export const swaggerComponents = {
             properties: {
               modalidadeId: { type: 'string', nullable: true },
               especialidadeId: { type: 'string', nullable: true },
+              especialidadeIds: { type: 'array', items: { type: 'string' } },
               registrationType: { type: 'string' },
               registrationNumber: { type: 'string' },
               registrationState: { type: 'string' },

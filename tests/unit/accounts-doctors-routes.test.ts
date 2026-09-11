@@ -101,6 +101,42 @@ describe('accounts doctors routes', () => {
     await app.close();
   });
 
+  it('includes the procedure specialty in professional procedure links', async () => {
+    mockedPrisma.doctor.findMany.mockResolvedValue([
+      { id: 'd1', roomLinks: [], workingSchedules: '[]' },
+    ]);
+    mockedPrisma.procedureDoctor.findMany.mockResolvedValue([
+      {
+        procedureId: 'p1',
+        durationMinutes: 45,
+        branchIds: [],
+        procedure: {
+          id: 'p1',
+          name: 'Consulta Neurologista',
+          durationMinutes: 30,
+          modalidadeId: 'm1',
+          especialidadeId: 'e1',
+          especialidade: { id: 'e1', name: 'Neurologia' },
+        },
+      },
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/doctors' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()[0].procedureDurations).toEqual([{
+      procedureId: 'p1',
+      procedureName: 'Consulta Neurologista',
+      modalidadeId: 'm1',
+      especialidadeId: 'e1',
+      especialidadeName: 'Neurologia',
+      durationMinutes: 45,
+      branchIds: [],
+    }]);
+    await app.close();
+  });
+
   it('gets doctor by id and by crm', async () => {
     mockedPrisma.doctor.findFirst
       .mockResolvedValueOnce(null)
@@ -153,6 +189,32 @@ describe('accounts doctors routes', () => {
     await app.close();
   });
 
+  it('rejects malformed working schedule times', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/doctors',
+      payload: {
+        name: 'Dr A',
+        crm: '12345',
+        crmState: 'SP',
+        email: 'a@a.com',
+        cellphone: '11999999999',
+        cpf: '52998224725',
+        birthDate: '1990-01-01',
+        gender: 'MALE',
+        specialty: 'Cardio',
+        workingSchedules: [{ days: ['Segunda'], hoursStart: '20000', hoursEnd: '18:00' }],
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().fields).toEqual({
+      'workingSchedules.0.hoursStart': 'Informe um horário válido no formato HH:mm',
+    });
+    await app.close();
+  });
+
   it('creates doctor with roomIds and legacy working schedule fields', async () => {
     const tx = buildTxMock();
     tx.doctor.create.mockResolvedValue({ id: 'd1', roomId: 'r1' });
@@ -185,6 +247,59 @@ describe('accounts doctors routes', () => {
     expect(tx.doctor.create).toHaveBeenCalled();
     expect(tx.doctorRoom.createMany).toHaveBeenCalled();
 
+    await app.close();
+  });
+
+  it('preserves every selected specialty when creating a doctor', async () => {
+    const tx = buildTxMock();
+    tx.doctor.create.mockResolvedValue({ id: 'd-specialties', name: 'Dra Ana', roomId: null });
+    tx.doctor.findUniqueOrThrow.mockResolvedValue({
+      id: 'd-specialties',
+      roomLinks: [],
+      workingSchedules: '[]',
+      especialidadeGroups: JSON.stringify([{
+        modalidadeId: 'm1',
+        especialidadeId: 'e1',
+        especialidadeIds: ['e1', 'e2'],
+        registrationType: 'CRM',
+        registrationNumber: '12345',
+        registrationState: 'SP',
+      }]),
+    });
+    mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/doctors',
+      payload: {
+        name: 'Dra Ana',
+        crm: '12345',
+        crmState: 'SP',
+        email: 'ana-specialties@mail.com',
+        cellphone: '11999999999',
+        cpf: '529.982.247-25',
+        birthDate: '1990-01-01',
+        gender: 'female',
+        specialty: 'Fonoaudiologia, Psicologia',
+        especialidadeGroups: [{
+          modalidadeId: 'm1',
+          especialidadeId: 'e1',
+          especialidadeIds: ['e1', 'e2'],
+          registrationType: 'CRM',
+          registrationNumber: '12345',
+          registrationState: 'SP',
+          metodos: [],
+          procedimentoIds: [],
+          branchIds: ['b1'],
+        }],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const persistedGroups = JSON.parse(tx.doctor.create.mock.calls[0][0].data.especialidadeGroups);
+    expect(persistedGroups[0].especialidadeIds).toEqual(['e1', 'e2']);
+    expect(persistedGroups[0].especialidadeId).toBe('e1');
     await app.close();
   });
 
@@ -260,6 +375,18 @@ describe('accounts doctors routes', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('Validation failed');
 
+    mockedPrisma.$transaction.mockRejectedValueOnce({ code: 'P2002', meta: { target: ['email'] } });
+    res = await app.inject({
+      method: 'POST',
+      url: '/doctors',
+      payload: {
+        name: 'Dr A', crm: '2', crmState: 'SP', email: 'a@a.com', cellphone: '11999999999',
+        cpf: '52998224725', birthDate: '1990-01-01', gender: 'MALE', specialty: 'Cardio', roomIds: ['r1'],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().fields).toEqual({ email: 'Este e-mail já está cadastrado.' });
+
     mockedPrisma.$transaction.mockRejectedValueOnce(new Error('boom'));
     res = await app.inject({
       method: 'POST',
@@ -286,11 +413,30 @@ describe('accounts doctors routes', () => {
     const res = await app.inject({
       method: 'PUT',
       url: '/doctors/d1',
-      payload: { email: 'new@mail.com', cpf: '52998224725', roomIds: ['r1'], workingSchedules: [] },
+      payload: {
+        email: 'new@mail.com',
+        cpf: '52998224725',
+        roomIds: ['r1'],
+        workingSchedules: [],
+        especialidadeGroups: [{
+          modalidadeId: 'm1',
+          especialidadeId: 'e1',
+          especialidadeIds: ['e1', 'e2'],
+          registrationType: 'CRM',
+          registrationNumber: '12345',
+          registrationState: 'SP',
+          metodos: [],
+          procedimentoIds: [],
+          branchIds: ['b1'],
+        }],
+      },
     });
 
     expect(res.statusCode).toBe(200);
     expect(tx.doctor.update).toHaveBeenCalled();
+    const updatedGroups = JSON.parse(tx.doctor.update.mock.calls[0][0].data.especialidadeGroups);
+    expect(updatedGroups[0].especialidadeIds).toEqual(['e1', 'e2']);
+    expect(updatedGroups[0].especialidadeId).toBe('e1');
     expect(tx.doctorRoom.deleteMany).toHaveBeenCalledWith({ where: { doctorId: 'd1' } });
 
     await app.close();
