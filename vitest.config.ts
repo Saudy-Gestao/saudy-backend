@@ -8,6 +8,15 @@ export default defineConfig({
     fileParallelism: false,
     coverage: {
       reporter: ['text', 'json-summary'],
+      exclude: [
+        '**/node_modules/**',
+        '**/dist/**',
+        '**/coverage/**',
+        '**/tests/**',
+        '**/*.d.ts',
+        'vitest.config.ts',
+        'scripts/seed-mock-*.mjs',
+      ],
       thresholds: { statements: 85, lines: 85, functions: 85 },
     },
   },

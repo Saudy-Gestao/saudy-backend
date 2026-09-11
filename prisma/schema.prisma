@@ -946,6 +946,8 @@ model TeaPreReservation {
     procedureName        String?
     professionalDoctorId String?
     professionalName     String?
+    roomId               String?
+    roomName             String?
     suggestedDate        DateTime?
     suggestedTime        String?
     durationMinutes      Int?
@@ -961,6 +963,7 @@ model TeaPreReservation {
     @@index([status])
     @@index([pitTherapyId, status])
     @@index([patientId])
+    @@index([roomId])
     @@map("tea_pre_reservations")
 }
 

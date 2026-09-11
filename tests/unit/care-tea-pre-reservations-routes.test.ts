@@ -15,6 +15,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     teaPreReservationTimeline: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
     convenioAuthorizationAttachment: { findMany: vi.fn() },
     appointment: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+    agenda: { findMany: vi.fn() },
     doctor: { findFirst: vi.fn(), findMany: vi.fn() },
     procedureDoctor: { findFirst: vi.fn(), findMany: vi.fn() },
     $transaction: vi.fn(),
@@ -79,6 +80,7 @@ describe('care tea-pre-reservations routes', () => {
     mockedPrisma.teaPreReservation.updateMany.mockResolvedValue({ count: 0 });
     mockedPrisma.convenioAuthorizationAttachment.findMany.mockResolvedValue([]);
     mockedPrisma.appointment.findMany.mockResolvedValue([]);
+    mockedPrisma.agenda.findMany.mockResolvedValue([]);
     mockedPrisma.appointment.findFirst.mockResolvedValue(null);
     mockedPrisma.appointment.create.mockResolvedValue({ id: 'a-1' });
     mockedPrisma.appointment.updateMany.mockResolvedValue({ count: 0 });
@@ -263,6 +265,61 @@ describe('care tea-pre-reservations routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(Array.isArray(res.json().items)).toBe(true);
+    expect(mockedPrisma.agenda.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ branchId: 'b-1' }),
+    }));
+    await app.close();
+  });
+
+  it('uses the doctor agenda window and room when generating suggestions', async () => {
+    const app = await buildApp();
+    mockedPrisma.teaPitTherapy.findFirst.mockResolvedValueOnce({
+      id: 'pit-1',
+      isActive: true,
+      professionalDoctorId: 'd-1',
+      preferredWeekdays: ['SEGUNDA'],
+      preferredShift: 'MANHA',
+      durationMinutes: 45,
+      therapyType: 'Terapia ocupacional',
+      pit: { teaProfile: { patient: { id: 'p-1', name: 'Maria', cpf: '11144477735' } } },
+    });
+    mockedPrisma.doctor.findFirst.mockResolvedValueOnce({
+      id: 'd-1',
+      name: 'Dra. Ana',
+      isActive: true,
+      workingDays: [],
+      workingHoursStart: null,
+      workingHoursEnd: null,
+      workingSchedules: [],
+    });
+    mockedPrisma.agenda.findMany.mockResolvedValueOnce([
+      {
+        id: 'agenda-1',
+        doctorId: 'd-1',
+        branchId: 'b-1',
+        status: 'ATIVA',
+        weekday: 'SEGUNDA',
+        shiftStart: '08:00',
+        shiftEnd: '12:00',
+        startDate: new Date('2026-01-01T00:00:00Z'),
+        endDate: new Date('2026-12-31T00:00:00Z'),
+        roomId: 'room-1',
+        room: { name: 'Sala 2' },
+      },
+    ]);
+
+    const res = await app.inject({ method: 'GET', url: '/tpr/pit-1/suggestions?daysAhead=14&limit=1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items[0]).toMatchObject({
+      doctorId: 'd-1',
+      roomId: 'room-1',
+      roomName: 'Sala 2',
+    });
+    expect(mockedPrisma.agenda.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { doctorId: { in: ['d-1'] }, branchId: 'b-1', status: 'ATIVA' },
+      include: { room: { select: { name: true } } },
+    }));
     await app.close();
   });
 

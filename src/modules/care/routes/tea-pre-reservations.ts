@@ -235,6 +235,97 @@ function getDoctorWindowsForWeekday(doctor: any, weekdayToken: string): Array<{ 
     }));
 }
 
+// A doctor's own Cadastro de Agendas entries (doctor + weekday + shift + room)
+// are the source of truth for where a session actually happens. Only when a
+// doctor has zero registered Agenda rows do we fall back to their generic
+// working-hours fields — mirrors the same doctor/room resolution the regular
+// (non-TEA) Agendamento screen already does against the same `Agenda` table.
+type DoctorSlotWindow = {
+  hoursStart: string | null;
+  hoursEnd: string | null;
+  roomId: string | null;
+  roomName: string | null;
+};
+
+function isDateWithinAgendaRange(date: Date, startDate?: Date | string | null, endDate?: Date | string | null): boolean {
+  const day = new Date(date);
+  day.setHours(0, 0, 0, 0);
+  if (startDate) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    if (day.getTime() < start.getTime()) return false;
+  }
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(0, 0, 0, 0);
+    if (day.getTime() > end.getTime()) return false;
+  }
+  return true;
+}
+
+function getAgendaWindowsForWeekday(
+  agendasForDoctor: any[],
+  weekdayToken: string,
+  referenceDate?: Date | null,
+): DoctorSlotWindow[] {
+  return agendasForDoctor
+    .filter((agenda) => (
+      normalizeWeekdayToken(agenda?.weekday) === weekdayToken
+      && (!referenceDate || isDateWithinAgendaRange(referenceDate, agenda?.startDate, agenda?.endDate))
+    ))
+    .map((agenda) => ({
+      hoursStart: agenda?.shiftStart || null,
+      hoursEnd: agenda?.shiftEnd || null,
+      roomId: agenda?.roomId || null,
+      roomName: agenda?.room?.name || null,
+    }));
+}
+
+function resolveDoctorSlotWindowsForWeekday(
+  doctor: any,
+  agendasForDoctor: any[],
+  weekdayToken: string,
+  referenceDate?: Date | null,
+): DoctorSlotWindow[] {
+  if (agendasForDoctor.length > 0) {
+    return getAgendaWindowsForWeekday(agendasForDoctor, weekdayToken, referenceDate);
+  }
+  return getDoctorWindowsForWeekday(doctor, weekdayToken).map((window) => ({
+    hoursStart: window.hoursStart ?? null,
+    hoursEnd: window.hoursEnd ?? null,
+    roomId: null,
+    roomName: null,
+  }));
+}
+
+function findFittingWindow(
+  windows: DoctorSlotWindow[],
+  slotTime: string,
+  durationMinutes: number,
+): DoctorSlotWindow | null {
+  return windows.find((window) => fitsDoctorWorkingWindow(slotTime, durationMinutes, window.hoursStart, window.hoursEnd)) || null;
+}
+
+async function fetchActiveAgendasByDoctorId(doctorIds: string[], branchId: string): Promise<Map<string, any[]>> {
+  const uniqueIds = Array.from(new Set(doctorIds.filter(Boolean)));
+  const map = new Map<string, any[]>();
+  if (uniqueIds.length === 0) return map;
+
+  const agendas = await prisma.agenda.findMany({
+    where: { doctorId: { in: uniqueIds }, branchId, status: 'ATIVA' },
+    include: { room: { select: { name: true } } },
+  });
+
+  agendas.forEach((agenda: any) => {
+    const doctorId = String(agenda?.doctorId || '');
+    if (!doctorId) return;
+    if (!map.has(doctorId)) map.set(doctorId, []);
+    map.get(doctorId)!.push(agenda);
+  });
+
+  return map;
+}
+
 function getShiftSlots(shift?: string | null): string[] {
   if (!shift) {
     return [...SHIFT_TIME_SLOTS.MANHA, ...SHIFT_TIME_SLOTS.TARDE, ...SHIFT_TIME_SLOTS.NOITE];
@@ -362,6 +453,10 @@ async function resolveAvailableDoctorForSession(input: {
   const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[new Date(`${candidateDateIso}T00:00:00`).getDay()];
   const dayStart = new Date(`${candidateDateIso}T00:00:00`);
   const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
+  const agendasByDoctorId = await fetchActiveAgendasByDoctorId(
+    candidateDoctors.map((doctor: any) => doctor.id),
+    branchId,
+  );
 
   const [patientAppointments, patientReservations] = await Promise.all([
     prisma.appointment.findMany({
@@ -383,11 +478,14 @@ async function resolveAvailableDoctorForSession(input: {
   ]);
 
   for (const doctor of candidateDoctors) {
-    const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
-    const fitsAnyWindow = doctorWindows.some((window) => (
-      fitsDoctorWorkingWindow(suggestedTime, durationMinutes, window.hoursStart, window.hoursEnd)
-    ));
-    if (!fitsAnyWindow) continue;
+    const doctorWindows = resolveDoctorSlotWindowsForWeekday(
+      doctor,
+      agendasByDoctorId.get(doctor.id) || [],
+      weekdayToken,
+      new Date(`${candidateDateIso}T00:00:00`),
+    );
+    const matchedWindow = findFittingWindow(doctorWindows, suggestedTime, durationMinutes);
+    if (!matchedWindow) continue;
 
     const [doctorAppointments, doctorReservations] = await Promise.all([
       prisma.appointment.findMany({
@@ -422,6 +520,8 @@ async function resolveAvailableDoctorForSession(input: {
     return {
       professionalDoctorId: doctor.id,
       professionalName: doctor.name,
+      roomId: matchedWindow.roomId,
+      roomName: matchedWindow.roomName,
     };
   }
 
@@ -1082,6 +1182,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           id: therapy.professionalDoctorId || latest?.professionalDoctorId || null,
           name: professionalName,
         },
+        room: {
+          id: !treatAsPendingScheduling && hasAnyReservation ? (latest?.roomId || null) : null,
+          name: !treatAsPendingScheduling && hasAnyReservation ? (latest?.roomName || null) : null,
+        },
         preferences: {
           weeklyFrequency: therapy.weeklyFrequency,
           weekdays: therapy.preferredWeekdays,
@@ -1332,6 +1436,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .filter(Boolean) as string[]
       : [];
 
+    const agendasByDoctorId = await fetchActiveAgendasByDoctorId(
+      candidateDoctors.map((doctor: any) => doctor.id),
+      branchId,
+    );
+
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const monday = startOfWeekMonday(now);
@@ -1348,7 +1457,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         date.setDate(monday.getDate() + offset);
 
         const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[date.getDay()];
-        const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+        const doctorWindows = resolveDoctorSlotWindowsForWeekday(doctor, agendasByDoctorId.get(doctor.id) || [], weekdayToken, date);
         if (doctorWindows.length === 0) continue;
 
         const isoDate = formatDateAsIso(date);
@@ -1451,6 +1560,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       doctorId: string;
       doctorName: string;
       procedureName: string | null;
+      roomId: string | null;
+      roomName: string | null;
     }> = [];
     const seenSuggestions = new Set<string>();
     // A therapy is a single weekly-recurring session, not several — never suggest
@@ -1517,10 +1628,13 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       for (const date of candidateDateStrings) {
         const candidateDate = new Date(`${date}T00:00:00`);
         const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
-        const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
-        const filteredSlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
-          fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
-        )));
+        const doctorWindows = resolveDoctorSlotWindowsForWeekday(doctor, agendasByDoctorId.get(doctor.id) || [], weekdayToken, candidateDate);
+        const slotWindowByTime = new Map<string, DoctorSlotWindow>();
+        baseSlots.forEach((slot) => {
+          const matched = findFittingWindow(doctorWindows, slot, slotDurationMinutes);
+          if (matched) slotWindowByTime.set(slot, matched);
+        });
+        const filteredSlots = baseSlots.filter((slot) => slotWindowByTime.has(slot));
         if (filteredSlots.length === 0) continue;
         const suggestionDateObj = new Date(candidateDate);
         while (suggestionDateObj.getTime() < today.getTime()) {
@@ -1545,12 +1659,15 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
           seenSuggestions.add(suggestionKey);
           usedDates.add(suggestionIso);
+          const matchedWindow = slotWindowByTime.get(time) || null;
           suggestions.push({
             date: suggestionIso,
             time,
             doctorId: doctor.id,
             doctorName: doctor.name,
             procedureName: therapy.therapyType || null,
+            roomId: matchedWindow?.roomId || null,
+            roomName: matchedWindow?.roomName || null,
           });
 
           // Block out the session's own duration so the next candidate times in this
@@ -1632,6 +1749,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
     const branchId = (request as any).branchId as string;
     const candidateDoctors = await listCandidateDoctorsForTherapy(therapy, branchId);
+    const agendasByDoctorId = await fetchActiveAgendasByDoctorId(
+      candidateDoctors.map((doctor: any) => doctor.id),
+      branchId,
+    );
 
     const parsedWeekStart = weekStart ? new Date(`${weekStart}T00:00:00`) : new Date();
     if (Number.isNaN(parsedWeekStart.getTime())) {
@@ -1708,7 +1829,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const baseSlots = getShiftSlots(therapy.preferredShift);
     const slotDurationMinutes = resolveDurationMinutes(therapy.durationMinutes);
 
-    const daySlotMap = new Map<string, Map<string, { time: string; occupied: boolean; selectable: boolean; doctorId?: string | null; doctorName?: string | null }>>();
+    const daySlotMap = new Map<string, Map<string, { time: string; occupied: boolean; selectable: boolean; doctorId?: string | null; doctorName?: string | null; roomId?: string | null; roomName?: string | null }>>();
     weekDates.forEach((date) => daySlotMap.set(date, new Map()));
 
     for (const doctor of candidateDoctors) {
@@ -1765,20 +1886,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
 
       weekDates.forEach((date) => {
-        const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[new Date(`${date}T00:00:00`).getDay()];
-        const doctorWindows = getDoctorWindowsForWeekday(doctor, weekdayToken);
+        const candidateDate = new Date(`${date}T00:00:00`);
+        const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
+        const doctorWindows = resolveDoctorSlotWindowsForWeekday(doctor, agendasByDoctorId.get(doctor.id) || [], weekdayToken, candidateDate);
         if (doctorWindows.length === 0) return;
 
         const timeMap = daySlotMap.get(date);
         if (!timeMap) return;
 
-        const daySlots = baseSlots.filter((slot) => doctorWindows.some((window) => (
-          fitsDoctorWorkingWindow(slot, slotDurationMinutes, window.hoursStart, window.hoursEnd)
-        )));
+        const slotWindowByTime = new Map<string, DoctorSlotWindow>();
+        baseSlots.forEach((slot) => {
+          const matched = findFittingWindow(doctorWindows, slot, slotDurationMinutes);
+          if (matched) slotWindowByTime.set(slot, matched);
+        });
+        const daySlots = baseSlots.filter((slot) => slotWindowByTime.has(slot));
 
         daySlots.forEach((time) => {
           const selectable = canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied);
           const existing = timeMap.get(time);
+          const matchedWindow = slotWindowByTime.get(time) || null;
 
           if (!existing) {
             timeMap.set(time, {
@@ -1787,6 +1913,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               selectable,
               doctorId: selectable ? doctor.id : null,
               doctorName: selectable ? doctor.name : null,
+              roomId: selectable ? matchedWindow?.roomId || null : null,
+              roomName: selectable ? matchedWindow?.roomName || null : null,
             });
             return;
           }
@@ -1798,6 +1926,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               selectable: true,
               doctorId: doctor.id,
               doctorName: doctor.name,
+              roomId: matchedWindow?.roomId || null,
+              roomName: matchedWindow?.roomName || null,
             });
           }
         });
@@ -2380,6 +2510,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               procedureName: therapy.therapyType || null,
               professionalDoctorId: selectedDoctor.professionalDoctorId,
               professionalName: selectedDoctor.professionalName || preferredDoctorName,
+              roomId: selectedDoctor.roomId || null,
+              roomName: selectedDoctor.roomName || null,
               status: acceptedStatusForTherapy,
               suggestedDate: candidateDate,
               suggestedTime,
@@ -3240,6 +3372,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               patientName: reservation.patient.name || null,
               patientCpf: reservation.patient.cpf || null,
               doctorName: reservation.professionalName || null,
+              roomId: reservation.roomId || null,
               specialty: reservation.procedureName || null,
               convenio: reservation.patient.healthInsuranceName || null,
               date: appointmentDate,
@@ -3388,6 +3521,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           patientName: preReservation.patient.name || null,
           patientCpf: preReservation.patient.cpf || null,
           doctorName: preReservation.professionalName || null,
+          roomId: preReservation.roomId || null,
           specialty: preReservation.procedureName || null,
           convenio: preReservation.patient.healthInsuranceName || null,
           date: appointmentDate,

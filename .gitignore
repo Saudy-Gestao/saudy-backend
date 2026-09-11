@@ -148,3 +148,6 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 *.pem
+
+# Local-only mock seed scripts
+scripts/seed-mock-*.mjs
