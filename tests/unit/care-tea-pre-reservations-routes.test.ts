@@ -131,6 +131,70 @@ describe('care tea-pre-reservations routes', () => {
     await app.close();
   });
 
+  it('scopes pending therapy sources and reservations to the logged branch', async () => {
+    const app = await buildApp();
+
+    mockedPrisma.teaPitTherapy.findMany
+      .mockResolvedValueOnce([{
+        id: 'pit-therapy-b1',
+        isActive: true,
+        pit: {
+          status: 'Ativo',
+          teaProfile: {
+            isActive: true,
+            patient: { id: 'patient-b1', name: 'Maria', cpf: '11144477735' },
+          },
+        },
+      }])
+      .mockResolvedValueOnce([]);
+
+    const res = await app.inject({ method: 'GET', url: '/tpr/pending' });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockedPrisma.teaPitTherapy.findMany.mock.calls[0][0]).toEqual(expect.objectContaining({
+      where: expect.objectContaining({
+        pit: expect.objectContaining({
+          teaProfile: expect.objectContaining({
+            patient: { branchId: 'b-1' },
+          }),
+        }),
+      }),
+    }));
+    expect(mockedPrisma.teaPitTherapy.findMany.mock.calls[1][0]).toEqual(expect.objectContaining({
+      where: expect.objectContaining({
+        pit: expect.objectContaining({
+          teaProfile: expect.objectContaining({
+            patient: { branchId: 'b-1' },
+          }),
+        }),
+      }),
+    }));
+    expect(mockedPrisma.teaPreReservation.findMany.mock.calls[1][0]).toEqual(expect.objectContaining({
+      where: expect.objectContaining({ patient: { branchId: 'b-1' } }),
+    }));
+
+    await app.close();
+  });
+
+  it('scopes created pre-reservations and automatic expiration to the logged branch', async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/tpr' });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockedPrisma.teaPreReservation.findMany.mock.calls[0][0]).toEqual(expect.objectContaining({
+      where: expect.objectContaining({ patient: { branchId: 'b-1' } }),
+    }));
+    expect(mockedPrisma.teaPreReservation.findMany.mock.calls[1][0]).toEqual(expect.objectContaining({
+      where: expect.objectContaining({ patient: { branchId: 'b-1' } }),
+    }));
+    expect(mockedPrisma.teaPreReservation.count.mock.calls[0][0]).toEqual(expect.objectContaining({
+      where: expect.objectContaining({ patient: { branchId: 'b-1' } }),
+    }));
+
+    await app.close();
+  });
+
   it('lists created pre-reservations and aggregates authorization docs', async () => {
     const app = await buildApp();
 

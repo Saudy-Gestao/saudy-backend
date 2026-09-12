@@ -1022,6 +1022,11 @@ model Appointment {
     scheduledByDoctor Boolean @default(false)
     observations    String?
     totem           Int?
+    insurancePlan   String?
+    recurrenceSeriesId String?
+    recurrenceIndex Int?
+    recurrenceTotal Int?
+    simultaneousGroupId String?
     preSchedulingFlow PreSchedulingFlow?
     aiQuestionnaire   AiQuestionnaire?
     createdAt       DateTime @default(now())
@@ -1041,6 +1046,8 @@ model Appointment {
     @@index([sourceProcedureId])
     @@index([rescheduledFromAppointmentId])
     @@index([authorizationStatus], map: "appointments_authorizationStatus_idx")
+    @@index([recurrenceSeriesId])
+    @@index([simultaneousGroupId])
     @@map("appointments")
 }
 

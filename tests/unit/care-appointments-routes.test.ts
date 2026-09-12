@@ -14,6 +14,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     user: { findUnique: vi.fn() },
     branchSettings: { findUnique: vi.fn() },
     patient: { findMany: vi.fn() },
+    procedure: { findMany: vi.fn() },
     appointment: {
       findMany: vi.fn(),
       count: vi.fn(),
@@ -93,6 +94,7 @@ describe('care appointments routes', () => {
     mockedPrisma.user.findUnique.mockResolvedValue({ sector: { branch: { id: 'b-1' } } });
     mockedPrisma.branchSettings.findUnique.mockResolvedValue({ noShowToleranceMinutes: 30 });
     mockedPrisma.patient.findMany.mockResolvedValue([]);
+    mockedPrisma.procedure.findMany.mockResolvedValue([]);
     mockedPrisma.appointment.findMany.mockResolvedValue([]);
     mockedPrisma.appointment.count.mockResolvedValue(0);
     mockedPrisma.appointment.findFirst.mockResolvedValue(null);
@@ -225,6 +227,55 @@ describe('care appointments routes', () => {
     expect(res.statusCode).toBe(201);
     expect(mockedPublishCreated).toHaveBeenCalled();
 
+    await app.close();
+  });
+
+  it('creates a batch atomically for simultaneous or recurring flows', async () => {
+    const app = await buildApp();
+    mockedPrisma.procedure.findMany.mockResolvedValue([]);
+    tx.appointment.create
+      .mockResolvedValueOnce({ id: 'a-batch-1', status: 'AGENDADO', date: '2026-04-13', time: '10:00' })
+      .mockResolvedValueOnce({ id: 'a-batch-2', status: 'AGENDADO', date: '2026-04-20', time: '10:00' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/appointments/batch',
+      payload: {
+        appointments: [
+          {
+            specialty: 'Psicologia',
+            doctorName: 'Dra. Ana',
+            patientId: 'p-1',
+            date: '2026-04-13',
+            time: '10:00',
+            recurrenceSeriesId: 'series-1',
+            recurrenceIndex: 1,
+            recurrenceTotal: 2,
+            simultaneousGroupId: 'group-1',
+          },
+          {
+            specialty: 'Fonoaudiologia',
+            doctorName: 'Dr. Bruno',
+            patientId: 'p-1',
+            date: '2026-04-20',
+            time: '10:00',
+            recurrenceSeriesId: 'series-1',
+            recurrenceIndex: 2,
+            recurrenceTotal: 2,
+            simultaneousGroupId: 'group-2',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual(expect.objectContaining({
+      total: 2,
+      recurrenceSeriesId: 'series-1',
+      simultaneousGroupId: 'group-1',
+    }));
+    expect(tx.appointment.create).toHaveBeenCalledTimes(2);
+    expect(mockedPublishCreated).toHaveBeenCalledTimes(2);
     await app.close();
   });
 

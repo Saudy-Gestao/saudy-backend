@@ -783,10 +783,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     (request as any).branchId = branchId;
   });
 
-  const expireOverdueReservations = async () => {
+  const expireOverdueReservations = async (branchId: string) => {
     const now = new Date();
     const overdueItems = await prisma.teaPreReservation.findMany({
       where: {
+        patient: { branchId },
         status: {
           in: ['PROPOSED', 'RESERVED', 'PENDING_AUTHORIZATION', 'AUTHORIZED'] as any,
         },
@@ -856,7 +857,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       request.log.error({ keys: prisma ? Object.keys(prisma) : [] }, 'Prisma client missing models on pending route');
       return reply.code(500).send({ error: 'Server misconfiguration: prisma models unavailable' });
     }
-    await expireOverdueReservations();
+    const branchId = (request as any).branchId as string;
+    await expireOverdueReservations(branchId);
 
     const { search, status } = request.query as { search?: string; status?: string };
     const normalizedStatus = normalizeStatus(status);
@@ -868,6 +870,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           status: { not: 'Inativo' },
           teaProfile: {
             isActive: true,
+            patient: { branchId },
           },
         },
       },
@@ -904,6 +907,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           status: { not: 'Inativo' },
           teaProfile: {
             isActive: true,
+            patient: { branchId },
           },
         },
       },
@@ -958,6 +962,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       ? await prisma.teaPreReservation.findMany({
         where: {
           pitTherapyId: { in: [...therapyIds, ...removedTherapyIds] },
+          patient: { branchId },
         },
       })
       : [];
@@ -3575,12 +3580,13 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       },
     },
   }, async (request) => {
-    await expireOverdueReservations();
+    const branchId = (request as any).branchId as string;
+    await expireOverdueReservations(branchId);
 
     const { status, limit = 100, offset = 0 } = request.query as { status?: string; limit?: number; offset?: number };
     const normalizedStatus = normalizeStatus(status);
 
-    const where: any = {};
+    const where: any = { patient: { branchId } };
     if (normalizedStatus) where.status = normalizedStatus;
 
     const [items, total] = await Promise.all([

@@ -166,6 +166,11 @@ const APPOINTMENT_MUTABLE_FIELDS = new Set([
   'scheduledByDoctor',
   'observations',
   'totem',
+  'insurancePlan',
+  'recurrenceSeriesId',
+  'recurrenceIndex',
+  'recurrenceTotal',
+  'simultaneousGroupId',
   'isActive',
 ]);
 
@@ -353,6 +358,7 @@ async function findPatientScheduleConflict(params: {
   time?: string | null;
   durationMinutes?: number | null;
   excludeAppointmentId?: string | null;
+  simultaneousGroupId?: string | null;
 }) {
   const {
     tx,
@@ -363,6 +369,7 @@ async function findPatientScheduleConflict(params: {
     time,
     durationMinutes,
     excludeAppointmentId,
+    simultaneousGroupId,
   } = params;
 
   if (!date || !time) return null;
@@ -392,6 +399,7 @@ async function findPatientScheduleConflict(params: {
         { status: 'NO-SHOW' },
         { status: 'AUSENTE' },
         { status: 'FALTOU' },
+        ...(simultaneousGroupId ? [{ simultaneousGroupId }] : []),
       ],
     },
     select: {
@@ -489,6 +497,78 @@ const applyAutomaticNoShowForBranch = async (branchId: string) => {
   for (const appointmentId of appointmentIds) {
     publishAppointmentNoShowEventIfNeeded({ branchId, appointmentId });
   }
+};
+
+class BatchSchedulingError extends Error {
+  conflictType?: string;
+  details?: string;
+
+  constructor(message: string, conflictType?: string, details?: string) {
+    super(message);
+    this.name = 'BatchSchedulingError';
+    this.conflictType = conflictType;
+    this.details = details;
+  }
+}
+
+const createAppointmentRecord = async (
+  tx: Prisma.TransactionClient,
+  branchId: string,
+  data: any,
+) => {
+  const created = await tx.appointment.create({
+    data: {
+      branchId,
+      rescheduledFromAppointmentId: data.rescheduledFromAppointmentId || null,
+      patientName: data.patientName || null,
+      patientCpf: data.patientCpf || null,
+      patientId: data.patientId || null,
+      doctorName: data.doctorName || null,
+      roomId: data.roomId || null,
+      medicalEquipmentId: data.medicalEquipmentId || null,
+      specialty: data.specialty || null,
+      durationMinutes: Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : null,
+      convenio: data.convenio || null,
+      insurancePlan: data.insurancePlan || null,
+      date: data.date || null,
+      time: data.time || null,
+      type: data.type || null,
+      status: data.status || null,
+      accessionNumber: data.accessionNumber && String(data.accessionNumber).trim().length > 0
+        ? String(data.accessionNumber).trim()
+        : generateAccessionNumber(),
+      authorizationStatus: data.authorizationStatus || 'PENDING',
+      authorizationNotes: data.authorizationNotes || null,
+      authorizedAt: data.authorizationStatus === 'AUTHORIZED' ? new Date() : null,
+      observations: data.observations || null,
+      totem: data.totem ?? null,
+      recurrenceSeriesId: data.recurrenceSeriesId || null,
+      recurrenceIndex: Number.isInteger(data.recurrenceIndex) ? data.recurrenceIndex : null,
+      recurrenceTotal: Number.isInteger(data.recurrenceTotal) ? data.recurrenceTotal : null,
+      simultaneousGroupId: data.simultaneousGroupId || null,
+    },
+  });
+
+  const createdStatus = normalizeStatus(created.status);
+  if (RESERVABLE_STATUSES.has(createdStatus)) {
+    const reservationSnapshot = await reserveProcedureMaterialsSnapshot(tx, created);
+    if (reservationSnapshot) {
+      await tx.appointment.update({
+        where: { id: created.id },
+        data: {
+          inventoryReservedAt: new Date(),
+          inventoryReservationSnapshot: reservationSnapshot as any,
+          inventoryReservationSource: reservationSnapshot.source,
+        },
+      });
+      (created as any).inventoryReservedAt = new Date();
+      (created as any).inventoryReservationSnapshot = reservationSnapshot;
+      (created as any).inventoryReservationSource = reservationSnapshot.source;
+    }
+  }
+
+  await syncMwlFromAppointment(tx, created, branchId);
+  return created;
 };
 
 // Creates or updates the MwlEntry linked to this appointment.
@@ -899,14 +979,34 @@ const applyProcedureMaterialStock = async (
 };
 
 export default async function appointmentRoutes(app: FastifyInstance) {
-  const getLoggedBranchId = async (request: any) => {
+  const getLoggedUserContext = async (request: any) => {
     const userId = (request.user as any)?.id;
     if (!userId) return null;
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { sector: { include: { branch: true } } },
     });
-    return user?.sector?.branch?.id || null;
+    const branch = user?.sector?.branch;
+    if (!branch?.id) return null;
+    return { branchId: branch.id, companyId: branch.companyId || null };
+  };
+
+  const resolveTargetBranchId = async (request: any, requestedBranchId?: unknown) => {
+    const context = await getLoggedUserContext(request);
+    if (!context) return null;
+    const requested = String(requestedBranchId || '').trim();
+    if (!requested || requested === context.branchId) return context.branchId;
+    if (!context.companyId) return null;
+    const branch = await prisma.branch.findFirst({
+      where: { id: requested, companyId: context.companyId },
+      select: { id: true },
+    });
+    return branch?.id || null;
+  };
+
+  const getLoggedBranchId = async (request: any) => {
+    const context = await getLoggedUserContext(request);
+    return context?.branchId || null;
   };
 
   app.addHook('onRequest', async (request, reply) => {
@@ -934,13 +1034,14 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           date: { type: 'string' }, // YYYY-MM-DD
           startDate: { type: 'string' }, // YYYY-MM-DD
           endDate: { type: 'string' }, // YYYY-MM-DD
+          branchId: { type: 'string' },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
       },
     },
   }, async (request) => {
-    const branchId = await getLoggedBranchId(request);
+    const branchId = await resolveTargetBranchId(request, (request.query as any)?.branchId);
     if (!branchId) return { items: [], total: 0 };
 
     await applyAutomaticNoShowForBranch(branchId);
@@ -1199,9 +1300,11 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           doctorName: { type: 'string' },
           roomId: { type: 'string' },
           medicalEquipmentId: { type: 'string' },
+          branchId: { type: 'string' },
           specialty: { type: 'string' },
           durationMinutes: { type: 'number' },
           convenio: { type: 'string' },
+          insurancePlan: { type: 'string' },
           date: { type: 'string' },
           time: { type: 'string' },
           type: { type: 'string' },
@@ -1212,6 +1315,10 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           totem: { type: 'number' },
           accessionNumber: { type: 'string' },
           rescheduledFromAppointmentId: { type: 'string' },
+          recurrenceSeriesId: { type: 'string' },
+          recurrenceIndex: { type: 'integer' },
+          recurrenceTotal: { type: 'integer' },
+          simultaneousGroupId: { type: 'string' },
         },
       },
       response: {
@@ -1222,10 +1329,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       },
     },
   }, async (request, reply) => {
-    const branchId = await getLoggedBranchId(request);
-    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
-
     const data = request.body as any;
+    const branchId = await resolveTargetBranchId(request, data?.branchId);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
     try {
       const mixedProcedureTypes = await hasMixedAppointmentTypeInSpecialty({
         branchId,
@@ -1269,6 +1375,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           date: data.date || null,
           time: data.time || null,
           durationMinutes: requestedDurationMinutes,
+          simultaneousGroupId: data.simultaneousGroupId || null,
         })
       ));
 
@@ -1336,6 +1443,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           specialty: data.specialty || null,
           durationMinutes: Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : null,
           convenio: data.convenio || null,
+          insurancePlan: data.insurancePlan || null,
           date: data.date || null,
           time: data.time || null,
           type: data.type || null,
@@ -1348,6 +1456,10 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           authorizedAt: data.authorizationStatus === 'AUTHORIZED' ? new Date() : null,
           observations: data.observations || null,
           totem: data.totem ?? null,
+          recurrenceSeriesId: data.recurrenceSeriesId || null,
+          recurrenceIndex: Number.isInteger(data.recurrenceIndex) ? data.recurrenceIndex : null,
+          recurrenceTotal: Number.isInteger(data.recurrenceTotal) ? data.recurrenceTotal : null,
+          simultaneousGroupId: data.simultaneousGroupId || null,
         } });
 
         const createdStatus = normalizeStatus(created.status);
@@ -1379,6 +1491,172 @@ export default async function appointmentRoutes(app: FastifyInstance) {
     } catch (err: any) {
       request.log.error({ err }, 'Failed to create appointment');
       return reply.code(400).send({ error: 'Failed to create appointment', details: err.message });
+    }
+  });
+
+  app.post('/batch', {
+    schema: {
+      summary: 'Create appointments atomically',
+      tags: ['Appointments'],
+      body: {
+        type: 'object',
+        required: ['appointments'],
+        properties: {
+          appointments: { type: 'array', minItems: 1, maxItems: 120, items: { type: 'object' } },
+        },
+      },
+      response: {
+        201: {
+          type: 'object',
+          properties: {
+            items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            total: { type: 'integer' },
+            recurrenceSeriesId: { type: ['string', 'null'] },
+            simultaneousGroupId: { type: ['string', 'null'] },
+          },
+          additionalProperties: true,
+        },
+        400: { type: 'object', additionalProperties: true },
+        409: { type: 'object', additionalProperties: true },
+        403: { type: 'object' },
+      },
+    },
+  }, async (request, reply) => {
+    const payload = request.body as { appointments?: any[] };
+    const appointments = Array.isArray(payload?.appointments) ? payload.appointments : [];
+    if (appointments.length === 0) {
+      return reply.code(400).send({
+        error: 'Invalid batch payload',
+        message: 'Informe pelo menos um agendamento para criar.',
+      });
+    }
+
+    const requestedBranchId = appointments
+      .map((item) => String(item?.branchId || '').trim())
+      .find(Boolean);
+    const branchId = await resolveTargetBranchId(request, requestedBranchId);
+    if (!branchId) return reply.code(403).send({ error: 'User not associated with a branch' });
+
+    const hasDifferentBranches = appointments.some((item) => {
+      const itemBranchId = String(item?.branchId || '').trim();
+      return itemBranchId && itemBranchId !== branchId;
+    });
+    if (hasDifferentBranches) {
+      return reply.code(400).send({
+        error: 'Invalid batch payload',
+        message: 'Todos os itens do lote precisam pertencer à mesma unidade.',
+      });
+    }
+
+    try {
+      for (const data of appointments) {
+        if (!String(data?.specialty || '').trim() || !String(data?.date || '').trim() || !String(data?.time || '').trim()) {
+          return reply.code(400).send({
+            error: 'Invalid appointment payload',
+            message: 'Cada agendamento precisa informar procedimento, data e horário.',
+          });
+        }
+        const mixedProcedureTypes = await hasMixedAppointmentTypeInSpecialty({
+          branchId,
+          specialty: data.specialty,
+        });
+        if (mixedProcedureTypes) {
+          return reply.code(400).send({
+            error: 'Invalid appointment mix',
+            message: 'Não é permitido misturar procedimentos de consulta e exame na mesma marcação.',
+          });
+        }
+        const normalizedType = normalizeAppointmentType(data?.type || null);
+        if (
+          normalizedType === 'CONSULTA'
+          && String(data?.roomId || '').trim()
+          && String(data?.medicalEquipmentId || '').trim()
+        ) {
+          return reply.code(400).send({
+            error: 'Invalid appointment payload',
+            message: 'Consulta não pode ser salva com sala e equipamento de exame ao mesmo tempo.',
+          });
+        }
+      }
+
+      const createdItems = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const result: any[] = [];
+        for (const data of appointments) {
+          const requestedDurationMinutes = Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : 30;
+          const patientConflict = await findPatientScheduleConflict({
+            tx,
+            branchId,
+            patientId: data.patientId || null,
+            patientCpf: data.patientCpf || null,
+            date: data.date || null,
+            time: data.time || null,
+            durationMinutes: requestedDurationMinutes,
+            simultaneousGroupId: data.simultaneousGroupId || null,
+          });
+          if (patientConflict) {
+            throw new BatchSchedulingError(
+              'O paciente já possui outro agendamento nesse horário.',
+              'PATIENT',
+              `Conflito às ${String(patientConflict.time || '')}.${patientConflict.suggestedTime ? ` Sugestão: ${patientConflict.suggestedTime}.` : ''}`,
+            );
+          }
+
+          const doctorConflict = await findDoctorScheduleConflict({
+            tx,
+            branchId,
+            doctorName: data.doctorName || null,
+            date: data.date || null,
+            time: data.time || null,
+            durationMinutes: requestedDurationMinutes,
+          });
+          if (doctorConflict) {
+            throw new BatchSchedulingError(
+              'O profissional já possui outro atendimento nesse horário.',
+              'DOCTOR',
+              `Conflito com ${String(doctorConflict.patientName || 'outro paciente')} às ${String(doctorConflict.time || '')}.`,
+            );
+          }
+
+          const resourceConflict = await findResourceScheduleConflict({
+            tx,
+            branchId,
+            roomId: data.roomId || null,
+            medicalEquipmentId: data.medicalEquipmentId || null,
+            date: data.date || null,
+            time: data.time || null,
+            durationMinutes: requestedDurationMinutes,
+          });
+          if (resourceConflict) {
+            throw new BatchSchedulingError(
+              'A sala ou o equipamento já está reservado nesse horário.',
+              'RESOURCE',
+              'Conflito identificado no recurso selecionado.',
+            );
+          }
+
+          result.push(await createAppointmentRecord(tx, branchId, data));
+        }
+        return result;
+      });
+
+      createdItems.forEach((item: any) => publishAppointmentCreatedEvent({ branchId, appointmentId: item.id }));
+      return reply.code(201).send({
+        items: createdItems,
+        total: createdItems.length,
+        recurrenceSeriesId: appointments[0]?.recurrenceSeriesId || null,
+        simultaneousGroupId: appointments[0]?.simultaneousGroupId || null,
+      });
+    } catch (err: any) {
+      if (err instanceof BatchSchedulingError) {
+        return reply.code(409).send({
+          error: 'Scheduling conflict',
+          conflictType: err.conflictType,
+          message: err.message,
+          details: err.details,
+        });
+      }
+      request.log.error({ err }, 'Failed to create appointments batch');
+      return reply.code(400).send({ error: 'Failed to create appointments batch', details: err.message });
     }
   });
 
