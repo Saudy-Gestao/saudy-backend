@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { Prisma } from "@prisma/client";
 import prisma from "../lib/prisma";
 
 const VALID_WEEKDAYS = new Set(["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"]);
@@ -26,6 +27,47 @@ function dateRangesOverlap(startA?: Date | null, endA?: Date | null, startB?: Da
   if (startA && endB && startA > endB) return false;
   if (startB && endA && startB > endA) return false;
   return true;
+}
+
+function agendaValuesOverlap(a: any, b: any) {
+  return a.doctorId === b.doctorId
+    && a.weekday === b.weekday
+    && a.status === "ATIVA"
+    && b.status === "ATIVA"
+    && timeRangesOverlap(a.shiftStart, a.shiftEnd, b.shiftStart, b.shiftEnd)
+    && dateRangesOverlap(a.startDate, a.endDate, b.startDate, b.endDate);
+}
+
+function formatWeekday(value?: string | null) {
+  const labels: Record<string, string> = {
+    domingo: "domingo-feira",
+    segunda: "segunda-feira",
+    terca: "terça-feira",
+    quarta: "quarta-feira",
+    quinta: "quinta-feira",
+    sexta: "sexta-feira",
+    sabado: "sábado",
+  };
+  return labels[String(value || "").toLowerCase()] || String(value || "dia não informado");
+}
+
+function formatAgendaConflictMessage(value: any, conflict: any, itemIndex?: number) {
+  const prefix = itemIndex === undefined ? "Existe um conflito" : `Existe um conflito no horário ${itemIndex + 1} da escala`;
+  const requested = `${formatWeekday(value.weekday)}, das ${value.shiftStart} às ${value.shiftEnd}`;
+  const existing = conflict
+    ? `A agenda existente está configurada das ${conflict.shiftStart} às ${conflict.shiftEnd} no mesmo dia.`
+    : "Já existe uma agenda ativa para esse profissional nesse período.";
+  return `${prefix}: ${requested}. ${existing}`;
+}
+
+class AgendaOverlapError extends Error {
+  conflict: unknown;
+
+  constructor(message: string, conflict: unknown) {
+    super(message);
+    this.name = "AgendaOverlapError";
+    this.conflict = conflict;
+  }
 }
 
 function normalizeEspecialidadeIds(data: { especialidadeIds?: unknown; especialidadeId?: unknown } | null | undefined): string[] {
@@ -195,8 +237,8 @@ export default async function agendaRoutes(app: FastifyInstance) {
     };
   };
 
-  const checkOverlap = async (value: any, excludeId?: string) => {
-    const siblings = await prisma.agenda.findMany({
+  const checkOverlap = async (value: any, excludeId?: string, db: any = prisma) => {
+    const siblings = await db.agenda.findMany({
       where: {
         doctorId: value.doctorId,
         weekday: value.weekday,
@@ -210,6 +252,122 @@ export default async function agendaRoutes(app: FastifyInstance) {
     ));
     return conflict || null;
   };
+
+  const agendaCreateBodySchema = {
+    type: "object",
+    required: ["branchId", "doctorId", "weekday", "shiftStart", "shiftEnd"],
+    properties: {
+      branchId: { type: "string" },
+      doctorId: { type: "string" },
+      weekday: { type: "string" },
+      shiftStart: { type: "string" },
+      shiftEnd: { type: "string" },
+      especialidadeId: { type: "string", nullable: true },
+      especialidadeIds: { type: "array", items: { type: "string" } },
+      roomId: { type: "string", nullable: true },
+      startDate: { type: "string", nullable: true },
+      endDate: { type: "string", nullable: true },
+      status: { type: "string", nullable: true },
+    },
+  } as const;
+
+  app.post("/bulk", {
+    schema: {
+      summary: "Create agenda scale atomically",
+      tags: ["Agendas"],
+      body: {
+        type: "object",
+        required: ["items"],
+        properties: {
+          items: { type: "array", minItems: 1, items: agendaCreateBodySchema },
+        },
+      },
+      response: {
+        201: { type: "object", additionalProperties: true },
+        400: { type: "object", additionalProperties: true },
+        403: { type: "object", additionalProperties: true },
+        409: { type: "object", additionalProperties: true },
+      },
+    },
+  }, async (request, reply) => {
+    const userId = (request.user as any).id;
+    const context = await getLoggedContext(userId);
+    if (!context) return reply.code(403).send({ error: "User not associated with a company" });
+
+    const rawItems = (request.body as any)?.items;
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return reply.code(400).send({ error: "A escala precisa ter pelo menos um horário" });
+    }
+
+    const values: any[] = [];
+    for (let index = 0; index < rawItems.length; index += 1) {
+      const result = await validateAndNormalizeBody(rawItems[index], context);
+      if ("error" in result) {
+        return reply.code(400).send({ error: result.error, itemIndex: index });
+      }
+      values.push(result.value);
+    }
+
+    // Validate the complete payload before opening the write transaction. This
+    // catches overlaps between items in the same scale without persisting a
+    // valid prefix of the batch.
+    for (let index = 0; index < values.length; index += 1) {
+      const value = values[index];
+      const batchConflictIndex = values
+        .slice(0, index)
+        .findIndex((previous) => agendaValuesOverlap(value, previous));
+      if (batchConflictIndex >= 0) {
+        const conflict = values[batchConflictIndex];
+        return reply.code(409).send({
+          error: "AGENDA_OVERLAP",
+          message: formatAgendaConflictMessage(value, conflict, index),
+          itemIndex: index,
+          conflictItemIndex: batchConflictIndex,
+          conflict,
+        });
+      }
+
+      const existing = await checkOverlap(value);
+      if (existing) {
+        return reply.code(409).send({
+          error: "AGENDA_OVERLAP",
+          message: formatAgendaConflictMessage(value, existing, index),
+          itemIndex: index,
+          conflict: existing,
+        });
+      }
+    }
+
+    try {
+      const created = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        // Re-check inside the transaction to protect the batch from another
+        // request that creates an overlapping agenda after the preflight.
+        for (let index = 0; index < values.length; index += 1) {
+          const existing = await checkOverlap(values[index], undefined, tx);
+          if (existing) throw new AgendaOverlapError(formatAgendaConflictMessage(values[index], existing, index), existing);
+        }
+
+        return Promise.all(values.map((value) => tx.agenda.create({
+          data: {
+            ...value,
+            createdByUserId: context.userId,
+            createdByName: context.userName,
+            updatedByUserId: context.userId,
+            updatedByName: context.userName,
+          },
+          include,
+        })));
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+      return reply.code(201).send({ items: created, total: created.length });
+    } catch (err: any) {
+      if (err instanceof AgendaOverlapError) {
+        return reply.code(409).send({ error: "AGENDA_OVERLAP", message: err.message, conflict: err.conflict });
+      }
+      request.log.error({ err }, "Failed to create agenda scale");
+      return reply.code(409).send({ error: "AGENDA_SCALE_CONFLICT", message: "A escala não pôde ser salva porque os horários foram alterados. Revise e tente novamente." });
+    }
+  });
 
   app.post("/", {
     schema: {

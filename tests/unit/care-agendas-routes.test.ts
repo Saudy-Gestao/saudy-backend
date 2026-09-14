@@ -17,6 +17,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
       update: vi.fn(),
       delete: vi.fn(),
     },
+    $transaction: vi.fn(),
   },
 }));
 
@@ -51,6 +52,7 @@ describe('care agendas routes', () => {
     mockedPrisma.agenda.findMany.mockResolvedValue([]);
     mockedPrisma.agenda.create.mockResolvedValue({ id: 'a-1' });
     mockedPrisma.agenda.update.mockResolvedValue({ id: 'a-1' });
+    mockedPrisma.$transaction.mockImplementation(async (callback: (tx: any) => unknown) => callback(mockedPrisma));
   });
 
   it('requires auth and company context', async () => {
@@ -150,6 +152,73 @@ describe('care agendas routes', () => {
         especialidadeIds: ['e-1', 'e-2'],
       }),
     }));
+    await app.close();
+  });
+
+  it('creates a scale atomically when the professional has different non-overlapping rules', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bulk',
+      payload: {
+        items: [
+          { branchId: 'b-1', doctorId: 'd-1', weekday: 'segunda', shiftStart: '08:00', shiftEnd: '12:00' },
+          { branchId: 'b-1', doctorId: 'd-1', weekday: 'terça', shiftStart: '13:00', shiftEnd: '17:00' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(mockedPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockedPrisma.agenda.create).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it('rejects an overlapping item in the scale before creating any agenda', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bulk',
+      payload: {
+        items: [
+          { branchId: 'b-1', doctorId: 'd-1', weekday: 'segunda', shiftStart: '08:00', shiftEnd: '12:00' },
+          { branchId: 'b-1', doctorId: 'd-1', weekday: 'segunda', shiftStart: '10:00', shiftEnd: '14:00' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual(expect.objectContaining({
+      error: 'AGENDA_OVERLAP',
+      itemIndex: 1,
+    }));
+    expect(res.json().message).toContain('segunda-feira');
+    expect(mockedPrisma.agenda.create).not.toHaveBeenCalled();
+    expect(mockedPrisma.$transaction).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('does not partially save a scale when one item overlaps an existing agenda', async () => {
+    mockedPrisma.agenda.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'a-existing', shiftStart: '09:00', shiftEnd: '11:00', startDate: null, endDate: null }]);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/bulk',
+      payload: {
+        items: [
+          { branchId: 'b-1', doctorId: 'd-1', weekday: 'segunda', shiftStart: '08:00', shiftEnd: '09:00' },
+          { branchId: 'b-1', doctorId: 'd-1', weekday: 'terça', shiftStart: '08:00', shiftEnd: '12:00' },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toContain('terça-feira');
+    expect(res.json().message).toContain('09:00 às 11:00');
+    expect(mockedPrisma.agenda.create).not.toHaveBeenCalled();
+    expect(mockedPrisma.$transaction).not.toHaveBeenCalled();
     await app.close();
   });
 
