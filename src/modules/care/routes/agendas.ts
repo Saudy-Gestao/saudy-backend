@@ -81,6 +81,10 @@ function normalizeEspecialidadeIds(data: { especialidadeIds?: unknown; especiali
     .filter(Boolean)));
 }
 
+function getAgendaEspecialidadeIds(agenda: { especialidadeIds?: unknown; especialidadeId?: unknown }): string[] {
+  return normalizeEspecialidadeIds(agenda);
+}
+
 export default async function agendaRoutes(app: FastifyInstance) {
   const getLoggedContext = async (userId: string) => {
     const user = await prisma.user.findUnique({
@@ -98,6 +102,24 @@ export default async function agendaRoutes(app: FastifyInstance) {
     especialidade: { select: { id: true, name: true, modalidadeId: true } },
     room: { select: { id: true, name: true } },
   } as const;
+
+  const hydrateAgendaEspecialidades = async (items: any[]) => {
+    const ids = Array.from(new Set(items.flatMap((item) => getAgendaEspecialidadeIds(item))));
+    if (ids.length === 0) return items.map((item) => ({ ...item, especialidades: [] }));
+
+    const records = await prisma.especialidade.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true, modalidadeId: true },
+    });
+    const byId = new Map(records.map((record: any) => [String(record.id), record]));
+
+    return items.map((item) => ({
+      ...item,
+      especialidades: getAgendaEspecialidadeIds(item)
+        .map((id) => byId.get(id))
+        .filter(Boolean),
+    }));
+  };
 
   app.addHook("onRequest", async (request, reply) => {
     try {
@@ -143,7 +165,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
       include,
       orderBy: [{ doctorId: "asc" }, { weekday: "asc" }, { shiftStart: "asc" }],
     });
-    return { items, total: items.length };
+    return { items: await hydrateAgendaEspecialidades(items), total: items.length };
   });
 
   app.get("/:id", {
@@ -162,7 +184,8 @@ export default async function agendaRoutes(app: FastifyInstance) {
     if (!item) return reply.code(404).send({ error: "Agenda not found" });
     const branch = await prisma.branch.findFirst({ where: { id: item.branchId, companyId: context.companyId } });
     if (!branch) return reply.code(404).send({ error: "Agenda not found" });
-    return item;
+    const [hydratedItem] = await hydrateAgendaEspecialidades([item]);
+    return hydratedItem;
   });
 
   const validateAndNormalizeBody = async (data: any, context: { companyId: string }, currentBranchId?: string) => {
@@ -218,6 +241,11 @@ export default async function agendaRoutes(app: FastifyInstance) {
     if (data.roomId) {
       const room = await prisma.sector.findUnique({ where: { id: data.roomId } });
       if (!room || room.branchId !== branchId) return { error: "Sala inválida para essa unidade" };
+      const roomEspecialidadeIds = normalizeEspecialidadeIds(room);
+      if (especialidadeIds.length > 0 && roomEspecialidadeIds.length > 0
+        && especialidadeIds.some((id) => !roomEspecialidadeIds.includes(id))) {
+        return { error: "Sala não está vinculada a todas as especialidades selecionadas" };
+      }
       roomId = room.id;
     }
 

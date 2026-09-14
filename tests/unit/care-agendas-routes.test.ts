@@ -8,7 +8,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
     user: { findUnique: vi.fn() },
     branch: { findMany: vi.fn(), findFirst: vi.fn() },
     doctor: { findUnique: vi.fn() },
-    especialidade: { findUnique: vi.fn() },
+    especialidade: { findUnique: vi.fn(), findMany: vi.fn() },
     sector: { findUnique: vi.fn() },
     agenda: {
       findMany: vi.fn(),
@@ -48,6 +48,7 @@ describe('care agendas routes', () => {
     mockedPrisma.branch.findMany.mockResolvedValue([{ id: 'b-1' }]);
     mockedPrisma.doctor.findUnique.mockResolvedValue(doctor);
     mockedPrisma.especialidade.findUnique.mockResolvedValue({ id: 'e-1', modalidadeId: 'm-1' });
+    mockedPrisma.especialidade.findMany.mockResolvedValue([]);
     mockedPrisma.sector.findUnique.mockResolvedValue({ id: 'r-1', branchId: 'b-1' });
     mockedPrisma.agenda.findMany.mockResolvedValue([]);
     mockedPrisma.agenda.create.mockResolvedValue({ id: 'a-1' });
@@ -69,6 +70,27 @@ describe('care agendas routes', () => {
     const res = await app.inject({ method: 'GET', url: '/?doctorId=d-1' });
     expect(res.statusCode).toBe(200);
     expect(res.json().total).toBe(1);
+    await app.close();
+  });
+
+  it('returns all specialties linked to an agenda', async () => {
+    mockedPrisma.agenda.findMany.mockResolvedValueOnce([{
+      id: 'a-1',
+      especialidadeId: 'e-1',
+      especialidadeIds: ['e-1', 'e-2'],
+    }]);
+    mockedPrisma.especialidade.findMany.mockResolvedValueOnce([
+      { id: 'e-1', name: 'Fisioterapia', modalidadeId: 'm-1' },
+      { id: 'e-2', name: 'Psicomotricidade', modalidadeId: 'm-2' },
+    ]);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items[0].especialidades).toEqual([
+      { id: 'e-1', name: 'Fisioterapia', modalidadeId: 'm-1' },
+      { id: 'e-2', name: 'Psicomotricidade', modalidadeId: 'm-2' },
+    ]);
     await app.close();
   });
 
@@ -152,6 +174,33 @@ describe('care agendas routes', () => {
         especialidadeIds: ['e-1', 'e-2'],
       }),
     }));
+    await app.close();
+  });
+
+  it('rejects a room that is not linked to the selected specialty', async () => {
+    mockedPrisma.sector.findUnique.mockResolvedValueOnce({
+      id: 'r-1',
+      branchId: 'b-1',
+      especialidadeIds: ['e-2'],
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/',
+      payload: {
+        branchId: 'b-1',
+        doctorId: 'd-1',
+        weekday: 'segunda',
+        shiftStart: '08:00',
+        shiftEnd: '12:00',
+        especialidadeIds: ['e-1'],
+        roomId: 'r-1',
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('Sala não está vinculada a todas as especialidades selecionadas');
+    expect(mockedPrisma.agenda.create).not.toHaveBeenCalled();
     await app.close();
   });
 
