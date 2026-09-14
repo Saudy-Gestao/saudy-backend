@@ -29,6 +29,7 @@ import spellCheckRoutes from './routes/spell-check';
 import aiQuestionnaireRoutes from './routes/ai-questionnaire';
 import ticketRoutes from './routes/tickets';
 import aiHelpRoutes from './routes/ai-help';
+import appointmentAssistantRoutes from './routes/appointment-assistant';
 
 export default async function careModule(app: FastifyInstance) {
   app.register(publicCheckInRoutes, { prefix: '/public-check-in' });
@@ -61,4 +62,5 @@ export default async function careModule(app: FastifyInstance) {
   app.register(aiQuestionnaireRoutes, { prefix: '/ai-questionnaire' });
   app.register(ticketRoutes, { prefix: '/tickets' });
   app.register(aiHelpRoutes, { prefix: '/help' });
+  app.register(appointmentAssistantRoutes, { prefix: '/appointments/assistant' });
 }
