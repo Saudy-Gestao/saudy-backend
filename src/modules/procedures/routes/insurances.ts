@@ -146,7 +146,7 @@ export default async function insuranceRoutes(app: FastifyInstance) {
         },
       },
       response: {
-        201: { type: "object" },
+        201: { type: "object", additionalProperties: true },
         400: { type: "object", additionalProperties: true },
       },
     },

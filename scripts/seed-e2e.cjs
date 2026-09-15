@@ -188,6 +188,19 @@ async function main() {
     },
   });
 
+  const mobileExamProcedure = await prisma.procedure.create({
+    data: {
+      branchId: branch.id,
+      branchIds: [branch.id],
+      modalidadeId: modality.id,
+      especialidadeId: specialty.id,
+      name: 'Exame E2E Mobile',
+      appointmentType: 'EXAME',
+      durationMinutes: 30,
+      modalities: ['Presencial'],
+    },
+  });
+
   const teaProcedure = await prisma.procedure.create({
     data: {
       branchId: branch.id,
@@ -354,7 +367,7 @@ async function main() {
       phone: '1130000000',
       birthDate: new Date('1990-04-10T12:00:00.000Z'),
       gender: 'OTHER',
-      cpf: '12345678901',
+      cpf: '12345678909',
       hasHealthInsurance: false,
       isActive: true,
     },
@@ -364,12 +377,12 @@ async function main() {
     data: {
       branchId: branch.id,
       companyId: company.id,
-      name: 'Paciente E2E Mobile',
+      name: 'Paciente Mobile E2E',
       cellphone: '11988887778',
       phone: '1130000000',
       birthDate: new Date('1992-06-15T12:00:00.000Z'),
       gender: 'OTHER',
-      cpf: '22345678901',
+      cpf: '22345678909',
       hasHealthInsurance: false,
       isActive: true,
     },
@@ -384,7 +397,7 @@ async function main() {
       phone: '1130000000',
       birthDate: new Date('1988-02-20T12:00:00.000Z'),
       gender: 'OTHER',
-      cpf: '32345678901',
+      cpf: '32345678917',
       hasHealthInsurance: false,
       isActive: true,
     },
@@ -399,7 +412,22 @@ async function main() {
       phone: '1130000000',
       birthDate: new Date('1989-03-25T12:00:00.000Z'),
       gender: 'OTHER',
-      cpf: '42345678901',
+      cpf: '42345678925',
+      hasHealthInsurance: false,
+      isActive: true,
+    },
+  });
+
+  const historyPatient = await prisma.patient.create({
+    data: {
+      branchId: branch.id,
+      companyId: company.id,
+      name: 'Paciente Histórico E2E',
+      cellphone: '11988887781',
+      phone: '1130000000',
+      birthDate: new Date('1991-07-12T12:00:00.000Z'),
+      gender: 'OTHER',
+      cpf: '52345678933',
       hasHealthInsurance: false,
       isActive: true,
     },
@@ -542,6 +570,27 @@ async function main() {
     },
   });
 
+  await prisma.preAttendance.create({
+    data: {
+      branchId: branch.id,
+      patientId: patient.id,
+      appointmentId: consultationAppointment.id,
+      fullName: patient.name,
+      cpf: patient.cpf,
+      birthDate: '1990-04-10',
+      gender: 'MALE',
+      phone: patient.cellphone,
+      email: patient.email,
+      convenio: 'Particular E2E',
+      status: 'Em atendimento na recepção',
+      queue: 'Recepção E2E',
+      queueType: 'Autorização e Recepção',
+      agenda: `${targetDateIso} 11:00 • Consulta E2E`,
+      doctorId: doctor.id,
+      doctorName: doctor.name,
+    },
+  });
+
   const mobileConsultationAppointment = await prisma.appointment.create({
     data: {
       branchId: branch.id,
@@ -575,6 +624,78 @@ async function main() {
       queueType: 'Fila clínica',
       queue: 'Aguardando atendimento',
       mainComplaint: 'Avaliação clínica E2E Mobile',
+    },
+  });
+
+  await prisma.preAttendance.create({
+    data: {
+      branchId: branch.id,
+      patientId: mobilePatient.id,
+      appointmentId: mobileConsultationAppointment.id,
+      fullName: mobilePatient.name,
+      cpf: mobilePatient.cpf,
+      birthDate: '1992-06-15',
+      gender: 'OTHER',
+      phone: mobilePatient.cellphone,
+      email: mobilePatient.email,
+      convenio: 'Particular E2E',
+      status: 'Em atendimento na recepção',
+      queue: 'Recepção E2E',
+      queueType: 'Autorização e Recepção',
+      agenda: `${targetDateIso} 11:30 • Consulta E2E`,
+      doctorId: doctor.id,
+      doctorName: doctor.name,
+    },
+  });
+
+  const historyAppointment = await prisma.appointment.create({
+    data: {
+      branchId: branch.id,
+      patientId: historyPatient.id,
+      patientName: historyPatient.name,
+      patientCpf: historyPatient.cpf,
+      doctorId: doctor.id,
+      doctorName: doctor.name,
+      agendaId: agenda.id,
+      roomId: room.id,
+      specialty: procedure.name,
+      convenio: insurance.name,
+      date: targetDateIso,
+      time: '08:30',
+      durationMinutes: procedure.durationMinutes,
+      type: 'CONSULTA',
+      status: 'REALIZADO',
+      authorizationStatus: 'AUTHORIZED',
+    },
+  });
+
+  const historyConsultation = await prisma.consultation.create({
+    data: {
+      branchId: branch.id,
+      doctorId: doctor.id,
+      appointmentId: historyAppointment.id,
+      doctorName: doctor.name,
+      patientName: historyPatient.name,
+      convenio: insurance.name,
+      scheduledFor: `${targetDateIso} 08:30`,
+      queueType: 'Fila clínica',
+      queue: 'Atendimento concluído',
+      mainComplaint: 'Registro histórico preparado para a jornada E2E.',
+    },
+  });
+
+  await prisma.medicalRecord.create({
+    data: {
+      patientId: historyPatient.id,
+      consultationId: historyConsultation.id,
+      doctorId: doctor.id,
+      chiefComplaint: 'Queixa registrada no prontuário histórico E2E.',
+      diagnosis: 'Avaliação clínica de acompanhamento E2E.',
+      treatment: 'Manter acompanhamento conforme orientação clínica.',
+      notes: 'Registro preparado para validar filtros e detalhes do histórico.',
+      heartRate: 72,
+      temperature: 36.5,
+      oxygenSaturation: 98,
     },
   });
 
@@ -698,14 +819,17 @@ async function main() {
 
   const fixture = {
     loginEmail: user.email,
+    branchId: branch.id,
     patientName: patient.name,
     mobilePatientName: mobilePatient.name,
+    historyPatientName: historyPatient.name,
     telePatientName: telePatient.name,
     mobileTelePatientName: mobileTelePatient.name,
     branchName: branch.tradeName,
     procedureName: procedure.name,
     secondProcedureName: secondProcedure.name,
     examProcedureName: examProcedure.name,
+    mobileExamProcedureName: mobileExamProcedure.name,
     teaProcedureName: teaProcedure.name,
     specialtyName: specialty.name,
     secondSpecialtyName: secondSpecialty.name,
@@ -718,6 +842,7 @@ async function main() {
     agendaId: agenda.id,
     secondAgendaId: secondAgenda.id,
     consultationAppointmentId: consultationAppointment.id,
+    historyAppointmentId: historyAppointment.id,
     examAppointmentId: examAppointment.id,
     examReportId: examReport.id,
     nursingTemplateId: nursingTemplate.id,

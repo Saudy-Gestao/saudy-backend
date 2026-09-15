@@ -340,7 +340,7 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
         },
       },
       response: {
-        201: { type: 'object' },
+        201: { type: 'object', additionalProperties: true },
         400: { type: 'object', additionalProperties: true },
         403: { type: 'object' },
       },
@@ -415,7 +415,7 @@ export default async function preAttendanceRoutes(app: FastifyInstance) {
       params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       body: { type: 'object' },
       response: {
-        200: { type: 'object' },
+        200: { type: 'object', additionalProperties: true },
         400: { type: 'object', additionalProperties: true },
         403: { type: 'object' },
         404: { type: 'object', additionalProperties: true },
