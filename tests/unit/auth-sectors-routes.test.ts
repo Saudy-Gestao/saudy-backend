@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import sectorRoutes from '../../src/modules/auth/routes/sectors';
 import prisma from '../../src/modules/auth/lib/prisma';
+import { registerSchemas } from '../../src/modules/auth/lib/openapi';
 
 vi.mock('../../src/modules/auth/lib/prisma', () => ({
   default: {
@@ -28,8 +29,7 @@ async function buildApp() {
     (request as any).user = { id: 'u-1' };
   });
 
-  app.addSchema({ $id: 'Sector', type: 'object', additionalProperties: true });
-  app.addSchema({ $id: 'SectorCreate', type: 'object', additionalProperties: true });
+  registerSchemas(app);
 
   await app.register(sectorRoutes);
   return app;
@@ -44,7 +44,7 @@ describe('auth sectors routes', () => {
   it('lists sectors with company scope and 403 without context', async () => {
     mockedPrisma.user.findUnique.mockResolvedValueOnce(null);
     mockedPrisma.branch.findMany.mockResolvedValue([{ id: 'b1' }, { id: 'b2' }]);
-    mockedPrisma.sector.findMany.mockResolvedValue([{ id: 's1' }]);
+    mockedPrisma.sector.findMany.mockResolvedValue([{ id: 's1', especialidadeIds: ['e1', 'e2'] }]);
 
     const app = await buildApp();
 
@@ -53,7 +53,7 @@ describe('auth sectors routes', () => {
 
     res = await app.inject({ method: 'GET', url: '/sectors' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual([{ id: 's1' }]);
+    expect(res.json()).toEqual([{ id: 's1', especialidadeIds: ['e1', 'e2'] }]);
 
     await app.close();
   });

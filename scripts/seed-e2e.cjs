@@ -78,6 +78,14 @@ async function main() {
     },
   });
 
+  const secondSpecialty = await prisma.especialidade.create({
+    data: {
+      branchId: branch.id,
+      modalidadeId: modality.id,
+      name: 'Fisioterapia E2E',
+    },
+  });
+
   const room = await prisma.sector.create({
     data: {
       branchId: branch.id,
@@ -110,6 +118,36 @@ async function main() {
       },
     });
   }
+
+  const secondSpecialtyRoom = await prisma.sector.create({
+    data: {
+      branchId: branch.id,
+      name: 'Sala E2E Fisioterapia',
+      description: '[SALA] Sala exclusiva para a segunda especialidade E2E',
+      modalidadeId: modality.id,
+      especialidadeId: secondSpecialty.id,
+      especialidadeIds: [secondSpecialty.id],
+      workingDays: WEEKDAYS,
+      workingHoursStart: '08:00',
+      workingHoursEnd: '18:00',
+      capacity: 1,
+    },
+  });
+
+  const combinedRoom = await prisma.sector.create({
+    data: {
+      branchId: branch.id,
+      name: 'Sala E2E Multiespecialidade',
+      description: '[SALA] Sala compatível com as especialidades E2E',
+      modalidadeId: modality.id,
+      especialidadeId: specialty.id,
+      especialidadeIds: [specialty.id, secondSpecialty.id],
+      workingDays: WEEKDAYS,
+      workingHoursStart: '08:00',
+      workingHoursEnd: '18:00',
+      capacity: 1,
+    },
+  });
 
   const procedure = await prisma.procedure.create({
     data: {
@@ -177,11 +215,11 @@ async function main() {
       gender: 'FEMALE',
       cpf: '98765432100',
       specialty: procedure.name,
-      specialties: [procedure.name],
+      specialties: [procedure.name, secondProcedure.name],
       especialidadeGroups: JSON.stringify([{
         modalidadeId: modality.id,
         especialidadeId: specialty.id,
-        especialidadeIds: [specialty.id],
+        especialidadeIds: [specialty.id, secondSpecialty.id],
         registrationType: 'CRM',
         registrationNumber: 'E2E001',
         registrationState: 'SP',
@@ -670,10 +708,13 @@ async function main() {
     examProcedureName: examProcedure.name,
     teaProcedureName: teaProcedure.name,
     specialtyName: specialty.name,
+    secondSpecialtyName: secondSpecialty.name,
     doctorName: doctor.name,
     secondDoctorName: secondDoctor.name,
     insuranceName: insurance.name,
     roomName: room.name,
+    secondSpecialtyRoomName: secondSpecialtyRoom.name,
+    combinedRoomName: combinedRoom.name,
     agendaId: agenda.id,
     secondAgendaId: secondAgenda.id,
     consultationAppointmentId: consultationAppointment.id,
