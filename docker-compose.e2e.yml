@@ -1,0 +1,21 @@
+services:
+  saudy-e2e-db:
+    image: postgres:16-alpine
+    container_name: saudy-e2e-db
+    environment:
+      POSTGRES_USER: saudy_e2e
+      POSTGRES_PASSWORD: saudy_e2e_password
+      POSTGRES_DB: saudy_e2e
+    ports:
+      - '55433:5432'
+    volumes:
+      - saudy_e2e_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saudy_e2e -d saudy_e2e"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  saudy_e2e_db:
