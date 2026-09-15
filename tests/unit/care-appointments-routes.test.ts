@@ -3,11 +3,32 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import appointmentRoutes from '../../src/modules/care/routes/appointments';
 import prisma from '../../src/modules/care/lib/prisma';
 import { publishAppointmentCreatedEvent, publishAppointmentNoShowEventIfNeeded } from '../../src/modules/care/lib/appointment-whatsapp-events';
+import { resolveAgendaAvailability } from '../../src/modules/care/lib/agenda-availability';
 
 vi.mock('../../src/modules/care/lib/appointment-whatsapp-events', () => ({
   publishAppointmentCreatedEvent: vi.fn(),
   publishAppointmentNoShowEventIfNeeded: vi.fn(),
 }));
+
+vi.mock('../../src/modules/care/lib/agenda-availability', async () => {
+  const actual = await vi.importActual<any>('../../src/modules/care/lib/agenda-availability');
+  return {
+    ...actual,
+    resolveAgendaAvailability: vi.fn().mockResolvedValue({
+      agendaId: 'agenda-test',
+      branchId: 'b-1',
+      doctorId: 'doctor-test',
+      doctorName: 'Dr',
+      roomId: null,
+      roomName: null,
+      weekday: 'segunda',
+      shiftStart: '08:00',
+      shiftEnd: '18:00',
+      specialtyIds: [],
+      procedureIds: ['procedure-test'],
+    }),
+  };
+});
 
 vi.mock('../../src/modules/care/lib/prisma', () => ({
   default: {
@@ -35,6 +56,7 @@ vi.mock('../../src/modules/care/lib/prisma', () => ({
 const mockedPrisma = prisma as any;
 const mockedPublishCreated = publishAppointmentCreatedEvent as any;
 const mockedPublishNoShow = publishAppointmentNoShowEventIfNeeded as any;
+const mockedResolveAgendaAvailability = resolveAgendaAvailability as any;
 
 const tx = {
   appointment: {
@@ -90,6 +112,20 @@ async function buildApp(opts?: { unauthorized?: boolean }) {
 describe('care appointments routes', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+
+    mockedResolveAgendaAvailability.mockResolvedValue({
+      agendaId: 'agenda-test',
+      branchId: 'b-1',
+      doctorId: 'doctor-test',
+      doctorName: 'Dr',
+      roomId: null,
+      roomName: null,
+      weekday: 'segunda',
+      shiftStart: '08:00',
+      shiftEnd: '18:00',
+      specialtyIds: [],
+      procedureIds: ['procedure-test'],
+    });
 
     mockedPrisma.user.findUnique.mockResolvedValue({ sector: { branch: { id: 'b-1' } } });
     mockedPrisma.branchSettings.findUnique.mockResolvedValue({ noShowToleranceMinutes: 30 });

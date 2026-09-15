@@ -30,7 +30,8 @@ function dateRangesOverlap(startA?: Date | null, endA?: Date | null, startB?: Da
 }
 
 function agendaValuesOverlap(a: any, b: any) {
-  return a.doctorId === b.doctorId
+  return a.branchId === b.branchId
+    && a.doctorId === b.doctorId
     && a.weekday === b.weekday
     && a.status === "ATIVA"
     && b.status === "ATIVA"
@@ -268,6 +269,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
   const checkOverlap = async (value: any, excludeId?: string, db: any = prisma) => {
     const siblings = await db.agenda.findMany({
       where: {
+        branchId: value.branchId,
         doctorId: value.doctorId,
         weekday: value.weekday,
         status: "ATIVA",

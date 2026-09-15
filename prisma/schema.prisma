@@ -202,6 +202,8 @@ model Agenda {
     branch          Branch   @relation(fields: [branchId], references: [id])
     doctorId        String
     doctor          Doctor   @relation(fields: [doctorId], references: [id])
+    appointments    Appointment[]
+    teaPreReservations TeaPreReservation[]
     weekday         String
     shiftStart      String
     shiftEnd        String
@@ -345,6 +347,7 @@ model Doctor {
     reportsAsReviewingDoctor Report[] @relation("reviewing_doctor")
     reportsAsFinalizedDoctor Report[] @relation("finalized_doctor")
     agendas        Agenda[]
+    appointments   Appointment[]
     interns         InternDoctor[]
 
     @@unique([crm, crmState])
@@ -949,6 +952,8 @@ model TeaPreReservation {
     professionalName     String?
     roomId               String?
     roomName             String?
+    agendaId             String?
+    agenda               Agenda?                     @relation(fields: [agendaId], references: [id], onDelete: SetNull)
     suggestedDate        DateTime?
     suggestedTime        String?
     durationMinutes      Int?
@@ -965,6 +970,7 @@ model TeaPreReservation {
     @@index([pitTherapyId, status])
     @@index([patientId])
     @@index([roomId])
+    @@index([agendaId])
     @@map("tea_pre_reservations")
 }
 
@@ -994,6 +1000,10 @@ model Appointment {
     patientCpf      String?
     patientId       String?
     doctorName      String?
+    doctorId        String?
+    doctor          Doctor?  @relation(fields: [doctorId], references: [id], onDelete: SetNull)
+    agendaId        String?
+    agenda          Agenda?  @relation(fields: [agendaId], references: [id], onDelete: SetNull)
     roomId          String?
     medicalEquipmentId String?
     specialty       String?
@@ -1040,6 +1050,8 @@ model Appointment {
     consultations   Consultation[]
 
     @@index([branchId])
+    @@index([doctorId])
+    @@index([agendaId])
     @@index([roomId])
     @@index([medicalEquipmentId])
     @@index([sourceConsultationId])

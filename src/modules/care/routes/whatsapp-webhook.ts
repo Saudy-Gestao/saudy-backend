@@ -5,6 +5,7 @@ import prisma from '../lib/prisma';
 import WhatsAppAutoSender from '../lib/whatsapp-auto-sender';
 import handleWhatsAppChatbot from '../lib/whatsapp-chatbot';
 import { createMessagingService } from '../lib/messaging';
+import { AgendaAvailabilityError, listAgendaSlots } from '../lib/agenda-availability';
 
 const normalizeValue = (value: unknown) => String(value || '').trim().toLowerCase();
 
@@ -635,7 +636,11 @@ const resolveFollowUpSpecialty = (sourceSpecialty?: string | null) => {
 
 const findSuggestedFollowUpSlot = async (tx: Prisma.TransactionClient, params: {
   branchId: string;
+  doctorId?: string | null;
   doctorName?: string | null;
+  procedureId?: string | null;
+  procedureName?: string | null;
+  roomId?: string | null;
   baseDate?: string | null;
   preferredTime?: string | null;
 }) => {
@@ -649,50 +654,71 @@ const findSuggestedFollowUpSlot = async (tx: Prisma.TransactionClient, params: {
   const searchStart = addBusinessDays(base, 7);
   const timeCandidates = Array.from(new Set([preferredTime, '09:00', '10:00', '11:00', '14:00', '15:00', '16:00']));
 
-  for (let dayOffset = 0; dayOffset < 45; dayOffset += 1) {
-    const candidate = new Date(searchStart);
-    candidate.setDate(searchStart.getDate() + dayOffset);
+  const searchEnd = new Date(searchStart);
+  searchEnd.setDate(searchEnd.getDate() + 44);
+  let agendaSlots;
+  try {
+    agendaSlots = await listAgendaSlots(tx, {
+      branchId: params.branchId,
+      doctorId: params.doctorId || null,
+      doctorName: normalizedDoctor || null,
+      procedureId: params.procedureId || null,
+      procedureName: params.procedureName || null,
+      allowUnscopedSpecialty: !params.procedureId,
+      roomId: params.roomId || null,
+      fromDate: formatDateIso(searchStart),
+      toDate: formatDateIso(searchEnd),
+      durationMinutes: 30,
+      stepMinutes: 15,
+    });
+  } catch (error) {
+    if (error instanceof AgendaAvailabilityError) return null;
+    throw error;
+  }
+
+  const preferenceOrder = new Map(timeCandidates.map((time, index) => [time, index]));
+  agendaSlots.sort((a, b) => (
+    a.date.localeCompare(b.date)
+    || (preferenceOrder.get(a.time) ?? timeCandidates.length) - (preferenceOrder.get(b.time) ?? timeCandidates.length)
+    || a.time.localeCompare(b.time)
+  ));
+
+  for (const agendaSlot of agendaSlots) {
+    const candidate = new Date(`${agendaSlot.date}T12:00:00`);
     if (!isBusinessDay(candidate)) continue;
-    const dateIso = formatDateIso(candidate);
-
-    const appointments = normalizedDoctor
-      ? await tx.appointment.findMany({
-          where: {
-            branchId: params.branchId,
-            date: dateIso,
-            doctorName: { equals: normalizedDoctor, mode: 'insensitive' },
-            isActive: true,
-          },
-          select: {
-            time: true,
-            durationMinutes: true,
-            status: true,
-          },
-        })
-      : [];
-
+    const appointments = await tx.appointment.findMany({
+      where: {
+        branchId: params.branchId,
+        date: agendaSlot.date,
+        isActive: true,
+      },
+      select: {
+        doctorId: true,
+        doctorName: true,
+        time: true,
+        durationMinutes: true,
+        status: true,
+      },
+    });
     const blocking = appointments.filter((item: any) => (
-      !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeAppointmentStatusKey(item?.status || ''))
+      (String(item.doctorId || '') === String(agendaSlot.doctorId)
+        || String(item.doctorName || '').trim().toLowerCase() === String(agendaSlot.doctorName || '').trim().toLowerCase())
+      && !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeAppointmentStatusKey(item?.status || ''))
     ));
-
-    const availableTime = timeCandidates.find((time) => (
-      !blocking.some((item: any) => rangesOverlap(time, 30, item?.time, item?.durationMinutes))
-    ));
-    if (!availableTime) continue;
+    if (blocking.some((item: any) => rangesOverlap(agendaSlot.time, 30, item?.time, item?.durationMinutes))) continue;
 
     return {
-      date: dateIso,
-      time: availableTime,
-      suggestionLabel: `${formatDatePtBr(dateIso) || dateIso} às ${availableTime}`,
+      date: agendaSlot.date,
+      time: agendaSlot.time,
+      agendaId: agendaSlot.agendaId,
+      doctorId: agendaSlot.doctorId,
+      doctorName: agendaSlot.doctorName,
+      roomId: agendaSlot.roomId,
+      suggestionLabel: `${formatDatePtBr(agendaSlot.date) || agendaSlot.date} às ${agendaSlot.time}`,
     };
   }
 
-  const fallbackDate = formatDateIso(searchStart);
-  return {
-    date: fallbackDate,
-    time: preferredTime,
-    suggestionLabel: `${formatDatePtBr(fallbackDate) || fallbackDate} às ${preferredTime}`,
-  };
+  return null;
 };
 
 const parseWebhookMessageEvent = (body: any, payload: any): 'SENT' | 'DELIVERED' | 'READ' | 'TYPING' | 'FAILED' | null => {
@@ -1117,6 +1143,9 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         patientName: true,
         patientCpf: true,
         doctorName: true,
+        doctorId: true,
+        sourceProcedureId: true,
+        roomId: true,
         specialty: true,
         date: true,
         time: true,
@@ -1272,10 +1301,33 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
         if (!followUp) {
           const suggested = await findSuggestedFollowUpSlot(tx, {
             branchId: originatingLog.branchId,
+            doctorId: appointment.doctorId || null,
             doctorName: appointment.doctorName || null,
+            procedureId: appointment.sourceProcedureId || null,
+            procedureName: appointment.specialty || null,
+            roomId: appointment.roomId || null,
             baseDate: appointment.date || null,
             preferredTime: appointment.time || null,
           });
+
+          if (!suggested) {
+            await tx.appointment.update({
+              where: { id: appointment.id },
+              data: {
+                observations: appendObservation(
+                  appointment.observations,
+                  `[WhatsApp] Não foi possível encontrar horário de retorno na agenda ativa em ${timestamp}.`,
+                ),
+              },
+            });
+            return {
+              flow: 'exam_result',
+              rescheduleQueue: null,
+              followUpAppointmentId: null,
+              followUpSlotLabel: null,
+              followUpCreated: false,
+            };
+          }
 
           followUp = await tx.appointment.create({
             data: {
@@ -1284,7 +1336,10 @@ export default async function whatsappWebhookRoutes(app: FastifyInstance) {
               patientName: appointment.patientName || null,
               patientCpf: appointment.patientCpf || null,
               patientId: appointment.patientId || null,
-              doctorName: appointment.doctorName || null,
+              doctorName: suggested.doctorName || appointment.doctorName || null,
+              doctorId: suggested.doctorId || appointment.doctorId || null,
+              agendaId: suggested.agendaId || null,
+              roomId: suggested.roomId || appointment.roomId || null,
               specialty: resolveFollowUpSpecialty(appointment.specialty),
               convenio: appointment.convenio || null,
               date: suggested.date,

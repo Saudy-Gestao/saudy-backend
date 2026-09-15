@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prismaModule from '../lib/prisma';
 import { publishAppointmentCreatedEvent } from '../lib/appointment-whatsapp-events';
+import { AgendaAvailabilityError, listAgendaSlots, resolveAgendaAvailability } from '../lib/agenda-availability';
 
 const prisma: any = (prismaModule as any)?.default ?? prismaModule;
 
@@ -12,27 +13,14 @@ const OPEN_STATUSES = [
   'AUTHORIZED',
 ] as const;
 
-function buildTimeSlots(startTime: string, endTime: string, stepMinutes: number): string[] {
-  const [startHour, startMinute] = String(startTime).split(':').map((part) => Number(part));
-  const [endHour, endMinute] = String(endTime).split(':').map((part) => Number(part));
-  const startTotal = (Number.isFinite(startHour) ? startHour : 0) * 60 + (Number.isFinite(startMinute) ? startMinute : 0);
-  const endTotal = (Number.isFinite(endHour) ? endHour : 0) * 60 + (Number.isFinite(endMinute) ? endMinute : 0);
-  const step = Math.max(1, Number(stepMinutes) || 15);
-
-  const slots: string[] = [];
-  for (let current = startTotal; current <= endTotal; current += step) {
-    const hour = Math.floor(current / 60);
-    const minute = current % 60;
-    slots.push(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
-  }
-  return slots;
-}
-
-const SHIFT_TIME_SLOTS: Record<string, string[]> = {
-  MANHA: buildTimeSlots('08:00', '11:45', 15),
-  TARDE: buildTimeSlots('13:00', '17:45', 15),
-  NOITE: buildTimeSlots('18:00', '21:00', 15),
-};
+const sendAgendaAvailabilityError = (reply: any, error: AgendaAvailabilityError) => reply
+  .code(['INVALID_DATE', 'INVALID_TIME', 'PROFESSIONAL_NOT_FOUND', 'PROCEDURE_NOT_FOUND'].includes(error.code) ? 400 : 409)
+  .send({
+    error: 'Agenda availability validation failed',
+    code: error.code,
+    message: error.message,
+    details: error.details,
+  });
 
 const JS_DAY_TO_PIT_WEEKDAY = ['DOMINGO', 'SEGUNDA', 'TERCA', 'QUARTA', 'QUINTA', 'SEXTA', 'SABADO'];
 const PIT_WEEKDAY_TO_JS_DAY: Record<string, number> = {
@@ -155,209 +143,28 @@ function timeRangesOverlap(
   return startAMinutes < endBMinutes && startBMinutes < endAMinutes;
 }
 
-function fitsDoctorWorkingWindow(
-  slotTime: string,
-  durationMinutes: number,
-  workingHoursStart?: string | null,
-  workingHoursEnd?: string | null,
-): boolean {
-  const startMinute = timeToMinutes(slotTime);
-  const endMinute = startMinute + resolveDurationMinutes(durationMinutes);
+function matchesPreferredShift(time: string, shift?: string | null): boolean {
+  const normalizedShift = String(shift || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  if (!normalizedShift.trim()) return true;
 
-  const windowStartMinute = workingHoursStart ? timeToMinutes(workingHoursStart) : null;
-  const windowEndMinute = workingHoursEnd ? timeToMinutes(workingHoursEnd) : null;
-
-  if (windowStartMinute !== null && startMinute < windowStartMinute) return false;
-  if (windowEndMinute !== null && endMinute > windowEndMinute) return false;
-  return true;
-}
-
-type NormalizedDoctorWindow = {
-  weekdays: string[];
-  hoursStart?: string | null;
-  hoursEnd?: string | null;
-};
-
-function parseDoctorWorkingWindows(doctor: any): NormalizedDoctorWindow[] {
-  const normalizedLegacyDays = Array.isArray(doctor?.workingDays)
-    ? doctor.workingDays
-      .map((item: any) => normalizeWeekdayToken(item))
-      .filter(Boolean) as string[]
-    : [];
-
-  const rawSchedules = (() => {
-    if (Array.isArray(doctor?.workingSchedules)) return doctor.workingSchedules;
-    if (typeof doctor?.workingSchedules === 'string' && doctor.workingSchedules.trim()) {
-      try {
-        const parsed = JSON.parse(doctor.workingSchedules);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  })();
-
-  const scheduleWindows = rawSchedules
-    .map((schedule: any) => {
-      const weekdays = Array.isArray(schedule?.days)
-        ? schedule.days
-          .map((item: any) => normalizeWeekdayToken(item))
-          .filter(Boolean) as string[]
-        : [];
-      if (!weekdays.length) return null;
-      return {
-        weekdays,
-        hoursStart: schedule?.hoursStart || null,
-        hoursEnd: schedule?.hoursEnd || null,
-      } as NormalizedDoctorWindow;
-    })
-    .filter((item: NormalizedDoctorWindow | null): item is NormalizedDoctorWindow => Boolean(item));
-
-  if (scheduleWindows.length > 0) {
-    return scheduleWindows;
-  }
-
-  if (normalizedLegacyDays.length === 0) {
-    return [{ weekdays: [...JS_DAY_TO_PIT_WEEKDAY], hoursStart: doctor?.workingHoursStart || null, hoursEnd: doctor?.workingHoursEnd || null }];
-  }
-
-  return [{ weekdays: normalizedLegacyDays, hoursStart: doctor?.workingHoursStart || null, hoursEnd: doctor?.workingHoursEnd || null }];
-}
-
-function getDoctorWindowsForWeekday(doctor: any, weekdayToken: string): Array<{ hoursStart?: string | null; hoursEnd?: string | null }> {
-  const allWindows = parseDoctorWorkingWindows(doctor);
-  return allWindows
-    .filter((window) => window.weekdays.includes(weekdayToken))
-    .map((window) => ({
-      hoursStart: window.hoursStart || null,
-      hoursEnd: window.hoursEnd || null,
-    }));
-}
-
-// A doctor's own Cadastro de Agendas entries (doctor + weekday + shift + room)
-// are the source of truth for where a session actually happens. Only when a
-// doctor has zero registered Agenda rows do we fall back to their generic
-// working-hours fields — mirrors the same doctor/room resolution the regular
-// (non-TEA) Agendamento screen already does against the same `Agenda` table.
-type DoctorSlotWindow = {
-  hoursStart: string | null;
-  hoursEnd: string | null;
-  roomId: string | null;
-  roomName: string | null;
-};
-
-function isDateWithinAgendaRange(date: Date, startDate?: Date | string | null, endDate?: Date | string | null): boolean {
-  const day = new Date(date);
-  day.setHours(0, 0, 0, 0);
-  if (startDate) {
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
-    if (day.getTime() < start.getTime()) return false;
-  }
-  if (endDate) {
-    const end = new Date(endDate);
-    end.setHours(0, 0, 0, 0);
-    if (day.getTime() > end.getTime()) return false;
-  }
-  return true;
-}
-
-function getAgendaWindowsForWeekday(
-  agendasForDoctor: any[],
-  weekdayToken: string,
-  referenceDate?: Date | null,
-): DoctorSlotWindow[] {
-  return agendasForDoctor
-    .filter((agenda) => (
-      normalizeWeekdayToken(agenda?.weekday) === weekdayToken
-      && (!referenceDate || isDateWithinAgendaRange(referenceDate, agenda?.startDate, agenda?.endDate))
-    ))
-    .map((agenda) => ({
-      hoursStart: agenda?.shiftStart || null,
-      hoursEnd: agenda?.shiftEnd || null,
-      roomId: agenda?.roomId || null,
-      roomName: agenda?.room?.name || null,
-    }));
-}
-
-function resolveDoctorSlotWindowsForWeekday(
-  doctor: any,
-  agendasForDoctor: any[],
-  weekdayToken: string,
-  referenceDate?: Date | null,
-): DoctorSlotWindow[] {
-  if (agendasForDoctor.length > 0) {
-    return getAgendaWindowsForWeekday(agendasForDoctor, weekdayToken, referenceDate);
-  }
-  return getDoctorWindowsForWeekday(doctor, weekdayToken).map((window) => ({
-    hoursStart: window.hoursStart ?? null,
-    hoursEnd: window.hoursEnd ?? null,
-    roomId: null,
-    roomName: null,
-  }));
-}
-
-function findFittingWindow(
-  windows: DoctorSlotWindow[],
-  slotTime: string,
-  durationMinutes: number,
-): DoctorSlotWindow | null {
-  return windows.find((window) => fitsDoctorWorkingWindow(slotTime, durationMinutes, window.hoursStart, window.hoursEnd)) || null;
-}
-
-async function fetchActiveAgendasByDoctorId(doctorIds: string[], branchId: string): Promise<Map<string, any[]>> {
-  const uniqueIds = Array.from(new Set(doctorIds.filter(Boolean)));
-  const map = new Map<string, any[]>();
-  if (uniqueIds.length === 0) return map;
-
-  const agendas = await prisma.agenda.findMany({
-    where: { doctorId: { in: uniqueIds }, branchId, status: 'ATIVA' },
-    include: { room: { select: { name: true } } },
-  });
-
-  agendas.forEach((agenda: any) => {
-    const doctorId = String(agenda?.doctorId || '');
-    if (!doctorId) return;
-    if (!map.has(doctorId)) map.set(doctorId, []);
-    map.get(doctorId)!.push(agenda);
-  });
-
-  return map;
-}
-
-function getShiftSlots(shift?: string | null): string[] {
-  if (!shift) {
-    return [...SHIFT_TIME_SLOTS.MANHA, ...SHIFT_TIME_SLOTS.TARDE, ...SHIFT_TIME_SLOTS.NOITE];
-  }
-
-  const shiftTokens = String(shift)
-    .split(',')
-    .map((token) => String(token).toUpperCase().trim())
+  const shiftTokens = normalizedShift
+    .split(/[^A-Z]+/)
     .filter((token) => token === 'MANHA' || token === 'TARDE' || token === 'NOITE');
+  if (shiftTokens.length === 0) return true;
 
-  if (!shiftTokens.length) {
-    return [...SHIFT_TIME_SLOTS.MANHA, ...SHIFT_TIME_SLOTS.TARDE, ...SHIFT_TIME_SLOTS.NOITE];
-  }
-
-  const combined: string[] = [];
-  shiftTokens.forEach((token) => {
-    if (token === 'MANHA') combined.push(...SHIFT_TIME_SLOTS.MANHA);
-    if (token === 'TARDE') combined.push(...SHIFT_TIME_SLOTS.TARDE);
-    if (token === 'NOITE') combined.push(...SHIFT_TIME_SLOTS.NOITE);
-  });
-
-  return Array.from(new Set(combined)).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+  const startMinute = timeToMinutes(time);
+  if (startMinute < 12 * 60) return shiftTokens.includes('MANHA');
+  if (startMinute < 18 * 60) return shiftTokens.includes('TARDE');
+  return shiftTokens.includes('NOITE');
 }
 
 const DOCTOR_AVAILABILITY_SELECT = {
   id: true,
   name: true,
   isActive: true,
-  workingDays: true,
-  workingHoursStart: true,
-  workingHoursEnd: true,
-  workingSchedules: true,
 } as const;
 
 async function listCandidateDoctorsForTherapy(therapy: any, branchId: string): Promise<any[]> {
@@ -450,13 +257,8 @@ async function resolveAvailableDoctorForSession(input: {
 
   if (!candidateDoctors.length) return null;
 
-  const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[new Date(`${candidateDateIso}T00:00:00`).getDay()];
   const dayStart = new Date(`${candidateDateIso}T00:00:00`);
   const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
-  const agendasByDoctorId = await fetchActiveAgendasByDoctorId(
-    candidateDoctors.map((doctor: any) => doctor.id),
-    branchId,
-  );
 
   const [patientAppointments, patientReservations] = await Promise.all([
     prisma.appointment.findMany({
@@ -478,14 +280,21 @@ async function resolveAvailableDoctorForSession(input: {
   ]);
 
   for (const doctor of candidateDoctors) {
-    const doctorWindows = resolveDoctorSlotWindowsForWeekday(
-      doctor,
-      agendasByDoctorId.get(doctor.id) || [],
-      weekdayToken,
-      new Date(`${candidateDateIso}T00:00:00`),
-    );
-    const matchedWindow = findFittingWindow(doctorWindows, suggestedTime, durationMinutes);
-    if (!matchedWindow) continue;
+    let availability;
+    try {
+      availability = await resolveAgendaAvailability(prisma, {
+        branchId,
+        doctorId: doctor.id,
+        procedureId: therapy.procedureId || null,
+        date: candidateDateIso,
+        time: suggestedTime,
+        durationMinutes,
+        allowUnscopedSpecialty: !therapy.procedureId,
+      });
+    } catch (error) {
+      if (error instanceof AgendaAvailabilityError) continue;
+      throw error;
+    }
 
     const [doctorAppointments, doctorReservations] = await Promise.all([
       prisma.appointment.findMany({
@@ -520,8 +329,8 @@ async function resolveAvailableDoctorForSession(input: {
     return {
       professionalDoctorId: doctor.id,
       professionalName: doctor.name,
-      roomId: matchedWindow.roomId,
-      roomName: matchedWindow.roomName,
+      roomId: availability.roomId,
+      roomName: availability.roomName,
     };
   }
 
@@ -1440,39 +1249,50 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         .map((item: any) => normalizeWeekdayToken(item))
         .filter(Boolean) as string[]
       : [];
-
-    const agendasByDoctorId = await fetchActiveAgendasByDoctorId(
-      candidateDoctors.map((doctor: any) => doctor.id),
-      branchId,
-    );
-
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     const monday = startOfWeekMonday(now);
     const daysSinceMonday = Math.max(0, Math.floor((now.getTime() - monday.getTime()) / (24 * 60 * 60 * 1000)));
     const totalOffsets = Math.max(daysAhead, 1) + daysSinceMonday;
 
-    const candidateDateStringsByDoctor = candidateDoctors.map((doctor) => {
+    const searchStart = formatDateAsIso(now);
+    const searchEndDate = new Date(monday);
+    searchEndDate.setDate(monday.getDate() + totalOffsets);
+    const searchEnd = formatDateAsIso(searchEndDate);
+    const agendaSlotsByDoctorId = new Map<string, any[]>();
+
+    const candidateDateStringsByDoctor = (await Promise.all(candidateDoctors.map(async (doctor) => {
+      let agendaSlots: any[] = [];
+      try {
+        agendaSlots = await listAgendaSlots(prisma, {
+          branchId,
+          doctorId: doctor.id,
+          procedureId: therapy.procedureId || null,
+          fromDate: searchStart,
+          toDate: searchEnd,
+          durationMinutes: resolveDurationMinutes(therapy.durationMinutes),
+          stepMinutes: 15,
+          allowUnscopedSpecialty: !therapy.procedureId,
+        });
+      } catch (error) {
+        if (!(error instanceof AgendaAvailabilityError)) throw error;
+      }
+
+      agendaSlots = agendaSlots.filter((slot) => matchesPreferredShift(slot.time, therapy.preferredShift));
+      agendaSlotsByDoctorId.set(String(doctor.id), agendaSlots);
       const preferredCandidateDateStrings: string[] = [];
       const fallbackCandidateDateStrings: string[] = [];
 
-      for (let offset = 0; offset <= totalOffsets; offset += 1) {
-        const date = new Date(monday);
-        date.setHours(0, 0, 0, 0);
-        date.setDate(monday.getDate() + offset);
-
+      Array.from(new Set(agendaSlots.map((slot) => String(slot.date || '').trim()).filter(Boolean))).forEach((isoDate) => {
+        const date = new Date(`${isoDate}T00:00:00`);
         const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[date.getDay()];
-        const doctorWindows = resolveDoctorSlotWindowsForWeekday(doctor, agendasByDoctorId.get(doctor.id) || [], weekdayToken, date);
-        if (doctorWindows.length === 0) continue;
-
-        const isoDate = formatDateAsIso(date);
         const isPreferredWeekday = preferredWeekdays.length > 0 && preferredWeekdays.includes(weekdayToken);
         if (isPreferredWeekday) {
           preferredCandidateDateStrings.push(isoDate);
         } else {
           fallbackCandidateDateStrings.push(isoDate);
         }
-      }
+      });
 
       return {
         doctor,
@@ -1480,7 +1300,7 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           ? [...preferredCandidateDateStrings, ...fallbackCandidateDateStrings]
           : [...fallbackCandidateDateStrings],
       };
-    }).filter((entry) => entry.candidateDateStrings.length > 0);
+    }))).filter((entry) => entry.candidateDateStrings.length > 0);
 
     const allCandidateDateStrings = Array.from(new Set(
       candidateDateStringsByDoctor.flatMap((entry) => entry.candidateDateStrings),
@@ -1556,7 +1376,6 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
     });
 
-    const baseSlots = getShiftSlots(therapy.preferredShift);
     const slotDurationMinutes = resolveDurationMinutes(therapy.durationMinutes);
 
     const suggestions: Array<{
@@ -1573,11 +1392,9 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     // the same therapy twice on the same calendar day, regardless of which
     // doctor/time it ends up on.
     const usedDates = new Set<string>();
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     for (const entry of candidateDateStringsByDoctor) {
       const { doctor, candidateDateStrings } = entry;
+      const agendaSlots = agendaSlotsByDoctorId.get(String(doctor.id)) || [];
       const [doctorAppointments, doctorReservations] = await Promise.all([
         prisma.appointment.findMany({
           where: {
@@ -1631,21 +1448,13 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
 
       for (const date of candidateDateStrings) {
-        const candidateDate = new Date(`${date}T00:00:00`);
-        const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
-        const doctorWindows = resolveDoctorSlotWindowsForWeekday(doctor, agendasByDoctorId.get(doctor.id) || [], weekdayToken, candidateDate);
-        const slotWindowByTime = new Map<string, DoctorSlotWindow>();
-        baseSlots.forEach((slot) => {
-          const matched = findFittingWindow(doctorWindows, slot, slotDurationMinutes);
-          if (matched) slotWindowByTime.set(slot, matched);
-        });
-        const filteredSlots = baseSlots.filter((slot) => slotWindowByTime.has(slot));
+        const agendaSlotByTime = new Map<string, any>();
+        agendaSlots
+          .filter((slot) => String(slot.date || '') === date)
+          .forEach((slot) => agendaSlotByTime.set(String(slot.time), slot));
+        const filteredSlots = Array.from(agendaSlotByTime.keys()).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
         if (filteredSlots.length === 0) continue;
-        const suggestionDateObj = new Date(candidateDate);
-        while (suggestionDateObj.getTime() < today.getTime()) {
-          suggestionDateObj.setDate(suggestionDateObj.getDate() + 7);
-        }
-        const suggestionIso = formatDateAsIso(suggestionDateObj);
+        const suggestionIso = date;
 
         // Already have a session for this therapy on this day — a weekly-recurring
         // therapy runs once a day, so skip straight to the next candidate date
@@ -1664,15 +1473,15 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
           seenSuggestions.add(suggestionKey);
           usedDates.add(suggestionIso);
-          const matchedWindow = slotWindowByTime.get(time) || null;
+          const matchedAgendaSlot = agendaSlotByTime.get(time) || null;
           suggestions.push({
             date: suggestionIso,
             time,
             doctorId: doctor.id,
             doctorName: doctor.name,
             procedureName: therapy.therapyType || null,
-            roomId: matchedWindow?.roomId || null,
-            roomName: matchedWindow?.roomName || null,
+            roomId: matchedAgendaSlot?.roomId || null,
+            roomName: matchedAgendaSlot?.roomName || null,
           });
 
           // Block out the session's own duration so the next candidate times in this
@@ -1754,10 +1563,6 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
 
     const branchId = (request as any).branchId as string;
     const candidateDoctors = await listCandidateDoctorsForTherapy(therapy, branchId);
-    const agendasByDoctorId = await fetchActiveAgendasByDoctorId(
-      candidateDoctors.map((doctor: any) => doctor.id),
-      branchId,
-    );
 
     const parsedWeekStart = weekStart ? new Date(`${weekStart}T00:00:00`) : new Date();
     if (Number.isNaN(parsedWeekStart.getTime())) {
@@ -1831,8 +1636,29 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
     });
 
-    const baseSlots = getShiftSlots(therapy.preferredShift);
     const slotDurationMinutes = resolveDurationMinutes(therapy.durationMinutes);
+    const agendaSlotsByDoctorId = new Map<string, any[]>();
+    await Promise.all(candidateDoctors.map(async (doctor) => {
+      let agendaSlots: any[] = [];
+      try {
+        agendaSlots = await listAgendaSlots(prisma, {
+          branchId,
+          doctorId: doctor.id,
+          procedureId: therapy.procedureId || null,
+          fromDate: weekDates[0],
+          toDate: weekDates[weekDates.length - 1],
+          durationMinutes: slotDurationMinutes,
+          stepMinutes: 15,
+          allowUnscopedSpecialty: !therapy.procedureId,
+        });
+      } catch (error) {
+        if (!(error instanceof AgendaAvailabilityError)) throw error;
+      }
+      agendaSlotsByDoctorId.set(
+        String(doctor.id),
+        agendaSlots.filter((slot) => matchesPreferredShift(slot.time, therapy.preferredShift)),
+      );
+    }));
 
     const daySlotMap = new Map<string, Map<string, { time: string; occupied: boolean; selectable: boolean; doctorId?: string | null; doctorName?: string | null; roomId?: string | null; roomName?: string | null }>>();
     weekDates.forEach((date) => daySlotMap.set(date, new Map()));
@@ -1891,25 +1717,19 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       });
 
       weekDates.forEach((date) => {
-        const candidateDate = new Date(`${date}T00:00:00`);
-        const weekdayToken = JS_DAY_TO_PIT_WEEKDAY[candidateDate.getDay()];
-        const doctorWindows = resolveDoctorSlotWindowsForWeekday(doctor, agendasByDoctorId.get(doctor.id) || [], weekdayToken, candidateDate);
-        if (doctorWindows.length === 0) return;
-
         const timeMap = daySlotMap.get(date);
         if (!timeMap) return;
 
-        const slotWindowByTime = new Map<string, DoctorSlotWindow>();
-        baseSlots.forEach((slot) => {
-          const matched = findFittingWindow(doctorWindows, slot, slotDurationMinutes);
-          if (matched) slotWindowByTime.set(slot, matched);
-        });
-        const daySlots = baseSlots.filter((slot) => slotWindowByTime.has(slot));
+        const agendaSlotByTime = new Map<string, any>();
+        (agendaSlotsByDoctorId.get(String(doctor.id)) || [])
+          .filter((slot) => String(slot.date || '') === date)
+          .forEach((slot) => agendaSlotByTime.set(String(slot.time), slot));
+        const daySlots = Array.from(agendaSlotByTime.keys()).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
 
         daySlots.forEach((time) => {
           const selectable = canPlaceSessionAtSlot(date, time, slotDurationMinutes, occupied);
           const existing = timeMap.get(time);
-          const matchedWindow = slotWindowByTime.get(time) || null;
+          const matchedAgendaSlot = agendaSlotByTime.get(time) || null;
 
           if (!existing) {
             timeMap.set(time, {
@@ -1918,8 +1738,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               selectable,
               doctorId: selectable ? doctor.id : null,
               doctorName: selectable ? doctor.name : null,
-              roomId: selectable ? matchedWindow?.roomId || null : null,
-              roomName: selectable ? matchedWindow?.roomName || null : null,
+              roomId: selectable ? matchedAgendaSlot?.roomId || null : null,
+              roomName: selectable ? matchedAgendaSlot?.roomName || null : null,
             });
             return;
           }
@@ -1931,8 +1751,8 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               selectable: true,
               doctorId: doctor.id,
               doctorName: doctor.name,
-              roomId: matchedWindow?.roomId || null,
-              roomName: matchedWindow?.roomName || null,
+              roomId: matchedAgendaSlot?.roomId || null,
+              roomName: matchedAgendaSlot?.roomName || null,
             });
           }
         });
@@ -2039,8 +1859,9 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     };
 
     const recurring = Boolean(body?.recurring);
-    const requestDurationMinutes = resolveDurationMinutes(body?.durationMinutes ?? therapy.durationMinutes);
-    if (!recurring) {
+      const requestDurationMinutes = resolveDurationMinutes(body?.durationMinutes ?? therapy.durationMinutes);
+      if (!recurring) {
+      let agendaAvailability: Awaited<ReturnType<typeof resolveAgendaAvailability>> | null = null;
       if (body?.suggestedDate && body?.suggestedTime) {
         const candidateDate = new Date(body.suggestedDate);
         if (Number.isNaN(candidateDate.getTime())) {
@@ -2054,6 +1875,23 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const dayStart = new Date(`${candidateDateIso}T00:00:00`);
         const dayEnd = new Date(`${candidateDateIso}T23:59:59`);
         const suggestedTime = String(body.suggestedTime);
+
+        try {
+          agendaAvailability = await resolveAgendaAvailability(prisma, {
+            branchId: (request as any).branchId as string,
+            doctorId: therapy.professionalDoctorId || null,
+            doctorName: therapy.professional || null,
+            procedureId: therapy.procedureId || null,
+            procedureName: therapy.therapyType || null,
+            allowUnscopedSpecialty: !therapy.procedureId,
+            date: candidateDateIso,
+            time: suggestedTime,
+            durationMinutes: requestDurationMinutes,
+          });
+        } catch (error) {
+          if (error instanceof AgendaAvailabilityError) return sendAgendaAvailabilityError(reply, error);
+          throw error;
+        }
 
         const [appointmentConflicts, preReservationConflicts] = await Promise.all([
           prisma.appointment.findMany({
@@ -2100,6 +1938,10 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
       const item = await prisma.teaPreReservation.create({
         data: {
           ...baseData,
+          agendaId: agendaAvailability?.agendaId || null,
+          roomId: agendaAvailability?.roomId || null,
+          professionalDoctorId: agendaAvailability?.doctorId || baseData.professionalDoctorId,
+          professionalName: agendaAvailability?.doctorName || baseData.professionalName,
           suggestedDate: body?.suggestedDate ? new Date(body.suggestedDate) : null,
           suggestedTime: body?.suggestedTime || null,
           durationMinutes: body?.suggestedDate && body?.suggestedTime ? requestDurationMinutes : null,
@@ -2153,6 +1995,36 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     const recurringUntilDate = body?.recurringUntilDate ? new Date(body.recurringUntilDate) : null;
     const hasUntilDate = recurringUntilDate && !Number.isNaN(recurringUntilDate.getTime());
     const effectiveDuration = resolveDurationMinutes(body?.durationMinutes ?? therapy.durationMinutes);
+    const recurringAvailability = new Map<string, Awaited<ReturnType<typeof resolveAgendaAvailability>>>();
+
+    // Validate every occurrence against the same agenda resolver before creating
+    // the first pre-reservation. This keeps a recurring request atomic when a
+    // later occurrence falls outside the professional's active agenda.
+    for (let week = 0; week < recurrenceWeeks; week += 1) {
+      const candidateDate = new Date(baseDate);
+      candidateDate.setHours(0, 0, 0, 0);
+      candidateDate.setDate(candidateDate.getDate() + (week * 7));
+      if (hasUntilDate && candidateDate > recurringUntilDate) break;
+
+      const candidateDateIso = formatDateAsIso(candidateDate);
+      try {
+        const availability = await resolveAgendaAvailability(prisma, {
+          branchId: (request as any).branchId as string,
+          doctorId: therapy.professionalDoctorId || null,
+          doctorName: therapy.professional || null,
+          procedureId: therapy.procedureId || null,
+          procedureName: therapy.therapyType || null,
+          allowUnscopedSpecialty: !therapy.procedureId,
+          date: candidateDateIso,
+          time: String(body.suggestedTime),
+          durationMinutes: effectiveDuration,
+        });
+        recurringAvailability.set(candidateDateIso, availability);
+      } catch (error) {
+        if (error instanceof AgendaAvailabilityError) return sendAgendaAvailabilityError(reply, error);
+        throw error;
+      }
+    }
 
     const createdItems: any[] = [];
     let skippedConflicts = 0;
@@ -2208,9 +2080,15 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         continue;
       }
 
+      const agendaAvailability = recurringAvailability.get(candidateDateIso);
+
       const created = await prisma.teaPreReservation.create({
         data: {
           ...baseData,
+          agendaId: agendaAvailability?.agendaId || null,
+          roomId: agendaAvailability?.roomId || null,
+          professionalDoctorId: agendaAvailability?.doctorId || baseData.professionalDoctorId,
+          professionalName: agendaAvailability?.doctorName || baseData.professionalName,
           suggestedDate: candidateDate,
           suggestedTime: String(body.suggestedTime),
           durationMinutes: effectiveDuration,
@@ -2505,6 +2383,28 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
             continue;
           }
 
+          let agendaAvailability;
+          try {
+            agendaAvailability = await resolveAgendaAvailability(prisma, {
+              branchId: (request as any).branchId as string,
+              doctorId: selectedDoctor.professionalDoctorId,
+              doctorName: selectedDoctor.professionalName || null,
+              procedureId: therapy.procedureId || null,
+              procedureName: therapy.therapyType || null,
+              allowUnscopedSpecialty: !therapy.procedureId,
+              roomId: selectedDoctor.roomId || null,
+              date: candidateDateIso,
+              time: suggestedTime,
+              durationMinutes: effectiveDuration,
+            });
+          } catch (error) {
+            if (error instanceof AgendaAvailabilityError) {
+              skippedConflicts += 1;
+              continue;
+            }
+            throw error;
+          }
+
           const createdItem = await prisma.teaPreReservation.create({
             data: {
               teaProfileId: therapy.pit.teaProfileId,
@@ -2513,10 +2413,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               patientId: therapy.pit.teaProfile.patient.id,
               procedureId: therapy.procedureId || null,
               procedureName: therapy.therapyType || null,
-              professionalDoctorId: selectedDoctor.professionalDoctorId,
-              professionalName: selectedDoctor.professionalName || preferredDoctorName,
-              roomId: selectedDoctor.roomId || null,
-              roomName: selectedDoctor.roomName || null,
+              professionalDoctorId: agendaAvailability.doctorId,
+              professionalName: agendaAvailability.doctorName || preferredDoctorName,
+              agendaId: agendaAvailability.agendaId,
+              roomId: agendaAvailability.roomId || null,
+              roomName: agendaAvailability.roomName || selectedDoctor.roomName || null,
               status: acceptedStatusForTherapy,
               suggestedDate: candidateDate,
               suggestedTime,
@@ -3309,6 +3210,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
         const fallbackDate = formatDateAsIso(new Date(reservation.suggestedDate));
         const appointmentDate = overrideSeriesDates[reservationIndex] || fallbackDate;
 
+        let agendaAvailability;
+        try {
+          agendaAvailability = await resolveAgendaAvailability(prisma, {
+            branchId,
+            doctorId: reservation.professionalDoctorId || null,
+            doctorName: reservation.professionalName || null,
+            procedureId: reservation.procedureId || null,
+            procedureName: reservation.procedureName || null,
+            allowUnscopedSpecialty: !reservation.procedureId,
+            date: appointmentDate,
+            time: String(reservation.suggestedTime),
+            durationMinutes: reservation.durationMinutes,
+            roomId: reservation.roomId || null,
+          });
+        } catch (error) {
+          if (error instanceof AgendaAvailabilityError) return sendAgendaAvailabilityError(reply, error);
+          throw error;
+        }
+
         const [doctorConflicts, patientConflicts] = await Promise.all([
           prisma.appointment.findMany({
             where: {
@@ -3376,8 +3296,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
               patientId: reservation.patient.id,
               patientName: reservation.patient.name || null,
               patientCpf: reservation.patient.cpf || null,
-              doctorName: reservation.professionalName || null,
-              roomId: reservation.roomId || null,
+              doctorName: agendaAvailability.doctorName,
+              doctorId: agendaAvailability.doctorId,
+              agendaId: agendaAvailability.agendaId,
+              sourceProcedureId: reservation.procedureId || agendaAvailability.procedureIds[0] || null,
+              roomId: reservation.roomId || agendaAvailability.roomId || null,
               specialty: reservation.procedureName || null,
               convenio: reservation.patient.healthInsuranceName || null,
               date: appointmentDate,
@@ -3484,6 +3407,25 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
     }
 
     const appointmentDate = formatDateAsIso(new Date(preReservation.suggestedDate));
+    let agendaAvailability;
+    try {
+      agendaAvailability = await resolveAgendaAvailability(prisma, {
+        branchId,
+        doctorId: preReservation.professionalDoctorId || null,
+        doctorName: preReservation.professionalName || null,
+        procedureId: preReservation.procedureId || null,
+        procedureName: preReservation.procedureName || null,
+        allowUnscopedSpecialty: !preReservation.procedureId,
+        date: appointmentDate,
+        time: String(preReservation.suggestedTime),
+        durationMinutes: preReservation.durationMinutes,
+        roomId: preReservation.roomId || null,
+      });
+    } catch (error) {
+      if (error instanceof AgendaAvailabilityError) return sendAgendaAvailabilityError(reply, error);
+      throw error;
+    }
+
     const [doctorConflicts, patientConflicts] = await Promise.all([
       prisma.appointment.findMany({
         where: {
@@ -3525,8 +3467,11 @@ export default async function teaPreReservationsRoutes(app: FastifyInstance) {
           patientId: preReservation.patient.id,
           patientName: preReservation.patient.name || null,
           patientCpf: preReservation.patient.cpf || null,
-          doctorName: preReservation.professionalName || null,
-          roomId: preReservation.roomId || null,
+          doctorName: agendaAvailability.doctorName,
+          doctorId: agendaAvailability.doctorId,
+          agendaId: agendaAvailability.agendaId,
+          sourceProcedureId: preReservation.procedureId || agendaAvailability.procedureIds[0] || null,
+          roomId: preReservation.roomId || agendaAvailability.roomId || null,
           specialty: preReservation.procedureName || null,
           convenio: preReservation.patient.healthInsuranceName || null,
           date: appointmentDate,

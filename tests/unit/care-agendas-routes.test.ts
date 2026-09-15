@@ -223,6 +223,35 @@ describe('care agendas routes', () => {
     await app.close();
   });
 
+  it('scopes agenda overlap checks to the selected unit', async () => {
+    mockedPrisma.agenda.findMany.mockImplementationOnce(({ where }: { where: { branchId?: string } }) => where?.branchId === 'b-1' ? [] : [{
+      id: 'a-other-branch',
+      branchId: 'b-2',
+      shiftStart: '08:00',
+      shiftEnd: '12:00',
+      startDate: null,
+      endDate: null,
+    }]);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/',
+      payload: {
+        branchId: 'b-1',
+        doctorId: 'd-1',
+        weekday: 'segunda',
+        shiftStart: '08:00',
+        shiftEnd: '12:00',
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(mockedPrisma.agenda.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ branchId: 'b-1' }),
+    }));
+    await app.close();
+  });
+
   it('rejects an overlapping item in the scale before creating any agenda', async () => {
     const app = await buildApp();
     const res = await app.inject({

@@ -5,6 +5,7 @@ import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
 import { getAnexosStorage } from '../../../lib/storage';
 import { sendPatientPortalAccessCodeEmail } from '../lib/mailer';
 import { generatePatientReportPdfBuffer } from '../lib/patient-report-pdf';
+import { AgendaAvailabilityError, listAgendaSlots, resolveAgendaAvailability } from '../../care/lib/agenda-availability';
 
 const PATIENT_CODE_EXPIRATION_MINUTES = 10;
 const PATIENT_ACCESS_TOKEN_EXPIRATION = process.env.PATIENT_PORTAL_TOKEN_EXPIRES_IN || '12h';
@@ -2654,12 +2655,6 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
     return h * 60 + m;
   }
 
-  function minutesToTimeStr(value: number): string {
-    const h = String(Math.floor(value / 60)).padStart(2, '0');
-    const m = String(value % 60).padStart(2, '0');
-    return `${h}:${m}`;
-  }
-
   function slotRangesOverlap(
     startA?: string | null, durationA?: number | null,
     startB?: string | null, durationB?: number | null,
@@ -2705,48 +2700,6 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       },
       select: { time: true, durationMinutes: true },
     });
-  }
-
-  function generateSlotsForDay(workingHoursStart: string, workingHoursEnd: string, durationMinutes: number): string[] {
-    const start = parseTimeToMinutes(workingHoursStart);
-    const end = parseTimeToMinutes(workingHoursEnd);
-    if (start === null || end === null) return [];
-    const slots: string[] = [];
-    for (let t = start; t + durationMinutes <= end; t += durationMinutes) {
-      slots.push(minutesToTimeStr(t));
-    }
-    return slots;
-  }
-
-  const WEEKDAY_MAP: Record<string, number> = {
-    domingo: 0, sunday: 0,
-    segunda: 1, monday: 1,
-    terca: 2, 'terça': 2, tuesday: 2,
-    quarta: 3, wednesday: 3,
-    quinta: 4, thursday: 4,
-    sexta: 5, friday: 5,
-    sabado: 6, 'sábado': 6, saturday: 6,
-  };
-
-  function doctorWorksOnDate(doctor: any, dateStr: string): boolean {
-    const date = new Date(`${dateStr}T12:00:00Z`);
-    const dayOfWeek = date.getUTCDay();
-
-    // Check workingSchedules JSON first (per-schedule overrides)
-    try {
-      const schedules = JSON.parse(String(doctor.workingSchedules || '[]'));
-      if (Array.isArray(schedules) && schedules.length > 0) {
-        return schedules.some((sched: any) => {
-          const days: string[] = Array.isArray(sched.days) ? sched.days : [];
-          return days.some((d: string) => WEEKDAY_MAP[String(d).toLowerCase()] === dayOfWeek);
-        });
-      }
-    } catch {
-      // fall through to workingDays
-    }
-
-    const workingDays: string[] = Array.isArray(doctor.workingDays) ? doctor.workingDays : [];
-    return workingDays.some((d: string) => WEEKDAY_MAP[String(d).toLowerCase()] === dayOfWeek);
   }
 
   app.get('/patient-portal/scheduling/branches', {
@@ -2873,6 +2826,18 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
       where.id = { in: doctorIds };
     }
 
+    const activeAgendaDoctors = await prisma.agenda.findMany({
+      where: { branchId, status: 'ATIVA' },
+      select: { doctorId: true },
+      distinct: ['doctorId'],
+    });
+    const agendaDoctorIds = activeAgendaDoctors.map((item: any) => String(item.doctorId)).filter(Boolean);
+    if (agendaDoctorIds.length === 0) return { doctors: [] };
+    where.id = where.id?.in
+      ? { in: where.id.in.filter((id: string) => agendaDoctorIds.includes(id)) }
+      : { in: agendaDoctorIds };
+    if (Array.isArray(where.id.in) && where.id.in.length === 0) return { doctors: [] };
+
     const doctors = await prisma.doctor.findMany({
       where,
       select: {
@@ -2881,10 +2846,6 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         specialty: true,
         crm: true,
         crmState: true,
-        workingDays: true,
-        workingHoursStart: true,
-        workingHoursEnd: true,
-        workingSchedules: true,
       },
       orderBy: { name: 'asc' },
     });
@@ -2931,68 +2892,75 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
 
     // Resolve duration from procedure if provided
     let slotDurationFromProcedure = 30;
+    let procedureName: string | null = null;
     if (procedureId) {
       const proc = await prisma.procedure.findFirst({
         where: { id: procedureId, branchId, isActive: true },
-        select: { durationMinutes: true },
+        select: { id: true, name: true, durationMinutes: true },
       });
       if (proc?.durationMinutes) slotDurationFromProcedure = proc.durationMinutes;
+      procedureName = proc?.name || null;
     }
 
     const doctor = await prisma.doctor.findFirst({
       where: { branchId, isActive: true, name: doctorName },
       select: {
-        workingDays: true,
-        workingHoursStart: true,
-        workingHoursEnd: true,
-        workingSchedules: true,
+        id: true,
+        name: true,
       },
     });
 
     if (!doctor) return reply.code(404).send({ error: 'Profissional não encontrado' });
 
-    const slotDuration = slotDurationFromProcedure;
-
-    const workStart = doctor.workingHoursStart || '08:00';
-    const workEnd = doctor.workingHoursEnd || '18:00';
-
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    type SlotsByDate = { date: string; slots: string[] };
-    const result: SlotsByDate[] = [];
+    const fromDate = new Date(today);
+    fromDate.setUTCDate(today.getUTCDate() + 1);
+    const toDate = new Date(fromDate);
+    toDate.setUTCDate(fromDate.getUTCDate() + 30);
+    const fromDateIso = fromDate.toISOString().slice(0, 10);
+    const toDateIso = toDate.toISOString().slice(0, 10);
 
-    for (let i = 1; i <= 30 && result.length < 14; i++) {
-      const d = new Date(today);
-      d.setUTCDate(today.getUTCDate() + i);
-      const dateStr = d.toISOString().slice(0, 10);
-
-      if (!doctorWorksOnDate(doctor, dateStr)) continue;
-
-      const allSlots = generateSlotsForDay(workStart, workEnd, slotDuration);
-      if (allSlots.length === 0) continue;
-
-      const [doctorConflicts, patientConflicts] = await Promise.all([
-        getSelfSchedDoctorConflicts(branchId, doctorName, dateStr),
-        getSelfSchedPatientConflicts(branchId, patient.id, patient.cpf, dateStr),
-      ]);
-
-      const available = allSlots.filter((slot) => {
-        const blockedByDoctor = doctorConflicts.some((c: any) =>
-          slotRangesOverlap(slot, slotDuration, c.time, c.durationMinutes),
-        );
-        const blockedByPatient = patientConflicts.some((c: any) =>
-          slotRangesOverlap(slot, slotDuration, c.time, c.durationMinutes),
-        );
-        return !blockedByDoctor && !blockedByPatient;
+    let agendaSlots;
+    try {
+      agendaSlots = await listAgendaSlots(prisma, {
+        branchId,
+        doctorId: doctor.id,
+        procedureId: procedureId || null,
+        procedureName,
+        fromDate: fromDateIso,
+        toDate: toDateIso,
+        durationMinutes: slotDurationFromProcedure,
+        stepMinutes: slotDurationFromProcedure,
       });
-
-      if (available.length > 0) {
-        result.push({ date: dateStr, slots: available });
+    } catch (error) {
+      if (error instanceof AgendaAvailabilityError) {
+        if (error.code === 'AGENDA_NOT_FOUND') return { availableSlots: [], slotDurationMinutes: slotDurationFromProcedure };
+        return reply.code(400).send({ error: error.code, message: error.message, details: error.details });
       }
+      throw error;
     }
 
-    return { availableSlots: result, slotDurationMinutes: slotDuration };
+    type SlotsByDate = { date: string; slots: string[] };
+    const byDate = new Map<string, string[]>();
+    for (const agendaSlot of agendaSlots) {
+      const [doctorConflicts, patientConflicts] = await Promise.all([
+        getSelfSchedDoctorConflicts(branchId, doctor.name, agendaSlot.date),
+        getSelfSchedPatientConflicts(branchId, patient.id, patient.cpf, agendaSlot.date),
+      ]);
+      if (doctorConflicts.some((c: any) => slotRangesOverlap(agendaSlot.time, slotDurationFromProcedure, c.time, c.durationMinutes))) continue;
+      if (patientConflicts.some((c: any) => slotRangesOverlap(agendaSlot.time, slotDurationFromProcedure, c.time, c.durationMinutes))) continue;
+      const slots = byDate.get(agendaSlot.date) || [];
+      slots.push(agendaSlot.time);
+      byDate.set(agendaSlot.date, slots);
+    }
+    const result: SlotsByDate[] = Array.from(byDate.entries())
+      .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .slice(0, 14)
+      .map(([date, slots]) => ({ date, slots: Array.from(new Set(slots)).sort() }));
+
+    return { availableSlots: result, slotDurationMinutes: slotDurationFromProcedure };
   });
 
   app.post('/patient-portal/scheduling/appointments', {
@@ -3052,6 +3020,28 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
 
     const slotDuration = procedure.durationMinutes || 30;
 
+    let agendaAvailability;
+    try {
+      agendaAvailability = await resolveAgendaAvailability(prisma, {
+        branchId,
+        doctorName: body.doctorName,
+        procedureId: procedure.id,
+        procedureName: procedure.name,
+        date: normalizedDate,
+        time: body.time,
+        durationMinutes: slotDuration,
+      });
+    } catch (error) {
+      if (error instanceof AgendaAvailabilityError) {
+        return reply.code(['INVALID_DATE', 'INVALID_TIME', 'PROFESSIONAL_NOT_FOUND', 'PROCEDURE_NOT_FOUND'].includes(error.code) ? 400 : 409).send({
+          error: error.code,
+          message: error.message,
+          details: error.details,
+        });
+      }
+      throw error;
+    }
+
     // Re-validate slot availability at creation time
     const [doctorConflicts, patientConflicts] = await Promise.all([
       getSelfSchedDoctorConflicts(branchId, body.doctorName, normalizedDate),
@@ -3099,7 +3089,10 @@ export default async function patientPortalRoutes(app: FastifyInstance) {
         patientId: patient.id,
         patientName: patient.name,
         patientCpf: patient.cpf,
-        doctorName: body.doctorName,
+        doctorName: agendaAvailability.doctorName,
+        doctorId: agendaAvailability.doctorId,
+        agendaId: agendaAvailability.agendaId,
+        roomId: agendaAvailability.roomId || null,
         specialty: procedure.name,
         sourceProcedureId: procedure.id,
         date: normalizedDate,

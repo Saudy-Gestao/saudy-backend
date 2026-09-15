@@ -3,6 +3,11 @@ import { HUMAN_FLOWS, handleWhatsAppChatbot } from '../../src/modules/care/lib/w
 import prisma from '../../src/modules/care/lib/prisma';
 import * as messagingModule from '../../src/modules/care/lib/messaging';
 
+const agendaAvailabilityMocks = vi.hoisted(() => ({
+  listAgendaSlots: vi.fn(),
+  resolveAgendaAvailability: vi.fn(),
+}));
+
 const sendTextMessageMock = vi.fn();
 const sendQuickReplyMessageMock = vi.fn();
 const sendListMessageMock = vi.fn();
@@ -16,6 +21,12 @@ vi.mock('../../src/modules/care/lib/messaging', () => ({
 
 vi.mock('../../src/modules/care/lib/appointment-whatsapp-events', () => ({
   publishAppointmentCreatedEvent: vi.fn(),
+}));
+
+vi.mock('../../src/modules/care/lib/agenda-availability', () => ({
+  AgendaAvailabilityError: class AgendaAvailabilityError extends Error {},
+  listAgendaSlots: agendaAvailabilityMocks.listAgendaSlots,
+  resolveAgendaAvailability: agendaAvailabilityMocks.resolveAgendaAvailability,
 }));
 
 vi.mock('../../src/modules/care/lib/prisma', () => ({
@@ -95,6 +106,8 @@ const makeConversation = (overrides: Record<string, unknown> = {}) => ({
 describe('handleWhatsAppChatbot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    agendaAvailabilityMocks.listAgendaSlots.mockReset();
+    agendaAvailabilityMocks.resolveAgendaAvailability.mockReset();
     mockedPrisma.branch.findUnique.mockResolvedValue({ id: 'b-1', tradeName: 'Saudy', companyId: 'c-1' });
     mockedPrisma.branch.findMany.mockResolvedValue([{ id: 'b-1', tradeName: 'Saudy' }]);
     mockedPrisma.whatsAppConfig.findUnique.mockResolvedValue({
@@ -160,6 +173,34 @@ describe('handleWhatsAppChatbot', () => {
     mockedPrisma.procedureDoctor.findMany.mockResolvedValue([]);
     mockedPrisma.doctor.findMany.mockResolvedValue([]);
     mockedPrisma.whatsAppTicket.create.mockResolvedValue({ id: 't-1' });
+    agendaAvailabilityMocks.listAgendaSlots.mockImplementation(async (_db: any, input: any) => [{
+      agendaId: 'agenda-1',
+      branchId: input.branchId,
+      doctorId: String(input.doctorId || 'doc-1'),
+      doctorName: String(input.doctorName || 'Dr. Teste'),
+      roomId: null,
+      roomName: null,
+      weekday: 'quinta',
+      shiftStart: '08:00',
+      shiftEnd: '18:00',
+      specialtyIds: [],
+      procedureIds: input.procedureId ? [String(input.procedureId)] : [],
+      date: input.fromDate,
+      time: '23:59',
+    }]);
+    agendaAvailabilityMocks.resolveAgendaAvailability.mockImplementation(async (_db: any, input: any) => ({
+      agendaId: 'agenda-1',
+      branchId: input.branchId,
+      doctorId: String(input.doctorId || 'doc-1'),
+      doctorName: String(input.doctorName || 'Dr. Teste'),
+      roomId: null,
+      roomName: null,
+      weekday: 'quinta',
+      shiftStart: '08:00',
+      shiftEnd: '18:00',
+      specialtyIds: [],
+      procedureIds: input.procedureId ? [String(input.procedureId)] : [],
+    }));
     mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb({
       appointment: {
         create: vi.fn().mockResolvedValue({ id: 'a-1' }),
@@ -806,6 +847,7 @@ describe('handleWhatsAppChatbot', () => {
       },
     ]);
     mockedPrisma.appointment.findMany.mockResolvedValueOnce([]);
+    agendaAvailabilityMocks.listAgendaSlots.mockImplementation(async () => []);
 
     const result = await handleWhatsAppChatbot({
       phone: '5511999998888',
@@ -1767,6 +1809,7 @@ describe('handleWhatsAppChatbot', () => {
       },
     ]);
     mockedPrisma.appointment.findMany.mockResolvedValue([]);
+    agendaAvailabilityMocks.listAgendaSlots.mockImplementation(async () => []);
 
     try {
       const result = await handleWhatsAppChatbot({

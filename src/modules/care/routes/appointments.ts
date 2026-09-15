@@ -4,6 +4,7 @@ import { Storage } from '@google-cloud/storage';
 import prisma from '../lib/prisma';
 import type { Prisma } from '@prisma/client';
 import { publishAppointmentCreatedEvent, publishAppointmentNoShowEventIfNeeded } from '../lib/appointment-whatsapp-events';
+import { AgendaAvailabilityError, resolveAgendaAvailability } from '../lib/agenda-availability';
 
 const COMPLETED_STATUSES = new Set(['REALIZADO', 'COMPLETED', 'FINALIZADO', 'ATENDIDO']);
 const CANCELED_STATUSES = new Set(['CANCELADO', 'CANCELED']);
@@ -145,6 +146,8 @@ const APPOINTMENT_MUTABLE_FIELDS = new Set([
   'patientCpf',
   'patientId',
   'doctorName',
+  'doctorId',
+  'agendaId',
   'roomId',
   'medicalEquipmentId',
   'specialty',
@@ -502,19 +505,43 @@ const applyAutomaticNoShowForBranch = async (branchId: string) => {
 class BatchSchedulingError extends Error {
   conflictType?: string;
   details?: string;
+  code?: string;
 
-  constructor(message: string, conflictType?: string, details?: string) {
+  constructor(message: string, conflictType?: string, details?: string, code?: string) {
     super(message);
     this.name = 'BatchSchedulingError';
     this.conflictType = conflictType;
     this.details = details;
+    this.code = code;
   }
 }
+
+const agendaAvailabilityStatus = (error: AgendaAvailabilityError) => (
+  ['INVALID_DATE', 'INVALID_TIME', 'PROFESSIONAL_NOT_FOUND', 'PROCEDURE_NOT_FOUND'].includes(error.code)
+    ? 400
+    : 409
+);
+
+const sendAgendaAvailabilityError = (reply: any, error: AgendaAvailabilityError) => reply
+  .code(agendaAvailabilityStatus(error))
+  .send({
+    error: 'Agenda availability validation failed',
+    code: error.code,
+    message: error.message,
+    details: error.details,
+  });
 
 const createAppointmentRecord = async (
   tx: Prisma.TransactionClient,
   branchId: string,
   data: any,
+  availability?: {
+    agendaId: string;
+    doctorId: string;
+    doctorName: string;
+    roomId: string | null;
+    procedureIds: string[];
+  } | null,
 ) => {
   const created = await tx.appointment.create({
     data: {
@@ -523,10 +550,13 @@ const createAppointmentRecord = async (
       patientName: data.patientName || null,
       patientCpf: data.patientCpf || null,
       patientId: data.patientId || null,
-      doctorName: data.doctorName || null,
-      roomId: data.roomId || null,
+      doctorName: availability?.doctorName || data.doctorName || null,
+      doctorId: availability?.doctorId || data.doctorId || null,
+      agendaId: availability?.agendaId || data.agendaId || null,
+      roomId: data.roomId || availability?.roomId || null,
       medicalEquipmentId: data.medicalEquipmentId || null,
       specialty: data.specialty || null,
+      sourceProcedureId: data.sourceProcedureId || availability?.procedureIds?.[0] || null,
       durationMinutes: Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : null,
       convenio: data.convenio || null,
       insurancePlan: data.insurancePlan || null,
@@ -1298,6 +1328,10 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           patientCpf: { type: 'string' },
           patientId: { type: 'string' },
           doctorName: { type: 'string' },
+          doctorId: { type: 'string' },
+          sourceProcedureId: { type: 'string' },
+          procedureId: { type: 'string' },
+          agendaId: { type: 'string' },
           roomId: { type: 'string' },
           medicalEquipmentId: { type: 'string' },
           branchId: { type: 'string' },
@@ -1431,57 +1465,21 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       }
 
       const item = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const created = await tx.appointment.create({ data: {
+        const availability = await resolveAgendaAvailability(tx, {
           branchId,
-          rescheduledFromAppointmentId: data.rescheduledFromAppointmentId || null,
-          patientName: data.patientName || null,
-          patientCpf: data.patientCpf || null,
-          patientId: data.patientId || null,
+          agendaId: data.agendaId || null,
+          doctorId: data.doctorId || null,
           doctorName: data.doctorName || null,
-          roomId: data.roomId || null,
-          medicalEquipmentId: data.medicalEquipmentId || null,
+          procedureId: data.sourceProcedureId || data.procedureId || null,
           specialty: data.specialty || null,
-          durationMinutes: Number.isFinite(data.durationMinutes) ? Number(data.durationMinutes) : null,
-          convenio: data.convenio || null,
-          insurancePlan: data.insurancePlan || null,
-          date: data.date || null,
-          time: data.time || null,
-          type: data.type || null,
-          status: data.status || null,
-          accessionNumber: data.accessionNumber && String(data.accessionNumber).trim().length > 0
-            ? String(data.accessionNumber).trim()
-            : generateAccessionNumber(),
-          authorizationStatus: data.authorizationStatus || 'PENDING',
-          authorizationNotes: data.authorizationNotes || null,
-          authorizedAt: data.authorizationStatus === 'AUTHORIZED' ? new Date() : null,
-          observations: data.observations || null,
-          totem: data.totem ?? null,
-          recurrenceSeriesId: data.recurrenceSeriesId || null,
-          recurrenceIndex: Number.isInteger(data.recurrenceIndex) ? data.recurrenceIndex : null,
-          recurrenceTotal: Number.isInteger(data.recurrenceTotal) ? data.recurrenceTotal : null,
-          simultaneousGroupId: data.simultaneousGroupId || null,
-        } });
+          allowUnscopedSpecialty: !(data.sourceProcedureId || data.procedureId),
+          roomId: data.roomId || null,
+          date: data.date,
+          time: data.time,
+          durationMinutes: requestedDurationMinutes,
+        });
 
-        const createdStatus = normalizeStatus(created.status);
-        if (RESERVABLE_STATUSES.has(createdStatus)) {
-          const reservationSnapshot = await reserveProcedureMaterialsSnapshot(tx, created);
-          if (reservationSnapshot) {
-            await tx.appointment.update({
-              where: { id: created.id },
-              data: {
-                inventoryReservedAt: new Date(),
-                inventoryReservationSnapshot: reservationSnapshot as any,
-                inventoryReservationSource: reservationSnapshot.source,
-              },
-            });
-            (created as any).inventoryReservedAt = new Date();
-            (created as any).inventoryReservationSnapshot = reservationSnapshot;
-            (created as any).inventoryReservationSource = reservationSnapshot.source;
-          }
-        }
-
-        await syncMwlFromAppointment(tx, created, branchId);
-        return created;
+        return createAppointmentRecord(tx, branchId, data, availability);
       });
 
       // Publica evento de agendamento criado para notificação automática no WhatsApp.
@@ -1490,6 +1488,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
       return reply.code(201).send(item);
     } catch (err: any) {
       request.log.error({ err }, 'Failed to create appointment');
+      if (err instanceof AgendaAvailabilityError) return sendAgendaAvailabilityError(reply, err);
       return reply.code(400).send({ error: 'Failed to create appointment', details: err.message });
     }
   });
@@ -1634,7 +1633,27 @@ export default async function appointmentRoutes(app: FastifyInstance) {
             );
           }
 
-          result.push(await createAppointmentRecord(tx, branchId, data));
+          let availability;
+          try {
+            availability = await resolveAgendaAvailability(tx, {
+              branchId,
+              agendaId: data.agendaId || null,
+              doctorId: data.doctorId || null,
+              doctorName: data.doctorName || null,
+              procedureId: data.sourceProcedureId || data.procedureId || null,
+              specialty: data.specialty || null,
+              allowUnscopedSpecialty: !(data.sourceProcedureId || data.procedureId),
+              roomId: data.roomId || null,
+              date: data.date,
+              time: data.time,
+              durationMinutes: requestedDurationMinutes,
+            });
+          } catch (error) {
+            if (!(error instanceof AgendaAvailabilityError)) throw error;
+            throw new BatchSchedulingError(error.message, 'AGENDA', JSON.stringify(error.details), error.code);
+          }
+
+          result.push(await createAppointmentRecord(tx, branchId, data, availability));
         }
         return result;
       });
@@ -1651,6 +1670,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         return reply.code(409).send({
           error: 'Scheduling conflict',
           conflictType: err.conflictType,
+          code: err.code,
           message: err.message,
           details: err.details,
         });
@@ -1704,6 +1724,8 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         const resolvedSpecialty = updateData.specialty ?? existing.specialty;
         const resolvedAppointmentType = updateData.type ?? existing.type;
         const resolvedDoctorName = updateData.doctorName ?? existing.doctorName;
+        const resolvedDoctorId = updateData.doctorId ?? existing.doctorId;
+        const resolvedProcedureId = updateData.sourceProcedureId ?? existing.sourceProcedureId;
         const resolvedPatientId = updateData.patientId ?? existing.patientId;
         const resolvedPatientCpf = updateData.patientCpf ?? existing.patientCpf;
         const resolvedRoomId = updateData.roomId ?? existing.roomId;
@@ -1716,6 +1738,9 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         const nextStatusForConflict = updateData.status ?? existing.status;
         const schedulingChanged = (
           resolvedDoctorName !== existing.doctorName
+          || resolvedDoctorId !== existing.doctorId
+          || resolvedProcedureId !== existing.sourceProcedureId
+          || resolvedSpecialty !== existing.specialty
           || resolvedRoomId !== existing.roomId
           || resolvedMedicalEquipmentId !== existing.medicalEquipmentId
           || resolvedDate !== existing.date
@@ -1745,6 +1770,25 @@ export default async function appointmentRoutes(app: FastifyInstance) {
         }
 
         if (schedulingChanged && hasBlockingStatus(nextStatusForConflict)) {
+          const availability = await resolveAgendaAvailability(tx, {
+            branchId,
+            agendaId: updateData.agendaId || null,
+            doctorId: resolvedDoctorId,
+            doctorName: resolvedDoctorName,
+            procedureId: resolvedProcedureId,
+            specialty: resolvedSpecialty,
+            allowUnscopedSpecialty: !resolvedProcedureId,
+            roomId: resolvedRoomId,
+            date: resolvedDate,
+            time: resolvedTime,
+            durationMinutes: resolvedDurationMinutes,
+          });
+          updateData.doctorId = availability.doctorId;
+          updateData.agendaId = availability.agendaId;
+          updateData.doctorName = availability.doctorName;
+          updateData.sourceProcedureId = resolvedProcedureId || availability.procedureIds[0] || null;
+          if (!resolvedRoomId && availability.roomId) updateData.roomId = availability.roomId;
+
           const patientConflict = await findPatientScheduleConflict({
             tx,
             branchId,
@@ -1927,6 +1971,7 @@ export default async function appointmentRoutes(app: FastifyInstance) {
           message: 'Consulta não pode ser salva com sala e equipamento de exame ao mesmo tempo.',
         });
       }
+      if (err instanceof AgendaAvailabilityError) return sendAgendaAvailabilityError(reply, err);
       if (String(err?.message || '').startsWith('RESOURCE_SCHEDULE_CONFLICT')) {
         return reply.code(409).send({
           error: 'Scheduling conflict',

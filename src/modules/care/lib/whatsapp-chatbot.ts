@@ -3,6 +3,7 @@ import prisma from '../lib/prisma';
 import { createMessagingService } from './messaging';
 import { publishAppointmentCreatedEvent } from './appointment-whatsapp-events';
 import { isValidCpf, normalizeCpf } from '../../../lib/cpf';
+import { AgendaAvailabilityError, listAgendaSlots, resolveAgendaAvailability } from './agenda-availability';
 
 const CLINIC_TIME_ZONE = process.env.APP_TIMEZONE || 'America/Sao_Paulo';
 const CHATBOT_BRANCH_ID = String(process.env.WHATSAPP_CHATBOT_BRANCH_ID || '').trim();
@@ -96,6 +97,7 @@ type PatientLookup = {
 type SlotSuggestion = {
   doctorId: string;
   doctorName: string;
+  agendaId: string;
   date: string;
   time: string;
   durationMinutes: number;
@@ -428,58 +430,6 @@ const normalizeWeekdayToken = (value?: string | null): string | null => {
 };
 
 const JS_DAY_TO_WEEKDAY = ['DOMINGO', 'SEGUNDA', 'TERCA', 'QUARTA', 'QUINTA', 'SEXTA', 'SABADO'];
-
-const parseDoctorWindows = (doctor: any): Array<{ weekdays: string[]; hoursStart?: string | null; hoursEnd?: string | null }> => {
-  const rawSchedules = (() => {
-    if (Array.isArray(doctor?.workingSchedules)) return doctor.workingSchedules;
-    if (typeof doctor?.workingSchedules === 'string' && doctor.workingSchedules.trim()) {
-      try {
-        const parsed = JSON.parse(doctor.workingSchedules);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  })();
-
-  const fromSchedules = rawSchedules
-    .map((schedule: any) => {
-      const weekdays = Array.isArray(schedule?.days)
-        ? schedule.days.map((item: any) => normalizeWeekdayToken(item)).filter(Boolean)
-        : [];
-
-      if (!weekdays.length) return null;
-      return {
-        weekdays,
-        hoursStart: schedule?.hoursStart || null,
-        hoursEnd: schedule?.hoursEnd || null,
-      };
-    })
-    .filter(Boolean) as Array<{ weekdays: string[]; hoursStart?: string | null; hoursEnd?: string | null }>;
-
-  if (fromSchedules.length) return fromSchedules;
-
-  const fallbackWeekdays = Array.isArray(doctor?.workingDays) && doctor.workingDays.length
-    ? doctor.workingDays.map((item: any) => normalizeWeekdayToken(item)).filter(Boolean)
-    : [...JS_DAY_TO_WEEKDAY];
-
-  return [{
-    weekdays: fallbackWeekdays as string[],
-    hoursStart: doctor?.workingHoursStart || '08:00',
-    hoursEnd: doctor?.workingHoursEnd || '18:00',
-  }];
-};
-
-const buildWindowSlots = (hoursStart?: string | null, hoursEnd?: string | null, stepMinutes = 15) => {
-  const startMinutes = timeToMinutes(hoursStart || '08:00');
-  const endMinutes = timeToMinutes(hoursEnd || '18:00');
-  const slots: string[] = [];
-  for (let current = startMinutes; current <= endMinutes; current += stepMinutes) {
-    slots.push(minutesToTime(current));
-  }
-  return slots;
-};
 
 const parsePreferredDate = (text: string): string | null => {
   const normalized = normalizeText(text);
@@ -1181,10 +1131,6 @@ async function listProcedureDoctors(branchId: string, procedureId: string) {
     select: {
       id: true,
       name: true,
-      workingDays: true,
-      workingHoursStart: true,
-      workingHoursEnd: true,
-      workingSchedules: true,
     },
     orderBy: { name: 'asc' },
   });
@@ -1208,82 +1154,71 @@ async function findNextAvailableSlot(params: {
     : new Date();
   startDate.setHours(0, 0, 0, 0);
 
-  for (let offset = 0; offset < DEFAULT_SEARCH_DAYS; offset += 1) {
-    const candidateDate = new Date(startDate);
-    candidateDate.setDate(candidateDate.getDate() + offset);
-    const dateIso = formatDateIso(candidateDate);
-    const weekdayToken = JS_DAY_TO_WEEKDAY[candidateDate.getDay()];
+  const endDate = new Date(startDate);
+  endDate.setDate(endDate.getDate() + DEFAULT_SEARCH_DAYS - 1);
 
-    const [doctorAppointments, patientAppointments] = await Promise.all([
-      prisma.appointment.findMany({
-        where: {
-          branchId: params.branchId,
-          isActive: true,
-          date: dateIso,
-          status: { in: Array.from(OPEN_APPOINTMENT_STATUSES) },
-        },
-        select: {
-          id: true,
-          doctorName: true,
-          time: true,
-          durationMinutes: true,
-        },
-      }),
-      params.patientId
-        ? prisma.appointment.findMany({
+  for (const doctor of doctors) {
+    let agendaSlots;
+    try {
+      agendaSlots = await listAgendaSlots(prisma, {
+        branchId: params.branchId,
+        doctorId: doctor.id,
+        procedureId: procedure.id,
+        procedureName: procedure.name,
+        fromDate: formatDateIso(startDate),
+        toDate: formatDateIso(endDate),
+        durationMinutes,
+      });
+    } catch (error) {
+      if (error instanceof AgendaAvailabilityError) continue;
+      throw error;
+    }
+
+    for (const agendaSlot of agendaSlots) {
+      const [doctorAppointments, patientAppointments] = await Promise.all([
+        prisma.appointment.findMany({
           where: {
-            patientId: params.patientId,
+            branchId: params.branchId,
             isActive: true,
-            date: dateIso,
+            date: agendaSlot.date,
             status: { in: Array.from(OPEN_APPOINTMENT_STATUSES) },
           },
-          select: {
-            id: true,
-            time: true,
-            durationMinutes: true,
-          },
-        })
-        : Promise.resolve([]),
-    ]);
+          select: { id: true, doctorId: true, doctorName: true, time: true, durationMinutes: true },
+        }),
+        params.patientId
+          ? prisma.appointment.findMany({
+            where: {
+              patientId: params.patientId,
+              isActive: true,
+              date: agendaSlot.date,
+              status: { in: Array.from(OPEN_APPOINTMENT_STATUSES) },
+            },
+            select: { id: true, time: true, durationMinutes: true },
+          })
+          : Promise.resolve([]),
+      ]);
 
-    const now = new Date();
-    const isToday = formatDateIso(now) === dateIso;
-    const nowMinutes = (now.getHours() * 60) + now.getMinutes();
+      const now = new Date();
+      if (formatDateIso(now) === agendaSlot.date && timeToMinutes(agendaSlot.time) <= now.getHours() * 60 + now.getMinutes()) continue;
+      const doctorConflict = doctorAppointments.some((item: any) => (
+        (String(item.doctorId || '') === String(doctor.id) || String(item.doctorName || '').trim() === String(doctor.name || '').trim())
+        && item.time
+        && timeRangesOverlap(agendaSlot.time, durationMinutes, String(item.time), resolveDurationMinutes(item.durationMinutes))
+      ));
+      if (doctorConflict) continue;
+      const patientConflict = patientAppointments.some((item: any) => (
+        item.time && timeRangesOverlap(agendaSlot.time, durationMinutes, String(item.time), resolveDurationMinutes(item.durationMinutes))
+      ));
+      if (patientConflict) continue;
 
-    for (const doctor of doctors) {
-      const windows = parseDoctorWindows(doctor).filter((window) => window.weekdays.includes(weekdayToken));
-      for (const window of windows) {
-        const slots = buildWindowSlots(window.hoursStart, window.hoursEnd, 15);
-        for (const slot of slots) {
-          if (isToday && timeToMinutes(slot) <= nowMinutes) continue;
-
-          const endsWithinWindow = !window.hoursEnd || (timeToMinutes(slot) + durationMinutes) <= timeToMinutes(window.hoursEnd);
-          if (!endsWithinWindow) continue;
-
-          const doctorConflict = doctorAppointments.some((item: any) => (
-            String(item.doctorName || '').trim() === String(doctor.name || '').trim()
-            && item.time
-            && timeRangesOverlap(slot, durationMinutes, String(item.time), resolveDurationMinutes(item.durationMinutes))
-          ));
-
-          if (doctorConflict) continue;
-
-          const patientConflict = patientAppointments.some((item: any) => (
-            item.time
-            && timeRangesOverlap(slot, durationMinutes, String(item.time), resolveDurationMinutes(item.durationMinutes))
-          ));
-
-          if (patientConflict) continue;
-
-          return {
-            doctorId: String(doctor.id),
-            doctorName: String(doctor.name),
-            date: dateIso,
-            time: slot,
-            durationMinutes,
-          } satisfies SlotSuggestion;
-        }
-      }
+      return {
+        doctorId: String(doctor.id),
+        doctorName: String(doctor.name),
+        agendaId: agendaSlot.agendaId,
+        date: agendaSlot.date,
+        time: agendaSlot.time,
+        durationMinutes,
+      } satisfies SlotSuggestion;
     }
   }
 
@@ -1345,6 +1280,7 @@ async function reserveAppointment(params: {
   patientName: string | null;
   phone: string;
   insurance: string;
+  procedureId: string;
   procedureName: string;
   preferredDate?: string | null;
   slot: SlotSuggestion;
@@ -1369,14 +1305,28 @@ async function reserveAppointment(params: {
   const publicToken = randomBytes(24).toString('hex');
 
   const created = await prisma.$transaction(async (tx: any) => {
+    const availability = await resolveAgendaAvailability(tx, {
+      branchId: params.branchId,
+      doctorId: params.slot.doctorId,
+      doctorName: params.slot.doctorName,
+      procedureId: params.procedureId,
+      procedureName: params.procedureName,
+      date: params.slot.date,
+      time: params.slot.time,
+      durationMinutes: params.slot.durationMinutes,
+    });
     const appointment = await tx.appointment.create({
       data: {
         branchId: params.branchId,
         patientId: params.patient?.id || null,
         patientName: params.patientName,
         patientCpf: params.cpf || params.patient?.cpf || null,
-        doctorName: params.slot.doctorName,
+        doctorName: availability.doctorName,
+        doctorId: availability.doctorId,
+        agendaId: availability.agendaId,
+        roomId: availability.roomId || null,
         specialty: params.procedureName,
+        sourceProcedureId: params.procedureId,
         convenio: params.insurance,
         date: params.slot.date,
         time: params.slot.time,
@@ -2629,9 +2579,10 @@ async function processFlow(params: {
         : null);
 
       const slot: SlotSuggestion | null = context.suggestedDate && context.suggestedTime && context.selectedDoctorId && context.selectedDoctorName
-        ? {
+      ? {
           doctorId: context.selectedDoctorId,
           doctorName: context.selectedDoctorName,
+          agendaId: '',
           date: context.suggestedDate,
           time: context.suggestedTime,
           durationMinutes: resolveDurationMinutes(context.suggestedDurationMinutes),
@@ -2665,6 +2616,7 @@ async function processFlow(params: {
         patientName: resolvedPatient?.name || conversation.patientName || context.nameCandidate || null,
         phone: input.phone,
         insurance: context.selectedInsurance,
+        procedureId: String(context.selectedProcedureId || ''),
         procedureName: context.selectedProcedureName,
         preferredDate: context.preferredDate || null,
         slot,

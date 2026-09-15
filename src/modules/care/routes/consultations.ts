@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
+import { AgendaAvailabilityError, listAgendaSlots, resolveAgendaAvailability } from '../lib/agenda-availability';
 
 const normalizeStatusKey = (value?: string | null) => String(value || '')
   .normalize('NFD')
@@ -1355,27 +1356,6 @@ export default async function consultationRoutes(app: FastifyInstance) {
     const doctorName = String(params.doctorName || '').trim();
     if (!doctorName && !params.doctorId) return [] as Array<any>;
 
-    const doctor = params.doctorId
-      ? await prisma.doctor.findFirst({
-          where: { id: String(params.doctorId), isActive: true },
-          select: { id: true, name: true, roomId: true, roomLinks: { select: { roomId: true } } },
-        })
-      : await prisma.doctor.findFirst({
-          where: {
-            branchId: params.branchId,
-            name: { equals: doctorName, mode: 'insensitive' },
-            isActive: true,
-          },
-          select: { id: true, name: true, roomId: true, roomLinks: { select: { roomId: true } } },
-        });
-    if (!doctor) return [] as Array<any>;
-
-    const roomIds = Array.from(new Set([
-      String(doctor.roomId || '').trim(),
-      ...((doctor.roomLinks || []).map((link: any) => String(link.roomId || '').trim())),
-    ].filter(Boolean)));
-    if (roomIds.length === 0) return [] as Array<any>;
-
     const equipmentLinks = await prisma.medicalEquipmentProcedure.findMany({
       where: { procedureId: String(params.procedureId) },
       include: {
@@ -1398,37 +1378,54 @@ export default async function consultationRoutes(app: FastifyInstance) {
         && eq.isActive
         && String(eq.branchId || '') === String(params.branchId)
         && eq.roomId
-        && roomIds.includes(String(eq.roomId))
         && !['INATIVO', 'MANUTENCAO', 'MANUTENÇÃO'].includes(normalizeStatusKey(eq.status || '')));
     if (eligibleResources.length === 0) return [] as Array<any>;
 
     const equipmentIds = eligibleResources.map((eq: any) => String(eq.id));
-
     const now = new Date();
+    const fromDate = formatDateToIso(now);
+    const endDate = new Date(now);
+    endDate.setDate(now.getDate() + 29);
+    const toDate = formatDateToIso(endDate);
+    let agendaSlots: any[] = [];
+    try {
+      agendaSlots = await listAgendaSlots(prisma, {
+        branchId: params.branchId,
+        doctorId: params.doctorId || null,
+        doctorName: doctorName || null,
+        procedureId: params.procedureId,
+        fromDate,
+        toDate,
+        durationMinutes: duration,
+        stepMinutes: 30,
+      });
+    } catch (error) {
+      if (error instanceof AgendaAvailabilityError) return [] as Array<any>;
+      throw error;
+    }
+
     const suggested: Array<{
       date: string;
       time: string;
+      agendaId: string;
       roomId: string;
       medicalEquipmentId: string;
       roomName?: string | null;
       medicalEquipmentName?: string | null;
     }> = [];
 
-    for (let dayOffset = 0; dayOffset < 30 && suggested.length < limit; dayOffset += 1) {
-      const day = new Date(now);
-      day.setDate(now.getDate() + dayOffset);
-      const weekDay = day.getDay();
-      if (weekDay === 0) continue;
-
-      const dateIso = formatDateToIso(day);
+    const agendaDates = Array.from(new Set(agendaSlots.map((slot) => String(slot.date || '').trim()).filter(Boolean))).sort();
+    for (const dateIso of agendaDates) {
+      if (suggested.length >= limit) break;
       const appointments = await prisma.appointment.findMany({
         where: {
           branchId: params.branchId,
           date: dateIso,
           isActive: true,
           OR: [
-            { doctorName: { equals: doctor.name, mode: 'insensitive' } },
-            { roomId: { in: roomIds } },
+            ...(params.doctorId ? [{ doctorId: String(params.doctorId) }] : []),
+            ...(doctorName ? [{ doctorName: { equals: doctorName, mode: 'insensitive' as const } }] : []),
+            { roomId: { in: eligibleResources.map((resource: any) => String(resource.roomId)) } },
             { medicalEquipmentId: { in: equipmentIds } },
           ],
         },
@@ -1438,60 +1435,38 @@ export default async function consultationRoutes(app: FastifyInstance) {
       const busy = appointments.filter((item: any) =>
         !NON_BLOCKING_APPOINTMENT_STATUSES.has(normalizeStatusKey(item?.status || '')));
 
-      const startHour = 8;
-      const endHour = 18;
-      for (let hour = startHour; hour < endHour && suggested.length < limit; hour += 1) {
-        for (const minute of [0, 30]) {
-          const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-          if (dayOffset === 0) {
-            const slotDate = new Date(`${dateIso}T${time}:00`);
-            if (slotDate <= now) continue;
-          }
+      for (const agendaSlot of agendaSlots.filter((slot) => String(slot.date) === dateIso)) {
+        if (new Date(`${dateIso}T${agendaSlot.time}:00`) <= now) continue;
 
-          const doctorConflict = busy
-            .filter((item: any) => String(item?.doctorName || '').trim().toLowerCase() === String(doctor.name || '').trim().toLowerCase())
-            .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
-          if (doctorConflict) continue;
+        const doctorConflict = busy
+          .filter((item: any) => String(item?.doctorName || '').trim().toLowerCase() === String(agendaSlot.doctorName || doctorName).trim().toLowerCase())
+          .some((item: any) => rangesOverlap(agendaSlot.time, duration, item?.time, item?.durationMinutes));
+        if (doctorConflict) continue;
 
-          const availableResource = eligibleResources.find((resource: any) => {
-            const roomConflict = busy
-              .filter((item: any) => String(item?.roomId || '') === String(resource.roomId || ''))
-              .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
-            if (roomConflict) return false;
-            const equipmentConflict = busy
-              .filter((item: any) => String(item?.medicalEquipmentId || '') === String(resource.id || ''))
-              .some((item: any) => rangesOverlap(time, duration, item?.time, item?.durationMinutes));
-            return !equipmentConflict;
-          });
+        const availableResource = eligibleResources.find((resource: any) => {
+          if (agendaSlot.roomId && String(resource.roomId || '') !== String(agendaSlot.roomId)) return false;
+          const roomConflict = busy
+            .filter((item: any) => String(item?.roomId || '') === String(resource.roomId || ''))
+            .some((item: any) => rangesOverlap(agendaSlot.time, duration, item?.time, item?.durationMinutes));
+          if (roomConflict) return false;
+          const equipmentConflict = busy
+            .filter((item: any) => String(item?.medicalEquipmentId || '') === String(resource.id || ''))
+            .some((item: any) => rangesOverlap(agendaSlot.time, duration, item?.time, item?.durationMinutes));
+          return !equipmentConflict;
+        });
 
-          if (availableResource) {
-            suggested.push({
-              date: dateIso,
-              time,
-              roomId: String(availableResource.roomId),
-              medicalEquipmentId: String(availableResource.id),
-              roomName: null,
-              medicalEquipmentName: availableResource.name || null,
-            });
-            if (suggested.length >= limit) {
-              break;
-            }
-          }
-        }
+        if (!availableResource) continue;
+        suggested.push({
+          date: dateIso,
+          time: agendaSlot.time,
+          agendaId: String(agendaSlot.agendaId),
+          roomId: String(availableResource.roomId),
+          medicalEquipmentId: String(availableResource.id),
+          roomName: agendaSlot.roomName || null,
+          medicalEquipmentName: availableResource.name || null,
+        });
+        if (suggested.length >= limit) break;
       }
-    }
-
-    const roomIdsUsed = Array.from(new Set(suggested.map((slot) => slot.roomId)));
-    const rooms = roomIdsUsed.length
-      ? await prisma.sector.findMany({
-          where: { id: { in: roomIdsUsed } },
-          select: { id: true, name: true },
-        })
-      : [];
-    const roomById = new Map<string, any>(rooms.map((room: any) => [String(room.id), room]));
-
-    for (const slot of suggested) {
-      slot.roomName = roomById.get(String(slot.roomId))?.name || null;
     }
 
     return suggested;
@@ -2495,6 +2470,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
     const resolvedTime = hasRequestedScheduling
       ? requestedScheduleTime
       : (data?.preferredTime ? String(data.preferredTime).trim() : null);
+    let scheduleAvailability: Awaited<ReturnType<typeof resolveAgendaAvailability>> | null = null;
 
     if (hasRequestedScheduling && !/^\d{4}-\d{2}-\d{2}$/.test(requestedScheduleDate)) {
       return reply.code(400).send({ error: 'scheduleDate must be YYYY-MM-DD' });
@@ -2508,6 +2484,29 @@ export default async function consultationRoutes(app: FastifyInstance) {
 
     if (hasRequestedScheduling) {
       const doctorName = String(consultation.doctorName || sourceAppointment?.doctorName || '').trim();
+      try {
+        scheduleAvailability = await resolveAgendaAvailability(prisma, {
+          branchId,
+          doctorId: (consultation as any).doctorId || (sourceAppointment as any)?.doctorId || null,
+          doctorName,
+          procedureId: procedure?.id || null,
+          procedureName: examType,
+          allowUnscopedSpecialty: !procedure?.id,
+          roomId: requestedScheduleRoomId,
+          date: requestedScheduleDate,
+          time: requestedScheduleTime,
+          durationMinutes: Number(procedure?.durationMinutes || 30),
+        });
+      } catch (error) {
+        if (error instanceof AgendaAvailabilityError) {
+          return reply.code(['INVALID_DATE', 'INVALID_TIME', 'PROFESSIONAL_NOT_FOUND', 'PROCEDURE_NOT_FOUND'].includes(error.code) ? 400 : 409).send({
+            error: error.code,
+            message: error.message,
+            details: error.details,
+          });
+        }
+        throw error;
+      }
       const validEquipmentLink = procedure?.id
         ? await prisma.medicalEquipmentProcedure.findFirst({
             where: {
@@ -2578,7 +2577,9 @@ export default async function consultationRoutes(app: FastifyInstance) {
         patientName: sourceAppointment?.patientName || consultation.patientName || null,
         patientCpf: sourceAppointment?.patientCpf || null,
         patientId: sourceAppointment?.patientId || null,
-        doctorName: consultation.doctorName || sourceAppointment?.doctorName || null,
+        doctorName: scheduleAvailability?.doctorName || consultation.doctorName || sourceAppointment?.doctorName || null,
+        doctorId: scheduleAvailability?.doctorId || (consultation as any).doctorId || (sourceAppointment as any)?.doctorId || null,
+        agendaId: scheduleAvailability?.agendaId || null,
         specialty: examType,
         durationMinutes: Number(procedure?.durationMinutes || 30),
         convenio: sourceAppointment?.convenio || consultation.convenio || null,
@@ -2593,7 +2594,7 @@ export default async function consultationRoutes(app: FastifyInstance) {
         orderedAt: new Date(),
         requestedByDoctor: true,
         scheduledByDoctor: hasRequestedScheduling,
-        roomId: hasRequestedScheduling ? requestedScheduleRoomId : null,
+        roomId: hasRequestedScheduling ? (scheduleAvailability?.roomId || requestedScheduleRoomId) : null,
         medicalEquipmentId: hasRequestedScheduling ? requestedScheduleMedicalEquipmentId : null,
         observations: normalizedOrderNotes,
       },
