@@ -11,6 +11,9 @@ vi.mock('../../src/modules/accounts/lib/prisma', () => ({
       findFirst: vi.fn(),
       delete: vi.fn(),
     },
+    cbo: {
+      findFirst: vi.fn(),
+    },
     sector: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
@@ -247,6 +250,43 @@ describe('accounts doctors routes', () => {
     expect(tx.doctor.create).toHaveBeenCalled();
     expect(tx.doctorRoom.createMany).toHaveBeenCalled();
 
+    await app.close();
+  });
+
+  it('persists the selected CBO at professional level', async () => {
+    const tx = buildTxMock();
+    tx.doctor.create.mockResolvedValue({ id: 'd-cbo', roomId: null });
+    tx.doctor.findUniqueOrThrow.mockResolvedValue({
+      id: 'd-cbo',
+      cboId: 'cbo-1',
+      cbo: { id: 'cbo-1', code: '2251-25', title: 'Médico clínico' },
+      roomLinks: [],
+      workingSchedules: '[]',
+    });
+    mockedPrisma.cbo.findFirst.mockResolvedValue({ id: 'cbo-1' });
+    mockedPrisma.$transaction.mockImplementation(async (cb: any) => cb(tx));
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/doctors',
+      payload: {
+        name: 'Dr CBO',
+        crm: '99999',
+        crmState: 'SP',
+        email: 'cbo@mail.com',
+        cellphone: '11999999999',
+        cpf: '52998224725',
+        birthDate: '1990-01-01',
+        gender: 'MALE',
+        specialty: 'Clínica Médica',
+        cboId: 'cbo-1',
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(tx.doctor.create.mock.calls[0][0].data.cboId).toBe('cbo-1');
+    expect(res.json().cbo).toEqual({ id: 'cbo-1', code: '2251-25', title: 'Médico clínico' });
     await app.close();
   });
 

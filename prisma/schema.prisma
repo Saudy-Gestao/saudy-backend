@@ -308,6 +308,8 @@ model Doctor {
     crm               String
     crmState          String   @db.VarChar(2)
     name              String
+    cboId             String?
+    cbo               Cbo?    @relation(fields: [cboId], references: [id], onDelete: SetNull)
     email             String   @unique
     phone             String
     cellphone         String?
@@ -1561,6 +1563,7 @@ model Cbo {
     updatedAt DateTime @updatedAt
 
     procedures      Procedure[]
+    doctors         Doctor[]
 
     @@map("cbos")
 }

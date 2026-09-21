@@ -662,58 +662,72 @@ const resolveClinicalGuideSnapshot = async (params: {
     .find((item) => Boolean(item)) || null;
   const cidCode = extractCidCode(indication);
 
-  const doctorId = String(consultation?.doctorId || '').trim();
-  const doctorName = String(consultation?.doctorName || appointment?.doctorName || '').trim();
+  const professionalSelect = {
+    name: true,
+    cpf: true,
+    crm: true,
+    crmState: true,
+    cbo: { select: { code: true } },
+  } as const;
 
-  let doctor: any = null;
-  if (doctorId) {
-    doctor = await prisma.doctor.findFirst({
-      where: { id: doctorId, branchId },
-      select: {
-        name: true,
-        cpf: true,
-        crm: true,
-        crmState: true,
-      },
+  const resolveProfessional = async (professionalId: unknown, professionalName: unknown) => {
+    const id = String(professionalId || '').trim();
+    const name = String(professionalName || '').trim();
+    if (id) {
+      const byId = await prisma.doctor.findFirst({
+        where: { id, branchId },
+        select: professionalSelect,
+      });
+      if (byId) return byId;
+    }
+    if (!name) return null;
+    return prisma.doctor.findFirst({
+      where: { branchId, name: { equals: name, mode: 'insensitive' } },
+      select: professionalSelect,
     });
-  }
-  if (!doctor && doctorName) {
-    doctor = await prisma.doctor.findFirst({
-      where: {
-        branchId,
-        name: { equals: doctorName, mode: 'insensitive' },
-      },
-      select: {
-        name: true,
-        cpf: true,
-        crm: true,
-        crmState: true,
-      },
-    });
-  }
+  };
 
-  const professionalName = String(doctor?.name || doctorName || '').trim() || null;
-  const professionalCpf = onlyDigits(doctor?.cpf || null) || null;
-  const councilNumber = String(doctor?.crm || '').trim() || null;
-  const councilUf = String(doctor?.crmState || '').trim() || null;
-  const council = councilNumber ? 'CRM' : null;
+  // The consultation professional is the requester. The appointment professional
+  // is the executor; for the conventional flow they are normally the same person.
+  const requestingNameFallback = String(consultation?.doctorName || appointment?.doctorName || '').trim();
+  const executingNameFallback = String(appointment?.doctorName || consultation?.doctorName || '').trim();
+  const requestingDoctor = await resolveProfessional(consultation?.doctorId, requestingNameFallback);
+  const executingDoctor = await resolveProfessional(appointment?.doctorId || consultation?.doctorId, executingNameFallback) || requestingDoctor;
+
+  const toProfessionalSnapshot = (doctor: any, fallbackName: string) => {
+    const name = String(doctor?.name || fallbackName || '').trim() || null;
+    const cpf = onlyDigits(doctor?.cpf || null) || null;
+    const councilNumber = String(doctor?.crm || '').trim() || null;
+    const councilUf = String(doctor?.crmState || '').trim() || null;
+    return {
+      name,
+      cpf,
+      council: councilNumber ? 'CRM' : null,
+      councilUf,
+      councilNumber,
+      cbo: String(doctor?.cbo?.code || '').trim() || null,
+    };
+  };
+
+  const requesting = toProfessionalSnapshot(requestingDoctor, requestingNameFallback);
+  const executing = toProfessionalSnapshot(executingDoctor, executingNameFallback);
 
   return {
     guideType,
     cidCode,
     clinicalIndication: indication,
-    requestingProfessionalName: professionalName,
-    requestingProfessionalCpf: professionalCpf,
-    requestingProfessionalCouncil: council,
-    requestingProfessionalCouncilUf: councilUf,
-    requestingProfessionalCouncilNumber: councilNumber,
-    requestingProfessionalCbo: null,
-    executingProfessionalName: professionalName,
-    executingProfessionalCpf: professionalCpf,
-    executingProfessionalCouncil: council,
-    executingProfessionalCouncilUf: councilUf,
-    executingProfessionalCouncilNumber: councilNumber,
-    executingProfessionalCbo: null,
+    requestingProfessionalName: requesting.name,
+    requestingProfessionalCpf: requesting.cpf,
+    requestingProfessionalCouncil: requesting.council,
+    requestingProfessionalCouncilUf: requesting.councilUf,
+    requestingProfessionalCouncilNumber: requesting.councilNumber,
+    requestingProfessionalCbo: requesting.cbo,
+    executingProfessionalName: executing.name,
+    executingProfessionalCpf: executing.cpf,
+    executingProfessionalCouncil: executing.council,
+    executingProfessionalCouncilUf: executing.councilUf,
+    executingProfessionalCouncilNumber: executing.councilNumber,
+    executingProfessionalCbo: executing.cbo,
   };
 };
 

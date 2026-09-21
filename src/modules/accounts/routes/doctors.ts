@@ -42,6 +42,19 @@ const normalizeRoomIds = (value: unknown): string[] => {
   );
 };
 
+const normalizeCboId = (value: unknown): string | null => {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+};
+
+const findActiveCbo = async (cboId: string | null) => {
+  if (!cboId) return null;
+  return prisma.cbo.findFirst({
+    where: { id: cboId, isActive: true },
+    select: { id: true },
+  });
+};
+
 const normalizeEspecialidadeGroups = (
   value: unknown,
   fallback: { registrationType?: unknown; registrationNumber?: unknown; registrationState?: unknown },
@@ -152,6 +165,14 @@ const mapDoctorResponse = (doctor: any, procedureDurations: unknown[] = []) => {
 
   return {
     ...doctor,
+    cbo: doctor?.cbo
+      ? {
+          id: String(doctor.cbo.id || ''),
+          code: String(doctor.cbo.code || ''),
+          title: String(doctor.cbo.title || ''),
+        }
+      : null,
+    cboId: doctor?.cboId ? String(doctor.cboId) : null,
     roomIds,
     rooms: normalizedLinks,
     workingSchedules: doctor.workingSchedules ? JSON.parse(doctor.workingSchedules) : [],
@@ -257,6 +278,9 @@ export default async function doctorRoutes(app: FastifyInstance) {
     const doctors = await prisma.doctor.findMany({
       where,
       include: {
+        cbo: {
+          select: { id: true, code: true, title: true },
+        },
         roomLinks: {
           include: {
             room: {
@@ -303,6 +327,9 @@ export default async function doctorRoutes(app: FastifyInstance) {
     const doctor = await prisma.doctor.findFirst({
       where: { id, branchId },
       include: {
+        cbo: {
+          select: { id: true, code: true, title: true },
+        },
         roomLinks: {
           include: {
             room: {
@@ -353,6 +380,9 @@ export default async function doctorRoutes(app: FastifyInstance) {
     const doctor = await prisma.doctor.findFirst({
       where: { crm, crmState: state.toUpperCase(), branchId },
       include: {
+        cbo: {
+          select: { id: true, code: true, title: true },
+        },
         roomLinks: {
           include: {
             room: {
@@ -422,6 +452,12 @@ export default async function doctorRoutes(app: FastifyInstance) {
     if (Object.keys(fieldErrors).length > 0) {
       return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
     }
+
+    const cboId = normalizeCboId(data?.cboId);
+    if (cboId && !(await findActiveCbo(cboId))) {
+      return reply.code(400).send({ error: 'Validation failed', fields: { cboId: 'CBO inválido ou inativo' } });
+    }
+    data.cboId = cboId;
 
     const normalizedPhone = String(data.phone || '').trim();
     const normalizedCellphone = String(data.cellphone || '').trim();
@@ -499,6 +535,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
           especialidadeGroups: especialidadeGroupsData,
         };
         delete createData.roomIds;
+        delete createData.cbo;
         // Procedure durations are stored in ProcedureDoctor, not in Doctor.
         // Keep them out of the Prisma create payload after syncing the links below.
         delete createData.procedureDurations;
@@ -540,6 +577,9 @@ export default async function doctorRoutes(app: FastifyInstance) {
         return tx.doctor.findUniqueOrThrow({
           where: { id: createdDoctor.id },
           include: {
+            cbo: {
+              select: { id: true, code: true, title: true },
+            },
             roomLinks: {
               include: {
                 room: {
@@ -626,6 +666,14 @@ export default async function doctorRoutes(app: FastifyInstance) {
 
     if (Object.keys(fieldErrors).length > 0) return reply.code(400).send({ error: 'Validation failed', fields: fieldErrors });
 
+    if (Object.prototype.hasOwnProperty.call(data, 'cboId')) {
+      const cboId = normalizeCboId(data.cboId);
+      if (cboId && !(await findActiveCbo(cboId))) {
+        return reply.code(400).send({ error: 'Validation failed', fields: { cboId: 'CBO inválido ou inativo' } });
+      }
+      data.cboId = cboId;
+    }
+
     const roomIds = normalizeRoomIds(data?.roomIds);
     if (roomIds.length > 0) {
       const rooms = await prisma.sector.findMany({ where: { id: { in: roomIds }, branchId } });
@@ -691,6 +739,7 @@ export default async function doctorRoutes(app: FastifyInstance) {
       const updateData: any = { ...data, branchId };
       delete updateData.workingSchedules;
       delete updateData.roomIds;
+      delete updateData.cbo;
       delete updateData.especialidadeGroups;
       // Procedure durations are stored in ProcedureDoctor, not in Doctor.
       delete updateData.procedureDurations;
@@ -752,6 +801,9 @@ export default async function doctorRoutes(app: FastifyInstance) {
         return tx.doctor.findUniqueOrThrow({
           where: { id },
           include: {
+            cbo: {
+              select: { id: true, code: true, title: true },
+            },
             roomLinks: {
               include: {
                 room: {

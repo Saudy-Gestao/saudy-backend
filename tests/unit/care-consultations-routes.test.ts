@@ -751,7 +751,7 @@ describe('care consultations routes', () => {
     mockedPrisma.procedure.findMany.mockResolvedValueOnce([]); // no procedures for CONSULTA type
     mockedPrisma.doctor.findFirst
       .mockResolvedValueOnce({ consultationFee: 150, name: 'Dr A', cpf: '12345678901', crm: '1234', crmState: 'SP' }) // resolveBillingItem
-      .mockResolvedValueOnce({ consultationFee: 150, name: 'Dr A', cpf: '12345678901', crm: '1234', crmState: 'SP' }); // resolveClinicalGuideSnapshot
+      .mockResolvedValueOnce({ consultationFee: 150, name: 'Dr A', cpf: '12345678901', crm: '1234', crmState: 'SP', cbo: { code: '2251-25' } }); // resolveClinicalGuideSnapshot
     mockedPrisma.patient.findFirst.mockResolvedValueOnce({
       id: 'p-1', healthInsuranceName: 'Plano X', healthInsuranceNumber: 'CARD-1',
       healthInsuranceExpiry: null, hasGuardian: false, name: 'Maria', cpf: '12345678901',
@@ -765,6 +765,10 @@ describe('care consultations routes', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(mockedPrisma.invoice.create).toHaveBeenCalled();
+    expect(mockedPrisma.invoice.create.mock.calls.at(-1)?.[0]?.data).toEqual(expect.objectContaining({
+      requestingProfessionalCbo: '2251-25',
+      executingProfessionalCbo: '2251-25',
+    }));
     await app.close();
   });
 

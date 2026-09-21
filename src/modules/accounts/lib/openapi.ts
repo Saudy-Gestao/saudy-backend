@@ -14,6 +14,16 @@ export const swaggerComponents = {
         crm: { type: 'string' },
         crmState: { type: 'string' },
         name: { type: 'string' },
+        cboId: { type: 'string', nullable: true },
+        cbo: {
+          type: 'object',
+          nullable: true,
+          properties: {
+            id: { type: 'string' },
+            code: { type: 'string' },
+            title: { type: 'string' },
+          },
+        },
         email: { type: 'string' },
         phone: { type: 'string' },
         cellphone: { type: 'string', nullable: true },
@@ -137,6 +147,7 @@ export const swaggerComponents = {
         crm: { type: 'string' },
         crmState: { type: 'string' },
         name: { type: 'string' },
+        cboId: { type: 'string', nullable: true },
         email: { type: 'string' },
         phone: { type: 'string' },
         cellphone: { type: 'string' },
@@ -199,6 +210,7 @@ export const swaggerComponents = {
     DoctorUpdate: {
       type: 'object',
       properties: {
+        cboId: { type: 'string', nullable: true },
         name: { type: 'string' },
         email: { type: 'string' },
         phone: { type: 'string' },
