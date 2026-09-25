@@ -821,6 +821,7 @@ async function main() {
     loginEmail: user.email,
     branchId: branch.id,
     patientName: patient.name,
+    patientCpf: patient.cpf,
     mobilePatientName: mobilePatient.name,
     historyPatientName: historyPatient.name,
     telePatientName: telePatient.name,

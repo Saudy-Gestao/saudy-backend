@@ -32,6 +32,7 @@ function dateRangesOverlap(startA?: Date | null, endA?: Date | null, startB?: Da
 function agendaValuesOverlap(a: any, b: any) {
   return a.branchId === b.branchId
     && a.doctorId === b.doctorId
+    && (a.internId || null) === (b.internId || null)
     && a.weekday === b.weekday
     && a.status === "ATIVA"
     && b.status === "ATIVA"
@@ -100,6 +101,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
   const include = {
     branch: { select: { id: true, tradeName: true } },
     doctor: { select: { id: true, name: true } },
+    intern: { select: { id: true, name: true } },
     especialidade: { select: { id: true, name: true, modalidadeId: true } },
     room: { select: { id: true, name: true } },
   } as const;
@@ -205,6 +207,19 @@ export default async function agendaRoutes(app: FastifyInstance) {
       return { error: "Profissional não atende nessa unidade" };
     }
 
+    const internId = String(data.internId || "").trim() || null;
+    if (internId) {
+      const intern = await prisma.intern.findFirst({
+        where: {
+          id: internId,
+          branchId,
+          doctors: { some: { doctorId } },
+        },
+        select: { id: true },
+      });
+      if (!intern) return { error: "Estagiário não está vinculado a esse profissional e unidade" };
+    }
+
     const weekday = normalizeWeekday(data.weekday);
     if (!VALID_WEEKDAYS.has(weekday)) return { error: "Dia da semana inválido" };
 
@@ -261,7 +276,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
 
     return {
       value: {
-        branchId, doctorId, weekday, shiftStart, shiftEnd, especialidadeId, especialidadeIds, roomId, startDate, endDate, status,
+        branchId, doctorId, internId, weekday, shiftStart, shiftEnd, especialidadeId, especialidadeIds, roomId, startDate, endDate, status,
       },
     };
   };
@@ -271,6 +286,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
       where: {
         branchId: value.branchId,
         doctorId: value.doctorId,
+        internId: value.internId,
         weekday: value.weekday,
         status: "ATIVA",
         ...(excludeId ? { id: { not: excludeId } } : {}),
@@ -289,6 +305,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
     properties: {
       branchId: { type: "string" },
       doctorId: { type: "string" },
+      internId: { type: "string", nullable: true },
       weekday: { type: "string" },
       shiftStart: { type: "string" },
       shiftEnd: { type: "string" },
@@ -409,6 +426,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
         properties: {
           branchId: { type: "string" },
           doctorId: { type: "string" },
+          internId: { type: "string", nullable: true },
           weekday: { type: "string" },
           shiftStart: { type: "string" },
           shiftEnd: { type: "string" },
@@ -490,6 +508,7 @@ export default async function agendaRoutes(app: FastifyInstance) {
     const merged = {
       branchId: data.branchId !== undefined ? data.branchId : existing.branchId,
       doctorId: data.doctorId !== undefined ? data.doctorId : existing.doctorId,
+      internId: data.internId !== undefined ? data.internId : existing.internId,
       weekday: data.weekday !== undefined ? data.weekday : existing.weekday,
       shiftStart: data.shiftStart !== undefined ? data.shiftStart : existing.shiftStart,
       shiftEnd: data.shiftEnd !== undefined ? data.shiftEnd : existing.shiftEnd,

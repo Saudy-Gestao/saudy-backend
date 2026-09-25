@@ -19,6 +19,8 @@ export type AgendaAvailabilityResult = {
   branchId: string;
   doctorId: string;
   doctorName: string;
+  internId: string | null;
+  internName: string | null;
   roomId: string | null;
   roomName: string | null;
   weekday: string;
@@ -86,6 +88,8 @@ const timeToMinutes = (value: string) => {
   const [hours, minutes] = value.split(':').map(Number);
   return (hours * 60) + minutes;
 };
+
+const timeRangesOverlap = (startA: string, endA: string, startB: string, endB: string) => startA < endB && startB < endA;
 
 const normalizeDate = (value: unknown): string | null => {
   const raw = String(value || '').trim();
@@ -217,6 +221,8 @@ const agendaResult = (agenda: any, doctor: any, weekday: string, procedureIds: s
   branchId: String(agenda.branchId),
   doctorId: String(doctor.id),
   doctorName: String(doctor.name || ''),
+  internId: agenda.internId ? String(agenda.internId) : null,
+  internName: agenda.intern?.name ? String(agenda.intern.name) : null,
   roomId: agenda.roomId ? String(agenda.roomId) : null,
   roomName: agenda.room?.name ? String(agenda.room.name) : null,
   weekday,
@@ -224,6 +230,23 @@ const agendaResult = (agenda: any, doctor: any, weekday: string, procedureIds: s
   shiftEnd: String(agenda.shiftEnd),
   specialtyIds,
   procedureIds,
+});
+
+const minutesToTime = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+const agendaCoversSlot = (agenda: any, slotStart: number, slotEnd: number) => {
+  const start = normalizeTime(agenda.shiftStart);
+  const end = normalizeTime(agenda.shiftEnd);
+  if (!start || !end || timeToMinutes(end) <= timeToMinutes(start)) return false;
+  return slotStart >= timeToMinutes(start) && slotEnd <= timeToMinutes(end);
+};
+
+const internOverrideCoversSlot = (agendas: any[], slotStart: number, slotEnd: number) => agendas.some((agenda) => {
+  if (!agenda.internId) return false;
+  const start = normalizeTime(agenda.shiftStart);
+  const end = normalizeTime(agenda.shiftEnd);
+  if (!start || !end || timeToMinutes(end) <= timeToMinutes(start)) return false;
+  return timeRangesOverlap(start, end, minutesToTime(slotStart), minutesToTime(slotEnd));
 });
 
 export async function resolveAgendaAvailability(
@@ -252,9 +275,8 @@ export async function resolveAgendaAvailability(
       branchId: input.branchId,
       doctorId: doctor.id,
       status: 'ATIVA',
-      ...(String(input.agendaId || '').trim() ? { id: String(input.agendaId).trim() } : {}),
     },
-    include: { room: { select: { name: true } } },
+    include: { room: { select: { name: true } }, intern: { select: { id: true, name: true } } },
     orderBy: [{ weekday: 'asc' }, { shiftStart: 'asc' }],
   });
 
@@ -266,6 +288,7 @@ export async function resolveAgendaAvailability(
     );
   }
 
+  const requestedAgendaId = String(input.agendaId || '').trim();
   const weekdayAgendas = agendas.filter((agenda: any) => normalizeAgendaWeekday(agenda.weekday) === weekday);
   if (weekdayAgendas.length === 0) {
     throw new AgendaAvailabilityError(
@@ -286,11 +309,17 @@ export async function resolveAgendaAvailability(
     );
   }
 
-  const timeAgendas = dateAgendas.filter((agenda: any) => {
-    const start = normalizeTime(agenda.shiftStart);
-    const end = normalizeTime(agenda.shiftEnd);
-    if (!start || !end || timeToMinutes(end) <= timeToMinutes(start)) return false;
-    return slotStart >= timeToMinutes(start) && slotEnd <= timeToMinutes(end);
+  const overrideAgendas = dateAgendas.filter((agenda: any) => Boolean(agenda.internId));
+  const candidateAgendas = requestedAgendaId
+    ? dateAgendas.filter((agenda: any) => String(agenda.id) === requestedAgendaId)
+    : dateAgendas;
+  const timeAgendas = candidateAgendas.filter((agenda: any) => {
+    if (!agendaCoversSlot(agenda, slotStart, slotEnd)) return false;
+    // The professional remains the owner of the base agenda, but the intern
+    // owns any overlapping active interval. Do not let a stale/base agendaId
+    // bypass that precedence rule.
+    if (!agenda.internId && internOverrideCoversSlot(overrideAgendas, slotStart, slotEnd)) return false;
+    return true;
   });
   if (timeAgendas.length === 0) {
     throw new AgendaAvailabilityError(
@@ -372,9 +401,8 @@ export async function listAgendaSlots(db: any, input: {
       branchId: input.branchId,
       doctorId: doctor.id,
       status: 'ATIVA',
-      ...(String(input.agendaId || '').trim() ? { id: String(input.agendaId).trim() } : {}),
     },
-    include: { room: { select: { name: true } } },
+    include: { room: { select: { name: true } }, intern: { select: { id: true, name: true } } },
     orderBy: [{ weekday: 'asc' }, { shiftStart: 'asc' }],
   });
 
@@ -388,6 +416,7 @@ export async function listAgendaSlots(db: any, input: {
 
   const slots: AgendaAvailabilitySlot[] = [];
   const roomId = String(input.roomId || '').trim();
+  const requestedAgendaId = String(input.agendaId || '').trim();
   const cursor = new Date(`${fromDate}T12:00:00Z`);
   const endCursor = new Date(`${toDate}T12:00:00Z`);
 
@@ -398,8 +427,12 @@ export async function listAgendaSlots(db: any, input: {
       normalizeAgendaWeekday(agenda.weekday) === weekday
       && dateIsWithinAgendaRange(date, agenda.startDate, agenda.endDate)
     ));
+    const overrideAgendas = dateAgendas.filter((agenda: any) => Boolean(agenda.internId));
+    const candidateAgendas = requestedAgendaId
+      ? dateAgendas.filter((agenda: any) => String(agenda.id) === requestedAgendaId)
+      : dateAgendas;
 
-    for (const agenda of dateAgendas) {
+    for (const agenda of candidateAgendas) {
       const start = normalizeTime(agenda.shiftStart);
       const end = normalizeTime(agenda.shiftEnd);
       if (!start || !end || timeToMinutes(end) <= timeToMinutes(start)) continue;
@@ -411,6 +444,7 @@ export async function listAgendaSlots(db: any, input: {
       )) continue;
 
       for (let current = timeToMinutes(start); current + durationMinutes <= timeToMinutes(end); current += stepMinutes) {
+        if (!agenda.internId && internOverrideCoversSlot(overrideAgendas, current, current + durationMinutes)) continue;
         const time = `${String(Math.floor(current / 60)).padStart(2, '0')}:${String(current % 60).padStart(2, '0')}`;
         slots.push({
           ...agendaResult(agenda, doctor, weekday, procedure.procedureIds, getAgendaSpecialtyIds(agenda)),

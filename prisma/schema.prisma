@@ -202,6 +202,8 @@ model Agenda {
     branch          Branch   @relation(fields: [branchId], references: [id])
     doctorId        String
     doctor          Doctor   @relation(fields: [doctorId], references: [id])
+    internId        String?
+    intern          Intern?  @relation(fields: [internId], references: [id], onDelete: SetNull)
     appointments    Appointment[]
     teaPreReservations TeaPreReservation[]
     weekday         String
@@ -225,8 +227,10 @@ model Agenda {
     @@index([branchId])
     @@index([doctorId])
     @@index([roomId])
+    @@index([internId])
     @@index([especialidadeId])
     @@index([doctorId, weekday])
+    @@index([doctorId, internId, weekday])
     @@map("agendas")
 }
 
@@ -393,6 +397,7 @@ model Intern {
     createdAt    DateTime @default(now())
     updatedAt    DateTime @updatedAt
     doctors      InternDoctor[]
+    agendas      Agenda[]
 
     @@index([branchId, isActive])
     @@index([especialidadeId])

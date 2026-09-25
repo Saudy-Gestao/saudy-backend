@@ -17,6 +17,7 @@ describe('server bootstrap', () => {
     vi.resetModules();
     vi.clearAllMocks();
     delete process.env.PORT;
+    process.env.ENABLE_BACKGROUND_JOBS = 'true';
   });
 
   it('starts app, schedules automations and runs first cycle', async () => {

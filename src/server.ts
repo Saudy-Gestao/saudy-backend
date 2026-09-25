@@ -7,6 +7,7 @@ import { startTemporaryDicomStudyCleanup } from './modules/dicom/temporary-prior
 const HSM_SYNC_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_HSM_SYNC_INTERVAL_MINUTES) || 15);
 const WHATSAPP_AUTOMATION_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_AUTOMATION_INTERVAL_MINUTES) || 5);
 const WHATSAPP_HUMAN_TIMEOUT_INTERVAL_MINUTES = Math.max(1, Number(process.env.WHATSAPP_HUMAN_TIMEOUT_INTERVAL_MINUTES) || 1);
+const backgroundJobsEnabled = process.env.NODE_ENV === 'production' || process.env.ENABLE_BACKGROUND_JOBS === 'true';
 let hsmSyncTimer: NodeJS.Timeout | null = null;
 let whatsAppAutomationTimer: NodeJS.Timeout | null = null;
 let whatsAppHumanTimeoutTimer: NodeJS.Timeout | null = null;
@@ -98,10 +99,14 @@ const start = async () => {
 
     await app.listen({ port, host: '0.0.0.0' });
     app.log.info(`Server listening on http://0.0.0.0:${port}`);
-    startWhatsAppHsmAutoSync();
-    startWhatsAppAutomation();
-    startWhatsAppHumanTimeoutAutomation();
-    startTemporaryDicomStudyCleanup();
+    if (backgroundJobsEnabled) {
+      startWhatsAppHsmAutoSync();
+      startWhatsAppAutomation();
+      startWhatsAppHumanTimeoutAutomation();
+      startTemporaryDicomStudyCleanup();
+    } else {
+      app.log.info('Background jobs disabled outside production; set ENABLE_BACKGROUND_JOBS=true to enable them.');
+    }
   } catch (error) {
     app.log.error(error);
     process.exit(1);
